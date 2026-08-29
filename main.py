@@ -173,7 +173,18 @@ class Main:
 
     def _update_total_balance(self, now: float, is_startup: bool = False):
         try:
-            base_total = sum(risk["paper_start_balance"] for risk in self.cfg["trading_risks"].values())
+            active_exchanges = set()
+            for route, is_active in self.cfg.get("active_routes", {}).items():
+                if is_active:
+                    ex1, ex2 = route.split('_')
+                    active_exchanges.add(ex1.lower())
+                    active_exchanges.add(ex2.lower())
+                    
+            base_total = sum(
+                risk.get("paper_start_balance", 0.0) 
+                for ex, risk in self.cfg.get("trading_risks", {}).items() 
+                if ex.lower() in active_exchanges
+            )
             global_pnl = sum(a.cumulative_pnl_usd for a in self.analytics_map.values())
             total = base_total + global_pnl
             with open("total_balance.json", "w") as f:
