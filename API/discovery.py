@@ -12,9 +12,6 @@ from API.BINANCE.symbol import BinanceSymbols
 from API.KUCOIN.symbol import KucoinSymbols
 from API.OKX.symbol import OkxSymbols
 from API.BITGET.symbol import BitgetSymbols
-from API.PHEMEX.symbol import PhemexSymbols
-from API.BYBIT.symbol import BybitSymbols
-from API.GATE.symbol import GateSymbols
 
 from utils import UnifiedLogger
 
@@ -29,9 +26,7 @@ def to_native(coin: str, exchange: str, quote: str = "USDT") -> str:
         return f"{raw}{quote}M"
     elif exchange == "OKX":
         return f"{coin}-{quote}-SWAP"
-    elif exchange == "GATE":
-        return f"{coin}_{quote}"
-    else:  # BINANCE, BITGET, PHEMEX, BYBIT
+    else:  # BINANCE, BITGET
         return f"{coin}{quote}"
 
 class DiscoveryManager:
@@ -41,10 +36,7 @@ class DiscoveryManager:
             "BINANCE": BinanceSymbols(timeout_sec=timeout_sec),
             "KUCOIN": KucoinSymbols(timeout_sec=timeout_sec),
             "OKX": OkxSymbols(timeout_sec=timeout_sec),
-            "BITGET": BitgetSymbols(timeout_sec=timeout_sec),
-            "PHEMEX": PhemexSymbols(timeout_sec=timeout_sec),
-            "BYBIT": BybitSymbols(timeout_sec=timeout_sec),
-            "GATE": GateSymbols(timeout_sec=timeout_sec)
+            "BITGET": BitgetSymbols(timeout_sec=timeout_sec)
         }
         
         self.ws_routes: Dict[str, List[str]] = {}           
