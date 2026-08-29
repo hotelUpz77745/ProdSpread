@@ -396,10 +396,17 @@ class Main:
         # Prepare JIT matrix — только активные маршруты из cfg.json active_routes
         active_routes_cfg = self.cfg.get("active_routes", {})
         routes_indices = []
+        
+        supported_exchanges = {"BINANCE", "KUCOIN"}
+        
         for i in range(len(EXCHANGES)):
             for j in range(i + 1, len(EXCHANGES)):
                 route_key = f"{EXCHANGES[i]}_{EXCHANGES[j]}"
                 if active_routes_cfg.get(route_key, False):
+                    if EXCHANGES[i] not in supported_exchanges or EXCHANGES[j] not in supported_exchanges:
+                        log(f"ВНИМАНИЕ: Маршрут {route_key} включен, но API для этих бирж еще не готово для реальной торговли!", level="WARNING")
+                        log(f"Отключаем маршрут {route_key} для безопасности.", level="WARNING")
+                        continue
                     routes_indices.append([i, j])
                     self.route_names.append(route_key)
 
