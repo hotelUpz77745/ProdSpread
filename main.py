@@ -294,6 +294,14 @@ class Main:
                 exec_res["actual_short_price"] = short_pos["price"]
             else:
                 exec_res["short_executed_volume_rate"] = 0.0
+                
+            long_rate = exec_res.get("long_executed_volume_rate", 0.0)
+            short_rate = exec_res.get("short_executed_volume_rate", 0.0)
+            
+            if long_rate <= 0.0 and short_rate <= 0.0:
+                log(f"[{sym}] 🚨 Обе ноги не были исполнены (fill rate 0.0). Отменяем вход без экстренного выхода.", level="WARNING")
+                self.pm.rollback_entry(long_ex, short_ex, sym)
+                return
             
             self.analytics_map[sym].record_open(
                 route=f"{long_ex}_{short_ex}",
