@@ -52,63 +52,21 @@
             "volatility_discount": 0.7,
             "limit_allow_distance": 1.1,
             "max_positions": 1
-        },
-        "phemex": {
-            "paper_start_balance": 30.0,
-            "trade_size_usd": 100.0,
-            "taker_fee": 0.0006,
-            "volatility_discount": 0.7,
-            "limit_allow_distance": 1.1,
-            "max_positions": 1
-        },
-        "bybit": {
-            "paper_start_balance": 30.0,
-            "trade_size_usd": 100.0,
-            "taker_fee": 0.0006,
-            "volatility_discount": 0.7,
-            "limit_allow_distance": 1.1,
-            "max_positions": 1
-        },
-        "gate": {
-            "paper_start_balance": 30.0,
-            "trade_size_usd": 100.0,
-            "taker_fee": 0.0006,
-            "volatility_discount": 0.7,
-            "limit_allow_distance": 1.1,
-            "max_positions": 1
         }
     },
     "volume_filters": {
         "BINANCE": 5000000.0,
         "KUCOIN": 1000000.0,
         "OKX": 2000000.0,
-        "BITGET": 1000000.0,
-        "BYBIT": 3000000.0,
-        "GATE": 500000.0,
-        "PHEMEX": 500000.0
+        "BITGET": 1000000.0
     },
     "active_routes": {
         "BINANCE_KUCOIN": true,
         "BINANCE_OKX": false,
         "BINANCE_BITGET": false,
-        "BINANCE_BYBIT": false,
-        "BINANCE_GATE": false,
-        "BINANCE_PHEMEX": false,
         "KUCOIN_OKX": false,
         "KUCOIN_BITGET": false,
-        "KUCOIN_BYBIT": false,
-        "KUCOIN_GATE": false,
-        "KUCOIN_PHEMEX": false,
-        "OKX_BITGET": false,
-        "OKX_BYBIT": false,
-        "OKX_GATE": false,
-        "OKX_PHEMEX": false,
-        "BITGET_BYBIT": false,
-        "BITGET_GATE": false,
-        "BITGET_PHEMEX": false,
-        "BYBIT_GATE": false,
-        "BYBIT_PHEMEX": false,
-        "GATE_PHEMEX": false
+        "OKX_BITGET": false
     },
     "setup_margin_leverage": true,
     "margin_settings": {
@@ -127,18 +85,6 @@
             "margin_type": "cross"
         },
         "BITGET": {
-            "leverage": 5,
-            "margin_type": "cross"
-        },
-        "BYBIT": {
-            "leverage": 5,
-            "margin_type": "cross"
-        },
-        "GATE": {
-            "leverage": 5,
-            "margin_type": "cross"
-        },
-        "PHEMEX": {
             "leverage": 5,
             "margin_type": "cross"
         }

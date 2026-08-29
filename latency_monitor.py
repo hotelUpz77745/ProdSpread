@@ -47,10 +47,7 @@ async def main():
         "BINANCE": "https://fapi.binance.com/fapi/v1/ping",
         "KUCOIN": "https://api-futures.kucoin.com/api/v1/timestamp",
         "OKX": "https://www.okx.com/api/v5/public/time",
-        "BITGET": "https://api.bitget.com/api/v2/public/time",
-        "PHEMEX": "https://api.phemex.com/public/time",
-        "BYBIT": "https://api.bybit.com/v5/market/time",
-        "GATE": "https://api.gateio.ws/api/v4/spot/time"
+        "BITGET": "https://api.bitget.com/api/v2/public/time"
     }
     
     async with aiohttp.ClientSession() as session:

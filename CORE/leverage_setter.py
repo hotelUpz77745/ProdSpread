@@ -46,10 +46,7 @@ class LeverageSetter:
             "BINANCE": set(),
             "KUCOIN": set(),
             "OKX": set(),
-            "BITGET": set(),
-            "BYBIT": set(),
-            "GATE": set(),
-            "PHEMEX": set()
+            "BITGET": set()
         }
         
         for generic_sym, ex_map in self.bot.discovery.coin_to_native.items():

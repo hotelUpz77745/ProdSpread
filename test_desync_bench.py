@@ -22,9 +22,7 @@ from API.BINANCE.stakan  import BinanceStakanStream
 from API.KUCOIN.stakan   import KucoinStakanStream
 from API.OKX.stakan      import OkxStakanStream
 from API.BITGET.stakan   import BitgetStakanStream
-from API.PHEMEX.stakan   import PhemexStakanStream
-from API.BYBIT.stakan    import BybitStakanStream
-from API.GATE.stakan     import GateStakanStream
+
 
 # ── параметры теста ───────────────────────────────────────────
 WARMUP_SEC  = 30
@@ -36,7 +34,7 @@ TEST_COINS = [
     "DOGE", "ADA", "AVAX", "DOT", "LINK",
 ]
 
-EXCHANGES = ["BINANCE", "KUCOIN", "OKX", "BITGET", "PHEMEX", "BYBIT", "GATE"]
+EXCHANGES = ["BINANCE", "KUCOIN", "OKX", "BITGET"]
 
 def to_native(coin: str, exchange: str, quote: str = "USDT") -> str:
     if exchange == "KUCOIN":
@@ -44,8 +42,6 @@ def to_native(coin: str, exchange: str, quote: str = "USDT") -> str:
         return f"{alias}{quote}M"
     elif exchange == "OKX":
         return f"{coin}-{quote}-SWAP"
-    elif exchange == "GATE":
-        return f"{coin}_{quote}"
     else:
         return f"{coin}{quote}"
 
@@ -157,10 +153,7 @@ async def main():
         "BINANCE": BinanceStakanStream(symbols_per_ex["BINANCE"]),
         "KUCOIN":  KucoinStakanStream(symbols_per_ex["KUCOIN"]),
         "OKX":     OkxStakanStream(symbols_per_ex["OKX"]),
-        "BITGET":  BitgetStakanStream(symbols_per_ex["BITGET"]),
-        "PHEMEX":  PhemexStakanStream(symbols_per_ex["PHEMEX"]),
-        "BYBIT":   BybitStakanStream(symbols_per_ex["BYBIT"]),
-        "GATE":    GateStakanStream(symbols_per_ex["GATE"]),
+        "BITGET":  BitgetStakanStream(symbols_per_ex["BITGET"])
     }
 
     start_time = time.time()

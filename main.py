@@ -22,7 +22,7 @@ from CORE.trading_engine import TradingEngine
 from CORE.math_core import pre_calculate_orderbook
 from CORE.position_manager import PositionManager
 
-from API.orders import BinanceOrder, KucoinOrder, OkxOrder, BitgetOrder, PhemexOrder, BybitOrder, GateOrder
+from API.orders import BinanceOrder, KucoinOrder, OkxOrder, BitgetOrder
 from analytics import TradeAnalytics
 from c_log import log
 
@@ -33,9 +33,7 @@ from API.BINANCE.stakan import BinanceStakanStream
 from API.KUCOIN.stakan import KucoinStakanStream
 from API.OKX.stakan import OkxStakanStream
 from API.BITGET.stakan import BitgetStakanStream
-from API.PHEMEX.stakan import PhemexStakanStream
-from API.BYBIT.stakan import BybitStakanStream
-from API.GATE.stakan import GateStakanStream
+
 
 from API.discovery import DiscoveryManager
 from API.orders import InsufficientMarginError
@@ -43,7 +41,7 @@ from CORE.leverage_setter import LeverageSetter
 from analytics import generate_global_report
 from utils import SessionManager
 
-EXCHANGES = ["BINANCE", "KUCOIN", "OKX", "BITGET", "PHEMEX", "BYBIT", "GATE"]
+EXCHANGES = ["BINANCE", "KUCOIN", "OKX", "BITGET"]
 EX_TO_IDX = {ex: i for i, ex in enumerate(EXCHANGES)}
 IDX_TO_EX = {i: ex for i, ex in enumerate(EXCHANGES)}
 
@@ -85,10 +83,7 @@ class Main:
                 margin_settings=self.cfg["margin_settings"]["KUCOIN"]
             ),
             "OKX": OkxOrder(),
-            "BITGET": BitgetOrder(),
-            "PHEMEX": PhemexOrder(),
-            "BYBIT": BybitOrder(),
-            "GATE": GateOrder()
+            "BITGET": BitgetOrder()
         }
         
         # Configs
@@ -576,8 +571,7 @@ class Main:
         # Start streams
         stream_classes = {
             "BINANCE": BinanceStakanStream, "KUCOIN": KucoinStakanStream,
-            "OKX": OkxStakanStream, "BITGET": BitgetStakanStream,
-            "PHEMEX": PhemexStakanStream, "BYBIT": BybitStakanStream, "GATE": GateStakanStream
+            "OKX": OkxStakanStream, "BITGET": BitgetStakanStream
         }
 
         for ex, routes in self.discovery.ws_routes.items():
