@@ -11,9 +11,6 @@ import json
 import numpy as np
 from dotenv import load_dotenv
 import aiohttp
-import hmac
-import hashlib
-import base64
 
 load_dotenv()
 
