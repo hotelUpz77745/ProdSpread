@@ -73,9 +73,10 @@ class BinanceOrder:
         if not lot_size_filter or not price_filter:
             return None
 
-        def count_decimal_places(number_str):
-            if '.' in str(number_str):
-                return len(str(number_str).rstrip('0').split('.')[-1])
+        def count_decimal_places(number):
+            number_str = f"{float(number):.10f}".rstrip('0')
+            if '.' in number_str:
+                return len(number_str.split('.')[-1])
             return 0
 
         qty_precission = count_decimal_places(lot_size_filter['stepSize'])
@@ -271,9 +272,9 @@ class KucoinOrder:
             return None
             
         def count_decimal_places(number):
-            number_str = str(number)
+            number_str = f"{float(number):.10f}".rstrip('0')
             if '.' in number_str:
-                return len(number_str.rstrip('0').split('.')[-1])
+                return len(number_str.split('.')[-1])
             return 0
             
         qty_precision = count_decimal_places(symbol_data.get('lotSize', 1))

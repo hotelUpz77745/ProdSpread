@@ -229,12 +229,12 @@ class Main:
                 long_dist = float(self.cfg["trading_risks"][long_ex.lower()].get("limit_allow_distance", 1.1))
                 price_long_limit = engine_res.get("long_avg_price") * long_dist
                 size_long_usd = engine_res.get("long_qty") * price_long_limit
-                tasks.append(self.orders[long_ex].place_order(native_long, "BUY", size_long_usd, price_long_limit))
+                tasks.append(self.orders[long_ex].place_order(native_long, "BUY", size_long_usd, price_long_limit, position_side="LONG"))
             if short_ex in self.orders:
                 short_dist = float(self.cfg["trading_risks"][short_ex.lower()].get("limit_allow_distance", 1.1))
                 price_short_limit = engine_res.get("short_avg_price") / short_dist
                 size_short_usd = engine_res.get("short_qty") * price_short_limit
-                tasks.append(self.orders[short_ex].place_order(native_short, "SELL", size_short_usd, price_short_limit))
+                tasks.append(self.orders[short_ex].place_order(native_short, "SELL", size_short_usd, price_short_limit, position_side="SHORT"))
                 
             has_error = False
             error_msgs = []
@@ -361,14 +361,14 @@ class Main:
                 price_long = float(self.books[long_ex].get(sym, {}).get("bids", [[0]])[0][0]) 
                 price_long_limit = price_long / long_dist
                 size_long_usd = long_qty_to_close * price_long_limit
-                tasks.append(self.orders[long_ex].place_order(native_long, "SELL", size_long_usd, price_long_limit))
+                tasks.append(self.orders[long_ex].place_order(native_long, "SELL", size_long_usd, price_long_limit, position_side="LONG"))
             if short_ex in self.orders and short_rate > 0:
                 short_dist = float(self.cfg["trading_risks"][short_ex.lower()].get("limit_allow_distance", 1.1))
                 short_qty_to_close = engine_res.get("short_qty", 0.0) * short_rate
                 price_short = float(self.books[short_ex].get(sym, {}).get("asks", [[0]])[0][0])
                 price_short_limit = price_short * short_dist
                 size_short_usd = short_qty_to_close * price_short_limit
-                tasks.append(self.orders[short_ex].place_order(native_short, "BUY", size_short_usd, price_short_limit))
+                tasks.append(self.orders[short_ex].place_order(native_short, "BUY", size_short_usd, price_short_limit, position_side="SHORT"))
                 
             if tasks:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
