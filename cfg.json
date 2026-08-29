@@ -8,7 +8,7 @@
     "QUOTE": "USDT",
     "MAIN_LOOP_DELAY": 0.005,
     "measure_loop_speed": false,
-    "EXECUTION_PAUSE": 0.025,
+    "EXECUTION_PAUSE": 0.3,
     "topology_rebuild_interval_sec": null,
     "logging": {
         "debug": false,
@@ -22,16 +22,16 @@
     },
     "trading_risks": {
         "binance": {
-            "paper_start_balance": 30.0,
-            "trade_size_usd": 100.0,
+            "paper_start_balance": 12.97,
+            "trade_size_usd": 50.0,
             "taker_fee": 0.0005,
             "volatility_discount": 0.6,
             "limit_allow_distance": 1.1,
             "max_positions": 1
         },
         "kucoin": {
-            "paper_start_balance": 30.0,
-            "trade_size_usd": 100.0,
+            "paper_start_balance": 14.29,
+            "trade_size_usd": 50.0,
             "taker_fee": 0.0006,
             "volatility_discount": 0.7,
             "limit_allow_distance": 1.1,
@@ -89,17 +89,17 @@
     },
     "active_routes": {
         "BINANCE_KUCOIN": true,
-        "BINANCE_OKX": true,
-        "BINANCE_BITGET": true,
+        "BINANCE_OKX": false,
+        "BINANCE_BITGET": false,
         "BINANCE_BYBIT": false,
         "BINANCE_GATE": false,
         "BINANCE_PHEMEX": false,
-        "KUCOIN_OKX": true,
-        "KUCOIN_BITGET": true,
+        "KUCOIN_OKX": false,
+        "KUCOIN_BITGET": false,
         "KUCOIN_BYBIT": false,
         "KUCOIN_GATE": false,
         "KUCOIN_PHEMEX": false,
-        "OKX_BITGET": true,
+        "OKX_BITGET": false,
         "OKX_BYBIT": false,
         "OKX_GATE": false,
         "OKX_PHEMEX": false,
@@ -110,10 +110,43 @@
         "BYBIT_PHEMEX": false,
         "GATE_PHEMEX": false
     },
+    "setup_margin_leverage": true,
+    "margin_settings": {
+        "BINANCE": {
+            "leverage": 20,
+            "margin_type": "CROSSED",
+            "desc": "margin_type allowed values: ISOLATED | CROSSED"
+        },
+        "KUCOIN": {
+            "leverage": 20,
+            "margin_type": "CROSS",
+            "desc": "margin_type allowed values: ISOLATED | CROSS"
+        },
+        "OKX": {
+            "leverage": 5,
+            "margin_type": "cross"
+        },
+        "BITGET": {
+            "leverage": 5,
+            "margin_type": "cross"
+        },
+        "BYBIT": {
+            "leverage": 5,
+            "margin_type": "cross"
+        },
+        "GATE": {
+            "leverage": 5,
+            "margin_type": "cross"
+        },
+        "PHEMEX": {
+            "leverage": 5,
+            "margin_type": "cross"
+        }
+    },
     "trading_rules": {
         "entry": {
             "max_desync_ms": null,
-            "spread_entry": 0.007,
+            "spread_entry": 0.005,
             "min_fill_rate": 0.2,
             "top_n_candidates": 6,
             "check_synthetic_exit": true,
@@ -126,22 +159,22 @@
                 {
                     "index": 0,
                     "seconds": 0,
-                    "target_val": 0.005
+                    "target_val": 0.004
                 },
                 {
                     "index": 1,
                     "seconds": 5,
-                    "target_val": 0.004
+                    "target_val": 0.003
                 },
                 {
                     "index": 2,
                     "seconds": 15,
-                    "target_val": 0.003
+                    "target_val": 0.002
                 },
                 {
                     "index": 3,
                     "seconds": 30,
-                    "target_val": 0.002
+                    "target_val": 0.001
                 },
                 {
                     "index": 4,
@@ -177,7 +210,9 @@
         },
         "ban_rules": {
             "is_active": true,
-            "ban_if_exit_level_ge": null
+            "ban_if_exit_level_ge": null,
+            "quarantine_on_entry_error": true,
+            "quarantine_duration_sec": 3600
         },
         "funding_filter": {
             "is_active": true,

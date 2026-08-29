@@ -58,7 +58,7 @@ class DiscoveryManager:
             except Exception as e:
                 logger.error(f"Error closing {name} REST client: {e}")
 
-    async def build_topology(self, banned_symbols: set = None) -> None:
+    async def build_topology(self, banned_symbols: dict = None) -> None:
         """
         1. REST Aggregation
         2. Volume Filter

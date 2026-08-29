@@ -39,7 +39,7 @@ class KucoinPositionStream:
         # Track positions by symbol
         self.positions: Dict[str, Dict[str, Any]] = {}
 
-    def stop(self):
+    async def stop(self):
         self._external_stop = True
         self.ready = False
         log("KucoinPositionStream: stop requested", level="INFO")
@@ -127,10 +127,15 @@ class KucoinPositionStream:
 
     async def _handle_messages(self):
         asyncio.create_task(self._ping_loop())
+        last_msg_time = time.time()
         while not self._external_stop and not self.stop_flag():
             try:
                 msg = await asyncio.wait_for(self.websocket.receive(), timeout=5.0)
+                last_msg_time = time.time()
             except asyncio.TimeoutError:
+                if time.time() - last_msg_time > 40.0:
+                    log("[KUCOIN WS_PRIVATE] Watchdog timeout: no messages for 40s. Reconnecting.", level="WARNING")
+                    raise RuntimeError("ws_closed")
                 continue
 
             if msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):

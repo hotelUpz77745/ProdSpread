@@ -10,6 +10,7 @@ import os
 import json
 import numpy as np
 from dotenv import load_dotenv
+import aiohttp
 
 load_dotenv()
 
@@ -62,8 +63,20 @@ class Main:
         
         # We mock orders for other exchanges or use dummy for now as they are not fully migrated
         self.orders = {
-            "BINANCE": BinanceOrder(position_stream=self.binance_pos_stream),
-            "KUCOIN": KucoinOrder(position_stream=self.kucoin_pos_stream),
+            "BINANCE": BinanceOrder(
+                api_key=os.environ.get("BINANCE_API_KEY", ""),
+                api_secret=os.environ.get("BINANCE_API_SECRET", ""),
+                session=None,
+                position_stream=self.binance_pos_stream
+            ),
+            "KUCOIN": KucoinOrder(
+                api_key=os.environ["KUCOIN_API_KEY"],
+                api_secret=os.environ["KUCOIN_API_SECRET"],
+                api_passphrase=os.environ["KUCOIN_API_PASSPHRASE"],
+                session=None,
+                position_stream=self.kucoin_pos_stream,
+                margin_settings=self.cfg["margin_settings"]["KUCOIN"]
+            ),
             "OKX": OkxOrder(),
             "BITGET": BitgetOrder(),
             "PHEMEX": PhemexOrder(),
@@ -84,19 +97,32 @@ class Main:
         
         self.ban_is_active = self.cfg["trading_rules"]["ban_rules"]["is_active"]
         self.ban_level_threshold = self.cfg["trading_rules"]["ban_rules"]["ban_if_exit_level_ge"]
-        self.banned_symbols = set()
+        self.banned_symbols = {}
         
         if os.path.exists("banned_symbols.json"):
             try:
                 with open("banned_symbols.json", "r") as f:
                     data = json.load(f)
-                    self.banned_symbols = set(data)
+                    if isinstance(data, list):
+                        self.banned_symbols = {sym: None for sym in data}
+                    elif isinstance(data, dict):
+                        now = time.time()
+                        self.banned_symbols = {
+                            k: v for k, v in data.items()
+                            if v is None or v > now
+                        }
             except Exception as e:
                 log(f"Error loading banned symbols: {e}", level="WARNING")
+                
+            try:
+                with open("banned_symbols.json", "w") as f:
+                    json.dump(self.banned_symbols, f, indent=4)
+            except Exception:
+                pass
         else:
             try:
                 with open("banned_symbols.json", "w") as f:
-                    json.dump([], f, indent=4)
+                    json.dump({}, f, indent=4)
             except Exception:
                 pass
 
@@ -165,34 +191,75 @@ class Main:
         except Exception as e:
             log(f"Error updating total balance: {e}", level="ERROR")
 
+    def _quarantine_symbol(self, sym: str, duration_sec: int, reason: str):
+        self.banned_symbols[sym] = time.time() + duration_sec
+        with open("banned_symbols.json", "w") as f:
+            json.dump(self.banned_symbols, f, indent=4)
+        
+        async def unban_later():
+            await asyncio.sleep(duration_sec)
+            if sym in self.banned_symbols and self.banned_symbols[sym] is not None:
+                del self.banned_symbols[sym]
+                with open("banned_symbols.json", "w") as f:
+                    json.dump(self.banned_symbols, f, indent=4)
+                log(f"[{sym}] ⏱ Карантин завершен, монета снова доступна для торгов.", level="INFO")
+                
+        asyncio.create_task(unban_later())
+
     async def execute_open(self, sym: str, long_ex: str, short_ex: str, engine_res: dict):
         try:
             spread = engine_res["vwap_spread"]
             log(f"[{sym}] Открываем: LONG {long_ex} | SHORT {short_ex} | Spread: {spread * 100:.2f}%", level="INFO")
             
+            native_long = self.discovery.coin_to_native.get(sym, {}).get(long_ex, sym)
+            native_short = self.discovery.coin_to_native.get(sym, {}).get(short_ex, sym)
+            
             tasks = []
             if long_ex in self.orders:
                 size_long = self.cfg["trading_risks"][long_ex.lower()]["trade_size_usd"]
-                tasks.append(self.orders[long_ex].place_order(sym, "BUY", size_long))
+                price_long = engine_res.get("long_avg_price")
+                tasks.append(self.orders[long_ex].place_order(native_long, "BUY", size_long, price_long))
             if short_ex in self.orders:
                 size_short = self.cfg["trading_risks"][short_ex.lower()]["trade_size_usd"]
-                tasks.append(self.orders[short_ex].place_order(sym, "SELL", size_short))
+                price_short = engine_res.get("short_avg_price")
+                tasks.append(self.orders[short_ex].place_order(native_short, "SELL", size_short, price_short))
                 
+            has_error = False
+            error_msgs = []
             if tasks:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for res in results:
                     if isinstance(res, Exception):
                         log(f"[{sym}] 🚨 Ошибка входа! Рассинхрон ног: {res}.", level="ERROR")
-                        self.pm.rollback_entry(long_ex, short_ex, sym)
-                        return
+                        has_error = True
+                        error_msgs.append(str(res))
+                        from API.orders import InsufficientMarginError
+                        if isinstance(res, InsufficientMarginError):
+                            self.banned_symbols[sym] = None
+                            with open("banned_symbols.json", "w") as f:
+                                json.dump(self.banned_symbols, f, indent=4)
+                            log(f"[{sym}] 🚫 Связка заблокирована из-за нехватки маржи/ошибки.", level="WARNING")
+                        else:
+                            # Apply quarantine if configured
+                            ban_rules = self.cfg["trading_rules"].get("ban_rules", {})
+                            if ban_rules.get("quarantine_on_entry_error", True):
+                                duration = ban_rules.get("quarantine_duration_sec", 3600)
+                                self._quarantine_symbol(sym, duration, str(res))
+                                log(f"[{sym}] ⏱ Монета помещена в карантин на {duration} сек. Причина: {res}", level="WARNING")
                 
+            # If BOTH orders failed completely, we can rollback immediately
+            if has_error and len(error_msgs) == len(tasks):
+                log(f"[{sym}] 🚨 Обе ноги завершились с ошибкой. Откат.", level="ERROR")
+                self.pm.rollback_entry(long_ex, short_ex, sym)
+                return
+
             await asyncio.sleep(self.cfg["EXECUTION_PAUSE"])
             
             cancel_tasks = []
             if long_ex in self.orders:
-                cancel_tasks.append(self.orders[long_ex].cancel_all_orders(sym))
+                cancel_tasks.append(self.orders[long_ex].cancel_all_orders(native_long))
             if short_ex in self.orders:
-                cancel_tasks.append(self.orders[short_ex].cancel_all_orders(sym))
+                cancel_tasks.append(self.orders[short_ex].cancel_all_orders(native_short))
             if cancel_tasks:
                 await asyncio.gather(*cancel_tasks, return_exceptions=True)
             
@@ -202,33 +269,37 @@ class Main:
                 long_ex, short_ex, engine_res
             )
             
-            long_pos = self.orders[long_ex].get_executed_position(sym, "LONG") if long_ex in self.orders else {"size": 0.0, "price": 0.0}
-            short_pos = self.orders[short_ex].get_executed_position(sym, "SHORT") if short_ex in self.orders else {"size": 0.0, "price": 0.0}
+            long_pos = self.orders[long_ex].get_executed_position(native_long, "LONG") if long_ex in self.orders else {"size": 0.0, "price": 0.0}
+            short_pos = self.orders[short_ex].get_executed_position(native_short, "SHORT") if short_ex in self.orders else {"size": 0.0, "price": 0.0}
             
             if long_pos["size"] > 0:
                 exec_res["long_executed_volume_rate"] = long_pos["size"] / engine_res["long_qty"] if engine_res.get("long_qty", 0) > 0 else 1.0
                 exec_res["actual_long_price"] = long_pos["price"]
+            else:
+                exec_res["long_executed_volume_rate"] = 0.0
                 
             if short_pos["size"] > 0:
                 exec_res["short_executed_volume_rate"] = short_pos["size"] / engine_res["short_qty"] if engine_res.get("short_qty", 0) > 0 else 1.0
                 exec_res["actual_short_price"] = short_pos["price"]
+            else:
+                exec_res["short_executed_volume_rate"] = 0.0
             
             self.analytics_map[sym].record_open(
                 route=f"{long_ex}_{short_ex}",
                 direction=f"{long_ex}_L_{short_ex}_S",
                 long_ex=long_ex,
                 short_ex=short_ex,
-                long_price=exec_res["actual_long_price"],
-                short_price=exec_res["actual_short_price"],
-                spread=exec_res["actual_spread"],
-                slippage=exec_res["real_slippage"]
+                long_price=exec_res.get("actual_long_price", 0.0),
+                short_price=exec_res.get("actual_short_price", 0.0),
+                spread=exec_res.get("actual_spread", 0.0),
+                slippage=exec_res.get("real_slippage", 0.0)
             )
             
             self.pm.confirm_entry(long_ex, short_ex, sym, exec_res, time.time())
             
             min_fill = self.cfg["trading_rules"]["entry"]["min_fill_rate"]
-            long_rate = exec_res.get("long_executed_volume_rate", 1.0)
-            short_rate = exec_res.get("short_executed_volume_rate", 1.0)
+            long_rate = exec_res.get("long_executed_volume_rate", 0.0)
+            short_rate = exec_res.get("short_executed_volume_rate", 0.0)
             
             if long_rate < min_fill or short_rate < min_fill:
                 log(f"[{sym}] 🚨 Низкий fill_rate! L:{long_rate * 100:.1f}% S:{short_rate * 100:.1f}%. Экстренный выход!", level="ERROR")
@@ -239,8 +310,12 @@ class Main:
                 log(f"[{sym}] 🟢 Позиция успешно открыта! Fill rate -> L: {long_rate * 100:.1f}% | S: {short_rate * 100:.1f}%", level="INFO")
             
         except Exception as e:
-            log(f"Error opening position: {e}", level="ERROR")
+            log(f"[{sym}] Error opening position: {e}", level="ERROR")
             self.pm.rollback_entry(long_ex, short_ex, sym)
+            ban_rules = self.cfg["trading_rules"].get("ban_rules", {})
+            if ban_rules.get("quarantine_on_entry_error", True):
+                duration = ban_rules.get("quarantine_duration_sec", 3600)
+                self._quarantine_symbol(sym, duration, f"Unhandled entry error: {e}")
 
     async def execute_close(self, route: str, sym: str):
         state = self.pm.positions[route][sym]
@@ -251,16 +326,21 @@ class Main:
         try:
             log(f"[{sym}] Закрываем позицию: LONG {long_ex} | SHORT {short_ex}", level="INFO")
             
+            native_long = self.discovery.coin_to_native.get(sym, {}).get(long_ex, sym)
+            native_short = self.discovery.coin_to_native.get(sym, {}).get(short_ex, sym)
+            
             long_rate = state["details"].get("long_executed_volume_rate", 1.0)
             short_rate = state["details"].get("short_executed_volume_rate", 1.0)
             
             tasks = []
             if long_ex in self.orders and long_rate > 0:
                 size_long = self.cfg["trading_risks"][long_ex.lower()]["trade_size_usd"] * long_rate
-                tasks.append(self.orders[long_ex].place_order(sym, "SELL", size_long))
+                price_long = self.books[long_ex].get(sym, {}).get("bids", [[0]])[0][0] # rough exit price
+                tasks.append(self.orders[long_ex].place_order(native_long, "SELL", size_long, float(price_long)))
             if short_ex in self.orders and short_rate > 0:
                 size_short = self.cfg["trading_risks"][short_ex.lower()]["trade_size_usd"] * short_rate
-                tasks.append(self.orders[short_ex].place_order(sym, "BUY", size_short))
+                price_short = self.books[short_ex].get(sym, {}).get("asks", [[0]])[0][0]
+                tasks.append(self.orders[short_ex].place_order(native_short, "BUY", size_short, float(price_short)))
                 
             if tasks:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -268,15 +348,16 @@ class Main:
                     if isinstance(res, Exception):
                         log(f"[{sym}] 🚨 Ошибка закрытия: {res}", level="ERROR")
                         self.pm.rollback_exit(route, sym)
+                        state["details"]["next_close_attempt"] = time.time() + 10.0  # Cooldown 10s
                         return
                         
             await asyncio.sleep(self.cfg["EXECUTION_PAUSE"])
             
             cancel_tasks = []
             if long_ex in self.orders:
-                cancel_tasks.append(self.orders[long_ex].cancel_all_orders(sym))
+                cancel_tasks.append(self.orders[long_ex].cancel_all_orders(native_long))
             if short_ex in self.orders:
-                cancel_tasks.append(self.orders[short_ex].cancel_all_orders(sym))
+                cancel_tasks.append(self.orders[short_ex].cancel_all_orders(native_short))
             if cancel_tasks:
                 await asyncio.gather(*cancel_tasks, return_exceptions=True)
             
@@ -328,9 +409,9 @@ class Main:
                     ban_reason = f"Убыточная сделка, Net Yield: {net_yield * 100:.3f}%"
             
             if should_ban:
-                self.banned_symbols.add(sym)
+                self.banned_symbols[sym] = None
                 with open("banned_symbols.json", "w") as f:
-                    json.dump(list(self.banned_symbols), f, indent=4)
+                    json.dump(self.banned_symbols, f, indent=4)
                 log(f"[{sym}] 🚫 Монета заблокирована ({ban_reason}).", level="WARNING")
                 
             self.pm.confirm_exit(route, sym)
@@ -344,9 +425,11 @@ class Main:
 
                 
         except Exception as e:
-            log(f"Error closing position: {e}", level="ERROR")
+            log(f"[{sym}] Error closing position: {e}", level="ERROR")
             self.pm.rollback_exit(route, sym)
-
+            # Add cooldown to prevent 5ms loop spam
+            if "details" in state:
+                state["details"]["next_close_attempt"] = time.time() + 10.0
     async def _topology_rebuild_loop(self, stream_classes: dict):
         """Периодически пересоздаёт топологию символов и перезапускает WS-стримы."""
         interval = self.topology_rebuild_interval
@@ -385,6 +468,14 @@ class Main:
                 log(f"[TOPOLOGY] Ошибка ребазы: {e}", level="ERROR")
 
     async def run(self):
+        self.session = aiohttp.ClientSession()
+        self.orders["BINANCE"].session = self.session
+        self.orders["KUCOIN"].session = self.session
+        
+        # Запускаем фоновые таски адаптеров (ПОСЛЕ старта event loop)
+        self.orders["BINANCE"].start()
+        self.orders["KUCOIN"].start()
+        
         log("Initializing DiscoveryManager...", level="INFO")
         # Initialize discovery with global whitelist if provided
         whitelist = self.cfg["SYMBOLS_GLOBAL_WHITELIST"]
@@ -392,6 +483,61 @@ class Main:
             self.discovery.SYMBOLS = whitelist
             
         await self.discovery.build_topology(banned_symbols=self.banned_symbols)
+        
+        # RECONCILIATION
+        log("Performing Startup Position Reconciliation...", level="INFO")
+        try:
+            # Binance
+            if self.orders["BINANCE"].api_key:
+                timestamp = int(time.time() * 1000)
+                query_string = f"timestamp={timestamp}"
+                sig = self.orders["BINANCE"]._generate_signature(query_string)
+                async with self.session.get(f"https://fapi.binance.com/fapi/v2/positionRisk?{query_string}&signature={sig}", headers={"X-MBX-APIKEY": self.orders["BINANCE"].api_key}) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for p in data:
+                            amt = float(p.get("positionAmt", 0))
+                            if amt != 0:
+                                log(f"[RECONCILIATION] Orphaned Binance position found: {p['symbol']} size: {amt}", level="WARNING")
+            
+            # Kucoin
+            if self.orders["KUCOIN"].api_key:
+                endpoint = "/api/v1/position"
+                now = str(int(time.time() * 1000))
+                str_to_sign = now + "GET" + endpoint
+                sig = self.orders["KUCOIN"]._generate_signature(str_to_sign)
+                headers = {
+                    'KC-API-KEY': self.orders["KUCOIN"].api_key,
+                    'KC-API-SIGN': sig,
+                    'KC-API-TIMESTAMP': now,
+                    'KC-API-PASSPHRASE': self.orders["KUCOIN"].api_passphrase,
+                    'KC-API-KEY-VERSION': '2'
+                }
+                async with self.session.get(f"https://api-futures.kucoin.com{endpoint}", headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get('code') == '200000':
+                            for p in data.get('data', []):
+                                amt = float(p.get("currentQty", 0))
+                                if amt != 0:
+                                    log(f"[RECONCILIATION] Orphaned Kucoin position found: {p['symbol']} size: {amt}", level="WARNING")
+        except Exception as e:
+            log(f"Reconciliation error: {e}", level="WARNING")
+            
+        # SETUP LEVERAGE & MARGIN
+        from CORE.leverage_setter import LeverageSetter
+        leverage_setter = LeverageSetter(self)
+        await leverage_setter.setup()
+            
+        # WARMUP
+        log("Warming up POST API sessions...", level="INFO")
+        warmup_tasks = []
+        if self.orders["BINANCE"].api_key:
+            warmup_tasks.append(self.orders["BINANCE"].warmup())
+        if self.orders["KUCOIN"].api_key:
+            warmup_tasks.append(self.orders["KUCOIN"].warmup())
+        if warmup_tasks:
+            await asyncio.gather(*warmup_tasks, return_exceptions=True)
         
         # Prepare JIT matrix — только активные маршруты из cfg.json active_routes
         active_routes_cfg = self.cfg.get("active_routes", {})
@@ -477,18 +623,23 @@ class Main:
 
                         long_rate = state["details"].get("long_executed_volume_rate", 1.0)
                         short_rate = state["details"].get("short_executed_volume_rate", 1.0)
+                        min_fill = self.cfg["trading_rules"]["entry"].get("min_fill_rate", 0.95)
                         
-                        is_exit, exit_res = self.engine.evaluate_exit(
-                            long_book, short_book, long_ex, short_ex,
-                            state["details"]["engine_res"].get("long_qty", 0.0) * long_rate,
-                            state["details"]["engine_res"].get("short_qty", 0.0) * short_rate,
-                            state["details"].get("entry_long_price", 0.0),
-                            state["details"].get("entry_short_price", 0.0),
-                            duration_sec,
-                            is_stakan_valid=is_stakan_valid,
-                            long_executed_volume_rate=long_rate,
-                            short_executed_volume_rate=short_rate
-                        )
+                        if long_rate < min_fill or short_rate < min_fill:
+                            is_exit = True
+                            exit_res = {"exit_level_index": 99, "target_val": -999.0}
+                        else:
+                            is_exit, exit_res = self.engine.evaluate_exit(
+                                long_book, short_book, long_ex, short_ex,
+                                state["details"]["engine_res"].get("long_qty", 0.0) * long_rate,
+                                state["details"]["engine_res"].get("short_qty", 0.0) * short_rate,
+                                state["details"].get("entry_long_price", 0.0),
+                                state["details"].get("entry_short_price", 0.0),
+                                duration_sec,
+                                is_stakan_valid=is_stakan_valid,
+                                long_executed_volume_rate=long_rate,
+                                short_executed_volume_rate=short_rate
+                            )
                         
                         current_level = state["details"].get("exit_level_index", 0)
                         new_level = exit_res.get("exit_level_index", current_level)
@@ -502,6 +653,8 @@ class Main:
                                 log(f"[{sym}] 📉 Деградация профита: Уровень {new_level}, новый таргет: {target_val * 100:.3f}%", level="INFO")
                         
                         if is_exit:
+                            if time.time() < state["details"].get("next_close_attempt", 0):
+                                continue
                             self.pm.lock_for_exit(route, sym)
                             asyncio.create_task(self.execute_close(route, sym))
                     
@@ -588,6 +741,8 @@ class Main:
             await self.binance_pos_stream.stop()
             await self.kucoin_pos_stream.stop()
             await self.discovery.aclose()
+            if hasattr(self, 'session') and self.session:
+                await self.session.close()
             from utils import SessionManager
             await SessionManager().close_all()
 

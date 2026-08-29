@@ -1,0 +1,550 @@
+{
+    "BINANCE": {
+        "PENGUUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "TWTUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "GRVTUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "ARBUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "ASTERUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "ZKPUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "BLESSUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "UBUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "WIFUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "XLMUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "MAGMAUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "XANUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "CHIPUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "INJUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "TRXUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "UNIUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "JUPUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "ETHUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "NEARUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "TIAUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "VIRTUALUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "SUIUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "BANKUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "BNBUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "RIVERUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "SOLUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "FARTCOINUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "FETUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "BICOUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "APTUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "DOSUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "ALLOUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "ZECUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "GALAUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "HYPEUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "BTCUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "AAVEUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "TURBOUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "XRPUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "GRAMUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "EDENUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "DASHUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "DOGEUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "ZENUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "LINKUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "FILUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "ONDOUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "BCHUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "4USDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "LTCUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "ADAUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "1000BONKUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "HEMIUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "PAXGUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "OPGUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "SPXUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "TAOUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "XMRUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "WLDUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "CRVUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "AVAXUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "LDOUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "COTIUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "NILUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "ICPUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "HBARUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        },
+        "MANTRAUSDT": {
+            "leverage": 20,
+            "margin_type": "CROSSED"
+        }
+    },
+    "KUCOIN": {
+        "GRAMUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "AVAXUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "ARBUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "CHIPUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "DOSUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "TWTUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "GALAUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "EDENUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "ZENUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "UNIUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "BNBUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "FETUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "OUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "FILUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "INJUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "PENGUUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "LDOUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "ZKPUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "FARTCOINUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "TIAUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "XRPUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "DOGEUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "ONDOUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "ADAUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "DASHUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "ICPUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "GRVTUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "HEMIUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "JUPUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "MAGMAUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "NILUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "XMRUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "ETHUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "TAOUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "HYPEUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "BANKUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "BEATUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "TURBOUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "SPXUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "ALLOUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "WIFUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "1000BONKUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "XLMUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "TRXUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "ASTERUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "WLDUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "BLESSUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "HBARUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "AAVEUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "SUIUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "OPGUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "CRVUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "RIVERUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "XANUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "NEARUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "LINKUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "APTUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "VIRTUALUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "ZECUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "BCHUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "PAXGUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "BICOUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "UBUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "XBTUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "SOLUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "4USDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "LTCUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "COTIUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        },
+        "MANTRAUSDTM": {
+            "leverage": 20,
+            "margin_type": "CROSS"
+        }
+    }
+}
