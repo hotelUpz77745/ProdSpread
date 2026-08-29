@@ -38,6 +38,10 @@ from API.BYBIT.stakan import BybitStakanStream
 from API.GATE.stakan import GateStakanStream
 
 from API.discovery import DiscoveryManager
+from API.orders import InsufficientMarginError
+from CORE.leverage_setter import LeverageSetter
+from analytics import generate_global_report
+from utils import SessionManager
 
 EXCHANGES = ["BINANCE", "KUCOIN", "OKX", "BITGET", "PHEMEX", "BYBIT", "GATE"]
 EX_TO_IDX = {ex: i for i, ex in enumerate(EXCHANGES)}
@@ -136,7 +140,7 @@ class Main:
         self.analytics_map = {}
         
         # Предзагружаем аналитику по всем монетам из истории, чтобы global_pnl был точным
-        from analytics import TradeAnalytics
+
         analytics_dir = os.path.join("logs", "analytics")
         if os.path.exists(analytics_dir):
             for filename in os.listdir(analytics_dir):
@@ -197,7 +201,7 @@ class Main:
             
             # Также обновляем глобальный отчет
             try:
-                from analytics import generate_global_report
+
                 generate_global_report()
             except Exception as e:
                 log(f"Error generating global report: {e}", level="WARNING")
@@ -247,7 +251,7 @@ class Main:
                         log(f"[{sym}] 🚨 Ошибка входа! Рассинхрон ног: {res}.", level="ERROR")
                         has_error = True
                         error_msgs.append(str(res))
-                        from API.orders import InsufficientMarginError
+
                         if isinstance(res, InsufficientMarginError):
                             self.banned_symbols[sym] = None
                             with open("banned_symbols.json", "w") as f:
@@ -525,7 +529,7 @@ class Main:
             log(f"Reconciliation error: {e}", level="WARNING")
             
         # SETUP LEVERAGE & MARGIN
-        from CORE.leverage_setter import LeverageSetter
+
         leverage_setter = LeverageSetter(self)
         await leverage_setter.setup()
             
@@ -713,7 +717,7 @@ class Main:
                     raise
                 except Exception as iter_ex:
                     log(f"Сбой в цикле (итерация пропущена): {iter_ex}", level="ERROR")
-                    import traceback; traceback.print_exc()
+                    traceback.print_exc()
                 
                 # Замер скорости
                 if self.cfg.get("measure_loop_speed"):
@@ -743,7 +747,7 @@ class Main:
             await self.discovery.aclose()
             if hasattr(self, 'session') and self.session:
                 await self.session.close()
-            from utils import SessionManager
+
             await SessionManager().close_all()
 
 if __name__ == "__main__":
