@@ -198,6 +198,24 @@ class BinanceOrder:
             return self.position_stream.get_position(symbol, side)
         return {"size": 0.0, "price": 0.0}
 
+    async def get_active_positions(self) -> list:
+        if not self.api_key:
+            return []
+        timestamp = int(time.time() * 1000)
+        query_string = f"timestamp={timestamp}"
+        sig = self._generate_signature(query_string)
+        url = f"https://fapi.binance.com/fapi/v2/positionRisk?{query_string}&signature={sig}"
+        async with self.session.get(url, headers={"X-MBX-APIKEY": self.api_key}) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                active = []
+                for p in data:
+                    amt = float(p.get("positionAmt", 0))
+                    if amt != 0:
+                        active.append({"symbol": p["symbol"], "size": amt})
+                return active
+        return []
+
 class KucoinOrder:
     def __init__(self, api_key: str, api_secret: str, api_passphrase: str, session: aiohttp.ClientSession, position_stream, margin_settings: dict):
         self.api_key = api_key
@@ -403,6 +421,38 @@ class KucoinOrder:
                 # Убираем лог, чтобы не спамить
         except Exception:
             pass
+
+    async def get_active_positions(self) -> list:
+        if not self.api_key:
+            return []
+        endpoint = "/api/v1/position"
+        now = str(int(time.time() * 1000))
+        str_to_sign = now + "GET" + endpoint
+        sig = self._generate_signature(str_to_sign)
+        
+        passphrase_hmac = hmac.new(self.api_secret.encode('utf-8'), self.api_passphrase.encode('utf-8'), hashlib.sha256)
+        encrypted_passphrase = base64.b64encode(passphrase_hmac.digest()).decode('utf-8')
+        
+        headers = {
+            'KC-API-KEY': self.api_key,
+            'KC-API-SIGN': sig,
+            'KC-API-TIMESTAMP': now,
+            'KC-API-PASSPHRASE': encrypted_passphrase,
+            'KC-API-KEY-VERSION': '2'
+        }
+        
+        url = f"https://api-futures.kucoin.com{endpoint}"
+        async with self.session.get(url, headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                active = []
+                if data.get('code') == '200000':
+                    for p in data.get('data', []):
+                        amt = float(p.get("currentQty", 0))
+                        if amt != 0:
+                            active.append({"symbol": p["symbol"], "size": amt})
+                return active
+        return []
 
     async def set_margin_type(self, symbol: str, margin_type: str, leverage: int = None) -> bool:
         """

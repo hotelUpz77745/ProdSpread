@@ -452,6 +452,7 @@ class Main:
             # Add cooldown to prevent 5ms loop spam
             if "details" in state:
                 state["details"]["next_close_attempt"] = time.time() + 10.0
+                
     async def _topology_rebuild_loop(self, stream_classes: dict):
         """Периодически пересоздаёт топологию символов и перезапускает WS-стримы."""
         interval = self.topology_rebuild_interval
@@ -510,42 +511,16 @@ class Main:
         log("Performing Startup Position Reconciliation...", level="INFO")
         try:
             # Binance
-            if self.orders["BINANCE"].api_key:
-                timestamp = int(time.time() * 1000)
-                query_string = f"timestamp={timestamp}"
-                sig = self.orders["BINANCE"]._generate_signature(query_string)
-                async with self.session.get(f"https://fapi.binance.com/fapi/v2/positionRisk?{query_string}&signature={sig}", headers={"X-MBX-APIKEY": self.orders["BINANCE"].api_key}) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        for p in data:
-                            amt = float(p.get("positionAmt", 0))
-                            if amt != 0:
-                                log(f"[RECONCILIATION] Orphaned Binance position found: {p['symbol']} size: {amt}", level="WARNING")
+            if self.orders.get("BINANCE") and self.orders["BINANCE"].api_key:
+                binance_positions = await self.orders["BINANCE"].get_active_positions()
+                for p in binance_positions:
+                    log(f"[RECONCILIATION] Orphaned Binance position found: {p['symbol']} size: {p['size']}", level="WARNING")
             
             # Kucoin
-            if self.orders["KUCOIN"].api_key:
-                endpoint = "/api/v1/position"
-                now = str(int(time.time() * 1000))
-                str_to_sign = now + "GET" + endpoint
-                sig = self.orders["KUCOIN"]._generate_signature(str_to_sign)
-                passphrase_hmac = hmac.new(self.orders["KUCOIN"].api_secret.encode('utf-8'), self.orders["KUCOIN"].api_passphrase.encode('utf-8'), hashlib.sha256)
-                encrypted_passphrase = base64.b64encode(passphrase_hmac.digest()).decode('utf-8')
-                
-                headers = {
-                    'KC-API-KEY': self.orders["KUCOIN"].api_key,
-                    'KC-API-SIGN': sig,
-                    'KC-API-TIMESTAMP': now,
-                    'KC-API-PASSPHRASE': encrypted_passphrase,
-                    'KC-API-KEY-VERSION': '2'
-                }
-                async with self.session.get(f"https://api-futures.kucoin.com{endpoint}", headers=headers) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if data.get('code') == '200000':
-                            for p in data.get('data', []):
-                                amt = float(p.get("currentQty", 0))
-                                if amt != 0:
-                                    log(f"[RECONCILIATION] Orphaned Kucoin position found: {p['symbol']} size: {amt}", level="WARNING")
+            if self.orders.get("KUCOIN") and self.orders["KUCOIN"].api_key:
+                kucoin_positions = await self.orders["KUCOIN"].get_active_positions()
+                for p in kucoin_positions:
+                    log(f"[RECONCILIATION] Orphaned Kucoin position found: {p['symbol']} size: {p['size']}", level="WARNING")
         except Exception as e:
             log(f"Reconciliation error: {e}", level="WARNING")
             
