@@ -1,0 +1,188 @@
+{
+    "__docs__": {
+        "spread_rule_enter": "thresholds [min, max] (всегда положительные числа). Входим в позицию, когда модуль спреда попадает в этот диапазон.",
+        "spread_rule_exit": "target_val (может быть положительным, нулем или отрицательным). Выходим из позиции, когда позиционный спред (разница между ценой шорт ноги и лонг ноги) падает до этого значения или уходит ниже (в антиспред).",
+        "note": "Все процентные значения (fee, spread, pnl) задаются как доли от единицы (например, 0.01 это 1%). Убраны лишние умножения на 100 для скорости."
+    },
+    "SYMBOLS_GLOBAL_WHITELIST": [],
+    "QUOTE": "USDT",
+    "MAIN_LOOP_DELAY": 0.005,
+    "measure_loop_speed": false,
+    "EXECUTION_PAUSE": 0.025,
+    "topology_rebuild_interval_sec": null,
+    "logging": {
+        "debug": false,
+        "info": true,
+        "warning": true,
+        "error": true,
+        "max_log_lines": 50000,
+        "log_to_console": false,
+        "log_to_file": true,
+        "TIME_ZONE": "UTC"
+    },
+    "trading_risks": {
+        "binance": {
+            "paper_start_balance": 30.0,
+            "trade_size_usd": 100.0,
+            "taker_fee": 0.0005,
+            "volatility_discount": 0.6,
+            "limit_allow_distance": 1.1,
+            "max_positions": 1
+        },
+        "kucoin": {
+            "paper_start_balance": 30.0,
+            "trade_size_usd": 100.0,
+            "taker_fee": 0.0006,
+            "volatility_discount": 0.7,
+            "limit_allow_distance": 1.1,
+            "max_positions": 1
+        },
+        "okx": {
+            "paper_start_balance": 30.0,
+            "trade_size_usd": 100.0,
+            "taker_fee": 0.0006,
+            "volatility_discount": 0.7,
+            "limit_allow_distance": 1.1,
+            "max_positions": 1
+        },
+        "bitget": {
+            "paper_start_balance": 30.0,
+            "trade_size_usd": 100.0,
+            "taker_fee": 0.0006,
+            "volatility_discount": 0.7,
+            "limit_allow_distance": 1.1,
+            "max_positions": 1
+        },
+        "phemex": {
+            "paper_start_balance": 30.0,
+            "trade_size_usd": 100.0,
+            "taker_fee": 0.0006,
+            "volatility_discount": 0.7,
+            "limit_allow_distance": 1.1,
+            "max_positions": 1
+        },
+        "bybit": {
+            "paper_start_balance": 30.0,
+            "trade_size_usd": 100.0,
+            "taker_fee": 0.0006,
+            "volatility_discount": 0.7,
+            "limit_allow_distance": 1.1,
+            "max_positions": 1
+        },
+        "gate": {
+            "paper_start_balance": 30.0,
+            "trade_size_usd": 100.0,
+            "taker_fee": 0.0006,
+            "volatility_discount": 0.7,
+            "limit_allow_distance": 1.1,
+            "max_positions": 1
+        }
+    },
+    "volume_filters": {
+        "BINANCE": 5000000.0,
+        "KUCOIN": 1000000.0,
+        "OKX": 2000000.0,
+        "BITGET": 1000000.0,
+        "BYBIT": 3000000.0,
+        "GATE": 500000.0,
+        "PHEMEX": 500000.0
+    },
+    "active_routes": {
+        "BINANCE_KUCOIN": true,
+        "BINANCE_OKX": true,
+        "BINANCE_BITGET": true,
+        "BINANCE_BYBIT": false,
+        "BINANCE_GATE": false,
+        "BINANCE_PHEMEX": false,
+        "KUCOIN_OKX": true,
+        "KUCOIN_BITGET": true,
+        "KUCOIN_BYBIT": false,
+        "KUCOIN_GATE": false,
+        "KUCOIN_PHEMEX": false,
+        "OKX_BITGET": true,
+        "OKX_BYBIT": false,
+        "OKX_GATE": false,
+        "OKX_PHEMEX": false,
+        "BITGET_BYBIT": false,
+        "BITGET_GATE": false,
+        "BITGET_PHEMEX": false,
+        "BYBIT_GATE": false,
+        "BYBIT_PHEMEX": false,
+        "GATE_PHEMEX": false
+    },
+    "trading_rules": {
+        "entry": {
+            "max_desync_ms": null,
+            "spread_entry": 0.007,
+            "min_fill_rate": 0.2,
+            "top_n_candidates": 6,
+            "check_synthetic_exit": true,
+            "check_synthetic_slippage": true,
+            "max_slippage_ratio": 0.5,
+            "hard_max_slippage": 0.015
+        },
+        "exit": {
+            "profit_decay_map": [
+                {
+                    "index": 0,
+                    "seconds": 0,
+                    "target_val": 0.005
+                },
+                {
+                    "index": 1,
+                    "seconds": 5,
+                    "target_val": 0.004
+                },
+                {
+                    "index": 2,
+                    "seconds": 15,
+                    "target_val": 0.003
+                },
+                {
+                    "index": 3,
+                    "seconds": 30,
+                    "target_val": 0.002
+                },
+                {
+                    "index": 4,
+                    "seconds": 60,
+                    "target_val": 0.001
+                },
+                {
+                    "index": 5,
+                    "seconds": 120,
+                    "target_val": 0.0
+                },
+                {
+                    "index": 6,
+                    "seconds": 300,
+                    "target_val": -0.001
+                },
+                {
+                    "index": 7,
+                    "seconds": 600,
+                    "target_val": -0.002
+                },
+                {
+                    "index": 8,
+                    "seconds": 1260,
+                    "target_val": -0.005
+                },
+                {
+                    "index": 9,
+                    "seconds": 2040,
+                    "target_val": -999.0
+                }
+            ]
+        },
+        "ban_rules": {
+            "is_active": true,
+            "ban_if_exit_level_ge": null
+        },
+        "funding_filter": {
+            "is_active": true,
+            "skip_if_less_than_sec": 300,
+            "skip_if_after_while_sec": 300
+        }
+    }
+}

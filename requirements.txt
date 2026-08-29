@@ -1,0 +1,9 @@
+pandas
+matplotlib
+pytz
+curl_cffi
+python-dotenv
+pyautogui
+aiohttp
+numba
+numpy
