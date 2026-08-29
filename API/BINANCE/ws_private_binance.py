@@ -120,7 +120,8 @@ class BinancePositionStream:
                     "Origin": "https://fapi.binance.com",
                     "Host": "fstream.binance.com",
                     "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits"
-                }
+                },
+                heartbeat=30.0
             )
             self.is_connected = True
             log(f"[BINANCE WS_PRIVATE] Connected successfully.", level="INFO")
@@ -172,19 +173,13 @@ class BinancePositionStream:
             }
 
     async def _handle_messages(self):
-        import time
-        last_msg_time = time.time()
         while not self._external_stop and not self.stop_flag():
             try:
                 msg = await asyncio.wait_for(
                     self.websocket.receive(),
                     timeout=5.0,
                 )
-                last_msg_time = time.time()
             except asyncio.TimeoutError:
-                if time.time() - last_msg_time > 40.0:
-                    log("[BINANCE WS_PRIVATE] Watchdog timeout: no messages for 40s. Reconnecting.", level="WARNING")
-                    raise RuntimeError("ws_closed")
                 continue
 
             if msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
