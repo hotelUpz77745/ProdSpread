@@ -525,11 +525,14 @@ class Main:
                 now = str(int(time.time() * 1000))
                 str_to_sign = now + "GET" + endpoint
                 sig = self.orders["KUCOIN"]._generate_signature(str_to_sign)
+                passphrase_hmac = hmac.new(self.orders["KUCOIN"].api_secret.encode('utf-8'), self.orders["KUCOIN"].api_passphrase.encode('utf-8'), hashlib.sha256)
+                encrypted_passphrase = base64.b64encode(passphrase_hmac.digest()).decode('utf-8')
+                
                 headers = {
                     'KC-API-KEY': self.orders["KUCOIN"].api_key,
                     'KC-API-SIGN': sig,
                     'KC-API-TIMESTAMP': now,
-                    'KC-API-PASSPHRASE': self.orders["KUCOIN"].api_passphrase,
+                    'KC-API-PASSPHRASE': encrypted_passphrase,
                     'KC-API-KEY-VERSION': '2'
                 }
                 async with self.session.get(f"https://api-futures.kucoin.com{endpoint}", headers=headers) as resp:

@@ -113,12 +113,12 @@
     "setup_margin_leverage": true,
     "margin_settings": {
         "BINANCE": {
-            "leverage": 20,
+            "leverage": 10,
             "margin_type": "CROSSED",
             "desc": "margin_type allowed values: ISOLATED | CROSSED"
         },
         "KUCOIN": {
-            "leverage": 20,
+            "leverage": 10,
             "margin_type": "CROSS",
             "desc": "margin_type allowed values: ISOLATED | CROSS"
         },

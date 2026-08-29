@@ -1,18 +1,18 @@
-[
-    "TRUMP",
-    "MELANIA",
-    "VET",
-    "PROM",
-    "GIGGLE",
-    "ANTHROPIC",
-    "TUT",
-    "ONG",
-    "MON",
-    "APR",
-    "PUMP",
-    "ACU",
-    "MOVR",
-    "ZHIPU",
-    "ENA",
-    "MVLL"
-]
+{
+    "TRUMP": null,
+    "MELANIA": null,
+    "VET": null,
+    "PROM": null,
+    "GIGGLE": null,
+    "ANTHROPIC": null,
+    "TUT": null,
+    "ONG": null,
+    "MON": null,
+    "APR": null,
+    "PUMP": null,
+    "ACU": null,
+    "MOVR": null,
+    "ZHIPU": null,
+    "ENA": null,
+    "MVLL": null
+}

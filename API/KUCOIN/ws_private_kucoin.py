@@ -58,11 +58,14 @@ class KucoinPositionStream:
             str_to_sign = now + 'POST' + '/api/v1/bullet-private'
             signature = self._generate_signature('/api/v1/bullet-private', 'POST', str_to_sign)
             
+            passphrase_hmac = hmac.new(self.api_secret.encode('utf-8'), self.api_passphrase.encode('utf-8'), hashlib.sha256)
+            encrypted_passphrase = base64.b64encode(passphrase_hmac.digest()).decode('utf-8')
+            
             headers = {
                 'KC-API-KEY': self.api_key,
                 'KC-API-SIGN': signature,
                 'KC-API-TIMESTAMP': now,
-                'KC-API-PASSPHRASE': self.api_passphrase,
+                'KC-API-PASSPHRASE': encrypted_passphrase,
                 'KC-API-KEY-VERSION': '2'
             }
             
