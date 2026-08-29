@@ -1,0 +1,68 @@
+2026-08-30 01:19:19 | INFO | DISCOVERY | Skipping OKX (no active routes)
+2026-08-30 01:19:19 | INFO | DISCOVERY | Skipping BITGET (no active routes)
+2026-08-30 01:19:20 | INFO | SYSTEM | [BinanceOrder] Exchange specs updated.
+2026-08-30 01:19:20 | INFO | SYSTEM | [KucoinOrder] Exchange specs updated.
+2026-08-30 01:19:20 | INFO | DISCOVERY | BINANCE: 524 total, 151 passed volume filter >= 5000000.0
+2026-08-30 01:19:20 | INFO | DISCOVERY | KUCOIN: 664 total, 157 passed volume filter >= 1000000.0
+2026-08-30 01:19:20 | INFO | DISCOVERY | Topology built: 78 valid coins across 2 exchanges.
+2026-08-30 01:19:20 | INFO | SYSTEM | Performing Startup Position Reconciliation...
+2026-08-30 01:19:20 | INFO | SYSTEM | [LeverageSetter] Запуск настройки маржи и плечей...
+2026-08-30 01:19:20 | INFO | SYSTEM | [LeverageSetter] [BINANCE] Настройка 78 новых символов (lev: 10, type: CROSSED)...
+2026-08-30 01:19:29 | INFO | SYSTEM | [LeverageSetter] [KUCOIN] Настройка 78 новых символов (lev: 10, type: CROSS)...
+2026-08-30 01:19:38 | INFO | SYSTEM | [LeverageSetter] Новые настройки успешно сохранены в кэш.
+2026-08-30 01:19:38 | INFO | SYSTEM | Warming up POST API sessions...
+2026-08-30 01:19:39 | INFO | SYSTEM | Initial Total balance: 27.26 USD (Base: 27.26, PnL: 0.00)
+2026-08-30 01:19:39 | INFO | SYSTEM | Started KUCOIN WS stream
+2026-08-30 01:19:39 | INFO | SYSTEM | Started BINANCE WS stream
+2026-08-30 01:19:39 | INFO | SYSTEM | [TOPOLOGY] topology_rebuild_interval_sec=null, ребаза отключена (только при запуске).
+2026-08-30 01:19:39 | INFO | SYSTEM | [BINANCE] listenKey created & activated: SHC2G...
+2026-08-30 01:19:40 | INFO | SYSTEM | [BINANCE WS_PRIVATE] Connected successfully.
+2026-08-30 01:19:40 | INFO | SYSTEM | [KUCOIN WS_PRIVATE] Connected successfully.
+2026-08-30 01:20:21 | WARNING | SYSTEM | [BINANCE WS_PRIVATE] Watchdog timeout: no messages for 40s. Reconnecting.
+2026-08-30 01:20:21 | WARNING | SYSTEM | [BINANCE WS_PRIVATE] Stream disconnected, reconnecting...
+2026-08-30 01:20:21 | INFO | SYSTEM | BinancePositionStream: WS disconnected
+2026-08-30 01:20:22 | INFO | SYSTEM | [BINANCE] listenKey created & activated: SHC2G...
+2026-08-30 01:20:23 | INFO | SYSTEM | [BINANCE WS_PRIVATE] Connected successfully.
+2026-08-30 01:21:03 | WARNING | SYSTEM | [BINANCE WS_PRIVATE] Watchdog timeout: no messages for 40s. Reconnecting.
+2026-08-30 01:21:03 | WARNING | SYSTEM | [BINANCE WS_PRIVATE] Stream disconnected, reconnecting...
+2026-08-30 01:21:03 | INFO | SYSTEM | BinancePositionStream: WS disconnected
+2026-08-30 01:21:04 | INFO | SYSTEM | [BINANCE] listenKey created & activated: SHC2G...
+2026-08-30 01:21:05 | INFO | SYSTEM | [BINANCE WS_PRIVATE] Connected successfully.
+2026-08-30 01:21:45 | WARNING | SYSTEM | [BINANCE WS_PRIVATE] Watchdog timeout: no messages for 40s. Reconnecting.
+2026-08-30 01:21:45 | WARNING | SYSTEM | [BINANCE WS_PRIVATE] Stream disconnected, reconnecting...
+2026-08-30 01:21:45 | INFO | SYSTEM | BinancePositionStream: WS disconnected
+2026-08-30 01:21:47 | INFO | SYSTEM | [BINANCE] listenKey created & activated: SHC2G...
+2026-08-30 01:21:47 | INFO | SYSTEM | [BINANCE WS_PRIVATE] Connected successfully.
+2026-08-30 01:22:27 | WARNING | SYSTEM | [BINANCE WS_PRIVATE] Watchdog timeout: no messages for 40s. Reconnecting.
+2026-08-30 01:22:27 | WARNING | SYSTEM | [BINANCE WS_PRIVATE] Stream disconnected, reconnecting...
+2026-08-30 01:22:27 | INFO | SYSTEM | BinancePositionStream: WS disconnected
+2026-08-30 01:22:29 | INFO | SYSTEM | [BINANCE] listenKey created & activated: SHC2G...
+2026-08-30 01:22:30 | INFO | SYSTEM | [BINANCE WS_PRIVATE] Connected successfully.
+2026-08-30 01:22:45 | INFO | SYSTEM | Завершение работы.
+2026-08-30 01:22:45 | INFO | SYSTEM | BinancePositionStream: stop requested
+2026-08-30 01:22:45 | INFO | SYSTEM | KucoinPositionStream: stop requested
+2026-08-30 01:22:45 | INFO | SYSTEM | KucoinPositionStream: WS disconnected
+2026-08-30 01:22:45 | INFO | SYSTEM | BinancePositionStream: WS disconnected
+2026-08-30 01:22:55 | INFO | SYSTEM | Initializing DiscoveryManager...
+2026-08-30 01:22:55 | INFO | DISCOVERY | Skipping OKX (no active routes)
+2026-08-30 01:22:55 | INFO | DISCOVERY | Skipping BITGET (no active routes)
+2026-08-30 01:22:55 | INFO | SYSTEM | [BinanceOrder] Exchange specs updated.
+2026-08-30 01:22:55 | INFO | DISCOVERY | BINANCE: 524 total, 151 passed volume filter >= 5000000.0
+2026-08-30 01:22:55 | INFO | DISCOVERY | KUCOIN: 664 total, 157 passed volume filter >= 1000000.0
+2026-08-30 01:22:55 | INFO | DISCOVERY | Topology built: 78 valid coins across 2 exchanges.
+2026-08-30 01:22:55 | INFO | SYSTEM | Performing Startup Position Reconciliation...
+2026-08-30 01:22:55 | INFO | SYSTEM | [KucoinOrder] Exchange specs updated.
+2026-08-30 01:22:56 | INFO | SYSTEM | [LeverageSetter] Запуск настройки маржи и плечей...
+2026-08-30 01:22:56 | INFO | SYSTEM | Warming up POST API sessions...
+2026-08-30 01:22:56 | INFO | SYSTEM | Initial Total balance: 27.26 USD (Base: 27.26, PnL: 0.00)
+2026-08-30 01:22:56 | INFO | SYSTEM | Started BINANCE WS stream
+2026-08-30 01:22:56 | INFO | SYSTEM | Started KUCOIN WS stream
+2026-08-30 01:22:56 | INFO | SYSTEM | [TOPOLOGY] topology_rebuild_interval_sec=null, ребаза отключена (только при запуске).
+2026-08-30 01:22:56 | INFO | SYSTEM | [BINANCE] listenKey created & activated: SHC2G...
+2026-08-30 01:22:57 | INFO | SYSTEM | [BINANCE WS_PRIVATE] Connected successfully.
+2026-08-30 01:22:57 | INFO | SYSTEM | [KUCOIN WS_PRIVATE] Connected successfully.
+2026-08-30 01:40:50 | INFO | SYSTEM | Завершение работы.
+2026-08-30 01:40:50 | INFO | SYSTEM | BinancePositionStream: stop requested
+2026-08-30 01:40:50 | INFO | SYSTEM | KucoinPositionStream: stop requested
+2026-08-30 01:40:50 | INFO | SYSTEM | KucoinPositionStream: WS disconnected
+2026-08-30 01:40:50 | INFO | SYSTEM | BinancePositionStream: WS disconnected
