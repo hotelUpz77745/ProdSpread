@@ -330,7 +330,7 @@ class KucoinOrder:
             body["positionSide"] = position_side.upper()
             if (side.lower() == "buy" and position_side.upper() == "SHORT") or \
                (side.lower() == "sell" and position_side.upper() == "LONG"):
-                body["closeOrder"] = True
+                body["reduceOnly"] = True
         
         body_str = json.dumps(body)
         str_to_sign = now + "POST" + endpoint + body_str
