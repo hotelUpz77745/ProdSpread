@@ -67,7 +67,7 @@ class TradeAnalytics:
             "slippage": slippage
         }
 
-    def record_close(self, long_price_close: float, short_price_close: float, spread_out: float, slippage_out: float = 0.0) -> None:
+    def record_close(self, long_price_close: float, short_price_close: float, spread_out: float, slippage_out: float = 0.0, long_executed_usd: float = None, short_executed_usd: float = None) -> None:
         if not self.active_trade:
             return
             
@@ -84,22 +84,25 @@ class TradeAnalytics:
         long_ex = t_in["long_ex"]
         short_ex = t_in["short_ex"]
         
-        long_pnl = (long_price_close - t_in["long_price_in"]) / t_in["long_price_in"]
-        short_pnl = (t_in["short_price_in"] - short_price_close) / t_in["short_price_in"]
+        long_pnl = (long_price_close - t_in["long_price_in"]) / t_in["long_price_in"] if t_in["long_price_in"] else 0.0
+        short_pnl = (t_in["short_price_in"] - short_price_close) / t_in["short_price_in"] if t_in["short_price_in"] else 0.0
         
         gross_pnl = (long_pnl + short_pnl) / 2.0
         
         long_cfg = self.risks_cfg.get(long_ex.lower(), {})
         short_cfg = self.risks_cfg.get(short_ex.lower(), {})
         
-        l_fee_usd = long_cfg.get("trade_size_usd", 100.0) * (long_cfg.get("taker_fee", 0.0006) * 2.0)
-        s_fee_usd = short_cfg.get("trade_size_usd", 100.0) * (short_cfg.get("taker_fee", 0.0006) * 2.0)
+        actual_long_usd = long_executed_usd if long_executed_usd is not None else long_cfg.get("trade_size_usd", 100.0)
+        actual_short_usd = short_executed_usd if short_executed_usd is not None else short_cfg.get("trade_size_usd", 100.0)
         
-        long_pnl_usd = long_cfg.get("trade_size_usd", 100.0) * long_pnl - l_fee_usd
-        short_pnl_usd = short_cfg.get("trade_size_usd", 100.0) * short_pnl - s_fee_usd
+        l_fee_usd = actual_long_usd * (long_cfg.get("taker_fee", 0.0006) * 2.0)
+        s_fee_usd = actual_short_usd * (short_cfg.get("taker_fee", 0.0006) * 2.0)
+        
+        long_pnl_usd = actual_long_usd * long_pnl - l_fee_usd
+        short_pnl_usd = actual_short_usd * short_pnl - s_fee_usd
         
         net_pnl_usd = long_pnl_usd + short_pnl_usd
-        total_investment = long_cfg.get("trade_size_usd", 100.0) + short_cfg.get("trade_size_usd", 100.0)
+        total_investment = actual_long_usd + actual_short_usd
         net_pnl = net_pnl_usd / total_investment if total_investment > 0 else 0
         
         self.cumulative_pnl_usd += net_pnl_usd

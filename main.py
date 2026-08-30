@@ -414,11 +414,16 @@ class Main:
             if not short_close_price:
                 short_close_price = state["details"].get("entry_short_price", 0.0)
                 
+            long_executed_usd = (engine_res.get("long_qty", 0.0) * long_rate) * long_close_price
+            short_executed_usd = (engine_res.get("short_qty", 0.0) * short_rate) * short_close_price
+                
             self.analytics_map[sym].record_close(
                 long_price_close=long_close_price,
                 short_price_close=short_close_price,
                 spread_out=exit_res.get("vwap_spread_out") or 0.0, 
-                slippage_out=0.0
+                slippage_out=0.0,
+                long_executed_usd=long_executed_usd,
+                short_executed_usd=short_executed_usd
             )
             
             net_yield = exit_res.get("net_yield")
