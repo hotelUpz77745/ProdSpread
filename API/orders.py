@@ -327,9 +327,9 @@ class KucoinOrder:
             body["type"] = "market"
             
         if position_side:
-            body["posSide"] = position_side.lower()
-            if (side.lower() == "buy" and position_side.lower() == "short") or \
-               (side.lower() == "sell" and position_side.lower() == "long"):
+            body["positionSide"] = position_side.upper()
+            if (side.lower() == "buy" and position_side.upper() == "SHORT") or \
+               (side.lower() == "sell" and position_side.upper() == "LONG"):
                 body["closeOrder"] = True
         
         body_str = json.dumps(body)
