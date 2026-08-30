@@ -326,9 +326,11 @@ class KucoinOrder:
         else:
             body["type"] = "market"
             
-        # Kucoin position mode mapping (usually Kucoin allows omitting it if one-way, but if hedge, use it)
-        # Note: Kucoin API documentation for hedge mode requires specifying "closeOrder" or setting position side logic?
-        # Actually Kucoin API doesn't use positionSide in the same way, but let's just encrypt the passphrase for now.
+        if position_side:
+            body["posSide"] = position_side.lower()
+            if (side.lower() == "buy" and position_side.lower() == "short") or \
+               (side.lower() == "sell" and position_side.lower() == "long"):
+                body["closeOrder"] = True
         
         body_str = json.dumps(body)
         str_to_sign = now + "POST" + endpoint + body_str
