@@ -151,7 +151,6 @@ class Main:
 
     def _make_depth_handler(self, exchange_name: str):
         async def on_depth(d):
-            sym = self.discovery.coin_to_native.get(d.symbol, {}).get(exchange_name)
             base_coin = None
             for coin, mapping in self.discovery.coin_to_native.items():
                 if mapping.get(exchange_name) == d.symbol:
@@ -159,7 +158,15 @@ class Main:
                     break
             
             if base_coin and getattr(d, 'bids', None) and getattr(d, 'asks', None):
-                self.books[exchange_name][base_coin] = {"bids": d.bids, "asks": d.asks}
+                bids = d.bids
+                asks = d.asks
+                if exchange_name == "KUCOIN" and "KUCOIN" in self.orders:
+                    mult = self.orders["KUCOIN"].get_multiplier(d.symbol)
+                    if mult != 1.0:
+                        bids = [(p, q * mult) for p, q in bids]
+                        asks = [(p, q * mult) for p, q in asks]
+
+                self.books[exchange_name][base_coin] = {"bids": bids, "asks": asks}
                 self.ts[exchange_name][base_coin] = time.time()
                 self.event_ts[exchange_name][base_coin] = getattr(d, 'event_time_ms', time.time()*1000)
         return on_depth
