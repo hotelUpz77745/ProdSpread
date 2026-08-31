@@ -12,7 +12,7 @@ import json
 import numpy as np
 import multiprocessing as mp
 from dotenv import load_dotenv
-import aiohttp
+# import aiohttp
 
 load_dotenv()
 

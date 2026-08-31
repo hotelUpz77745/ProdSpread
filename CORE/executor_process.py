@@ -10,7 +10,7 @@ import json
 import traceback
 from typing import Dict, Any
 from dotenv import load_dotenv
-import aiohttp
+# import aiohttp
 
 load_dotenv()
 
@@ -242,8 +242,11 @@ class ExecutorProcess:
         sym = data["sym"]
         state = self.pm.positions[route][sym]
         details = state.get("details", {})
-        long_ex = details["long_ex"]
-        short_ex = details["short_ex"]
+        long_ex = details.get("long_ex")
+        short_ex = details.get("short_ex")
+        
+        if not long_ex or not short_ex:
+            long_ex, short_ex = route.split('_')
         open_time_ms = details.get("open_time_ms", int(details.get("open_time", time.time()) * 1000))
         
         log(f"[{sym}] Закрываем позицию: LONG {long_ex} | SHORT {short_ex}", level="INFO")

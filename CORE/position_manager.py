@@ -161,8 +161,10 @@ class PositionManager:
         if state["pending_action"] != "CLOSE":
             return
             
-        long_ex = state["details"]["long_ex"]
-        short_ex = state["details"]["short_ex"]
+        long_ex = state["details"].get("long_ex")
+        short_ex = state["details"].get("short_ex")
+        if not long_ex or not short_ex:
+            long_ex, short_ex = route.split('_')
         
         state["current_position"] = False
         state["pending_action"] = None
