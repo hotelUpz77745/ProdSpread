@@ -435,6 +435,10 @@
         "ACEUSDT": {
             "leverage": 10,
             "margin_type": "CROSSED"
+        },
+        "BSBUSDT": {
+            "leverage": 10,
+            "margin_type": "CROSSED"
         }
     },
     "KUCOIN": {
@@ -871,6 +875,10 @@
             "margin_type": "CROSS"
         },
         "POWERUSDTM": {
+            "leverage": 10,
+            "margin_type": "CROSS"
+        },
+        "BSBUSDTM": {
             "leverage": 10,
             "margin_type": "CROSS"
         }
