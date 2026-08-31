@@ -315,6 +315,10 @@
         "OUSDT": {
             "leverage": 10,
             "margin_type": "CROSSED"
+        },
+        "USELESSUSDT": {
+            "leverage": 10,
+            "margin_type": "CROSSED"
         }
     },
     "KUCOIN": {
@@ -631,6 +635,10 @@
             "margin_type": "CROSS"
         },
         "CAPUSDTM": {
+            "leverage": 10,
+            "margin_type": "CROSS"
+        },
+        "USELESSUSDTM": {
             "leverage": 10,
             "margin_type": "CROSS"
         }
