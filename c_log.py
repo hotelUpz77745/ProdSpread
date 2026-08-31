@@ -280,8 +280,11 @@ _global_logger = UnifiedLogger("SYSTEM")
 _log_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 def log(msg: str, level: str = "DEBUG", *args, throttle_sec: int = 0, throttle_key: Optional[str] = None, exc: Exception = None, is_signal: bool = False, **kwargs):
+    lvl = level.upper()
+    if lvl == "ERROR" and throttle_sec == 0:
+        throttle_sec = 5  # Anti-spam for identical errors
+        
     def _do_log():
-        lvl = level.upper()
         if lvl == "INFO":
             _global_logger.info(msg, *args, throttle_sec=throttle_sec, throttle_key=throttle_key, **kwargs)
         elif lvl == "WARNING":

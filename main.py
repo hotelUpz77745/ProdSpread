@@ -249,7 +249,7 @@ class Main:
                                 log(f"[{sym}] 📉 Деградация профита: Уровень {new_level}, новый таргет: {target_val * 100:.3f}%", level="INFO")
                         
                         if is_exit:
-                            self.pm.request_exit(route, sym)
+                            self.pm.lock_for_exit(route, sym)
                             # Отправляем команду закрытия в Executor Process
                             self.market_pipe.send(("CMD_CLOSE", {
                                 "route": route,
