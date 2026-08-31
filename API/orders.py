@@ -566,6 +566,13 @@ class KucoinOrder:
         except Exception as e:
             raise Exception(f"Kucoin Leverage Error: {e}")
 
+    def get_multiplier(self, symbol: str) -> float:
+        if self.symbol_info:
+            item = next((x for x in self.symbol_info if x.get('symbol') == symbol), None)
+            if item:
+                return float(item.get('multiplier', 1.0))
+        return 1.0
+
     async def get_position_rest(self, symbol: str, side: str = None) -> dict:
         if not self.api_key:
             return {"size": 0.0, "price": 0.0}
@@ -588,15 +595,17 @@ class KucoinOrder:
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("code") == "200000" and data.get("data"):
+                        multiplier = self.get_multiplier(symbol)
                         for p in data["data"]:
                             if p.get("symbol") == symbol:
-                                amt = float(p.get("currentQty", 0))
+                                raw_lots = float(p.get("currentQty", 0))
+                                amt = raw_lots * multiplier
                                 price = float(p.get("avgEntryPrice", 0))
-                                pos_side = (p.get("positionSide") or ("LONG" if amt > 0 else "SHORT")).upper()
+                                pos_side = (p.get("positionSide") or ("LONG" if raw_lots > 0 else "SHORT")).upper()
                                 if amt != 0:
                                     res_pos = {"size": abs(amt), "price": price}
                                     if self.position_stream:
-                                        self.position_stream.positions.setdefault(symbol, {})[pos_side] = res_pos
+                                        self.position_stream.positions.setdefault(symbol, {})[pos_side] = {"size": abs(raw_lots), "price": price}
                                     if not side or side.upper() == pos_side:
                                         return res_pos
         except Exception as e:
@@ -605,7 +614,12 @@ class KucoinOrder:
 
     def get_executed_position(self, symbol: str, side: str):
         if self.position_stream:
-            return self.position_stream.get_position(symbol, side)
+            pos = self.position_stream.get_position(symbol, side)
+            multiplier = self.get_multiplier(symbol)
+            return {
+                "size": pos.get("size", 0.0) * multiplier,
+                "price": pos.get("price", 0.0)
+            }
         return {"size": 0.0, "price": 0.0}
 
     async def get_exact_position(self, symbol: str, side: str) -> dict:
