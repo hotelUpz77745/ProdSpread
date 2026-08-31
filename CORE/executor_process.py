@@ -340,29 +340,34 @@ class ExecutorProcess:
         log("[ExecutorProcess] Процесс исполнения ордеров запущен и готов к командам.", level="INFO")
         
         loop = asyncio.get_running_loop()
-        while self._running:
-            # Проверяем pipe на наличие команд без блокировки event loop
-            has_data = await loop.run_in_executor(None, self.pipe.poll, 0.05)
-            if has_data:
-                try:
-                    msg_type, payload = self.pipe.recv()
-                    if msg_type == "INIT_TOPOLOGY":
-                        self.coin_to_native = payload.get("coin_to_native", {})
-                        routes = payload.get("routes", [])
-                        active_symbols = payload.get("active_symbols", [])
-                        self.pm = PositionManager(self.cfg, EXCHANGES, routes, active_symbols)
-                    elif msg_type == "CMD_OPEN":
-                        asyncio.create_task(self.execute_open(payload))
-                    elif msg_type == "CMD_CLOSE":
-                        asyncio.create_task(self.execute_close(payload))
-                    elif msg_type == "SHUTDOWN":
-                        self._running = False
+        try:
+            while self._running:
+                # Проверяем pipe на наличие команд без блокировки event loop
+                has_data = await loop.run_in_executor(None, self.pipe.poll, 0.05)
+                if has_data:
+                    try:
+                        msg_type, payload = self.pipe.recv()
+                        if msg_type == "INIT_TOPOLOGY":
+                            self.coin_to_native = payload.get("coin_to_native", {})
+                            routes = payload.get("routes", [])
+                            active_symbols = payload.get("active_symbols", [])
+                            self.pm = PositionManager(self.cfg, EXCHANGES, routes, active_symbols)
+                        elif msg_type == "CMD_OPEN":
+                            asyncio.create_task(self.execute_open(payload))
+                        elif msg_type == "CMD_CLOSE":
+                            asyncio.create_task(self.execute_close(payload))
+                        elif msg_type == "SHUTDOWN":
+                            self._running = False
+                            break
+                    except EOFError:
                         break
-                except EOFError:
-                    break
-                except Exception as e:
-                    log(f"[ExecutorProcess] Ошибка обработки команды: {e}", level="ERROR")
-            await asyncio.sleep(0.01)
+                    except Exception as e:
+                        log(f"[ExecutorProcess] Ошибка обработки команды: {e}", level="ERROR")
+                await asyncio.sleep(0.01)
+        finally:
+            log("[ExecutorProcess] Завершение работы, закрытие сессий...", level="INFO")
+            from utils import SessionManager
+            await SessionManager().close_all()
 
 def run_executor_process(pipe, cfg: dict):
     """Entrypoint для отдельного процесса multiprocessing."""
