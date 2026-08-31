@@ -12,7 +12,18 @@ import hashlib
 import base64
 import uuid
 import json
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
+
+def round_by_step(value: float, step_str) -> str:
+    try:
+        step = Decimal(str(step_str)).normalize()
+        val = Decimal(str(value))
+        precision = max(0, -step.as_tuple().exponent)
+        steps = (val / step).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+        quantized_val = steps * step
+        return f"{quantized_val:.{precision}f}"
+    except Exception:
+        return str(value)
 
 class InsufficientMarginError(Exception):
     pass
@@ -54,7 +65,7 @@ class BinanceOrder:
                 break
             except Exception as e:
                 log(f"[BinanceOrder] Error fetching specs: {e}", level="ERROR")
-            
+                
             try:
                 await asyncio.sleep(3600)
             except asyncio.CancelledError:
@@ -76,7 +87,7 @@ class BinanceOrder:
 
         def count_decimal_places(number):
             try:
-                d = Decimal(str(number))
+                d = Decimal(str(number)).normalize()
                 return max(0, -d.as_tuple().exponent)
             except Exception:
                 return 0
@@ -96,17 +107,19 @@ class BinanceOrder:
         if not self.symbol_info:
             raise ValueError(f"[{symbol}] Exchange specs not loaded yet")
             
-        precisions = self.get_spec_precisions(self.symbol_info, symbol)
-        if not precisions:
+        symbol_data = next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
+        if not symbol_data:
             raise ValueError(f"[{symbol}] Precision rules not found in specs")
             
-        qty_prec, price_prec = precisions
+        lot_size_filter = next((f for f in symbol_data.get("filters", []) if f.get("filterType") == "LOT_SIZE"), None)
+        price_filter = next((f for f in symbol_data.get("filters", []) if f.get("filterType") == "PRICE_FILTER"), None)
+        
+        step_size = lot_size_filter.get('stepSize', '1') if lot_size_filter else '1'
+        tick_size = price_filter.get('tickSize', '0.01') if price_filter else '0.01'
+        
         raw_qty = size_usd / price
-        quantity = round(raw_qty, qty_prec) if qty_prec > 0 else int(raw_qty)
-        price = round(price, price_prec) if price_prec > 0 else int(price)
-            
-        qty_str = f"{quantity:.{qty_prec}f}" if qty_prec > 0 else f"{int(quantity)}"
-        price_str = f"{price:.{price_prec}f}" if price_prec > 0 else f"{int(price)}"
+        qty_str = round_by_step(raw_qty, step_size)
+        price_str = round_by_step(price, tick_size)
 
         timestamp = int(time.time() * 1000)
         
@@ -333,18 +346,19 @@ class KucoinOrder:
         if not self.symbol_info:
             raise ValueError(f"[{symbol}] Exchange specs not loaded yet")
             
-        precisions = self.get_spec_precisions(self.symbol_info, symbol)
-        if not precisions:
+        symbol_data = next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
+        if not symbol_data:
             raise ValueError(f"[{symbol}] Precision rules not found in specs")
             
-        qty_prec, price_prec, multiplier = precisions
-        raw_lots = (size_usd / price) / multiplier
-        quantity = round(raw_lots, qty_prec) if qty_prec > 0 else int(raw_lots)
-        quantity = max(1, quantity)
-        price = round(price, price_prec) if price_prec > 0 else int(price)
+        lot_size = symbol_data.get('lotSize', 1)
+        tick_size = symbol_data.get('tickSize', 0.1)
+        multiplier = float(symbol_data.get('multiplier', 1.0))
         
-        qty_str = f"{quantity:.{qty_prec}f}" if qty_prec > 0 else f"{int(quantity)}"
-        price_str = f"{price:.{price_prec}f}" if price_prec > 0 else f"{int(price)}"
+        raw_lots = (size_usd / price) / multiplier
+        raw_lots = max(1.0, raw_lots)
+        
+        qty_str = round_by_step(raw_lots, lot_size)
+        price_str = round_by_step(price, tick_size)
         
         endpoint = "/api/v1/orders"
         now = str(int(time.time() * 1000))
