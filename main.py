@@ -306,13 +306,13 @@ class Main:
                 short_pos = await self.orders[short_ex].get_exact_position(native_short, "SHORT")
             
             if long_pos["size"] > 0:
-                exec_res["long_executed_volume_rate"] = long_pos["size"] / engine_res["long_qty"] if engine_res.get("long_qty", 0) > 0 else 1.0
+                exec_res["long_executed_volume_rate"] = min(1.0, long_pos["size"] / engine_res["long_qty"]) if engine_res.get("long_qty", 0) > 0 else 1.0
                 exec_res["actual_long_price"] = long_pos["price"]
             else:
                 exec_res["long_executed_volume_rate"] = 0.0
                 
             if short_pos["size"] > 0:
-                exec_res["short_executed_volume_rate"] = short_pos["size"] / engine_res["short_qty"] if engine_res.get("short_qty", 0) > 0 else 1.0
+                exec_res["short_executed_volume_rate"] = min(1.0, short_pos["size"] / engine_res["short_qty"]) if engine_res.get("short_qty", 0) > 0 else 1.0
                 exec_res["actual_short_price"] = short_pos["price"]
             else:
                 exec_res["short_executed_volume_rate"] = 0.0
