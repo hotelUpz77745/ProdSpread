@@ -263,10 +263,13 @@ class ExecutorProcess:
             return
             
         tasks = []
+        exit_res = data.get("exit_res", {})
         long_qty_to_close = long_pos.get("size", 0.0)
         if long_ex in self.orders and long_qty_to_close > 0:
             long_dist = float(self.cfg["trading_risks"][long_ex.lower()].get("limit_allow_distance", 1.1))
-            price_long = float(details.get("entry_long_price", 0.0)) or float(engine_res.get("long_avg_price", 0.0))
+            price_long = float(exit_res.get("long_close_price") or 0.0)
+            if price_long <= 0:
+                price_long = float(details.get("entry_long_price", 0.0)) or float(engine_res.get("long_avg_price", 0.0))
             price_long_limit = price_long / long_dist
             size_long_usd = long_qty_to_close * price_long_limit
             tasks.append(self.orders[long_ex].place_order(native_long, "SELL", size_long_usd, price_long_limit, position_side="LONG"))
@@ -274,7 +277,9 @@ class ExecutorProcess:
         short_qty_to_close = short_pos.get("size", 0.0)
         if short_ex in self.orders and short_qty_to_close > 0:
             short_dist = float(self.cfg["trading_risks"][short_ex.lower()].get("limit_allow_distance", 1.1))
-            price_short = float(details.get("entry_short_price", 0.0)) or float(engine_res.get("short_avg_price", 0.0))
+            price_short = float(exit_res.get("short_close_price") or 0.0)
+            if price_short <= 0:
+                price_short = float(details.get("entry_short_price", 0.0)) or float(engine_res.get("short_avg_price", 0.0))
             price_short_limit = price_short * short_dist
             size_short_usd = short_qty_to_close * price_short_limit
             tasks.append(self.orders[short_ex].place_order(native_short, "BUY", size_short_usd, price_short_limit, position_side="SHORT"))

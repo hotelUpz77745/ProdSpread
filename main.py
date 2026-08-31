@@ -93,7 +93,15 @@ class Main:
                     break
             
             if base_coin and getattr(d, 'bids', None) and getattr(d, 'asks', None):
-                self.books[exchange_name][base_coin] = {"bids": d.bids, "asks": d.asks}
+                bids = d.bids
+                asks = d.asks
+                if exchange_name == "KUCOIN" and hasattr(self.discovery.apis.get("KUCOIN"), "multipliers"):
+                    mult = self.discovery.apis["KUCOIN"].multipliers.get(base_coin, 1.0)
+                    if mult != 1.0:
+                        bids = [(p, q * mult) for p, q in bids]
+                        asks = [(p, q * mult) for p, q in asks]
+
+                self.books[exchange_name][base_coin] = {"bids": bids, "asks": asks}
                 self.ts[exchange_name][base_coin] = time.time()
                 self.event_ts[exchange_name][base_coin] = getattr(d, 'event_time_ms', time.time()*1000)
         return on_depth

@@ -90,6 +90,7 @@ class KucoinSymbols:
         suffix = q + "M"
         out: Dict[str, float] = {}
 
+        self.multipliers: Dict[str, float] = {}
         for it in items:
             if not isinstance(it, dict):
                 continue
@@ -105,6 +106,7 @@ class KucoinSymbols:
             coin_raw = sym[: -len(suffix)]
             coin = _normalize_base(coin_raw)
             out[coin] = float(it.get("turnoverOf24h", 0))
+            self.multipliers[coin] = float(it.get("multiplier", 1.0))
 
         return out
 
