@@ -375,22 +375,29 @@ class Main:
             long_pos = await self.orders[long_ex].get_exact_position(native_long, "LONG") if long_ex in self.orders else {"size": 0.0}
             short_pos = await self.orders[short_ex].get_exact_position(native_short, "SHORT") if short_ex in self.orders else {"size": 0.0}
             
+            # If BOTH positions are ALREADY 0 on exchange, confirm exit and finish!
+            if long_pos.get("size", 0.0) <= 0 and short_pos.get("size", 0.0) <= 0:
+                log(f"[{sym}] Обе ноги уже закрыты на биржах (0.0). Завершаем выход.", level="INFO")
+                self.pm.confirm_exit(route, sym)
+                return
+            
             long_qty = engine_res.get("long_qty", 0.0)
             short_qty = engine_res.get("short_qty", 0.0)
             
             tasks = []
-            if long_ex in self.orders and long_qty > 0:
+            long_qty_to_close = long_pos.get("size", 0.0)
+            if long_ex in self.orders and long_qty_to_close > 0:
                 long_dist = float(self.cfg["trading_risks"][long_ex.lower()].get("limit_allow_distance", 1.1))
-                long_qty_to_close = max(long_pos.get("size", 0.0), long_qty)
                 price_long = float(self.books[long_ex].get(sym, {}).get("bids", [[0]])[0][0])
                 if price_long <= 0:
                     price_long = float(state["details"].get("entry_long_price", 0.0)) or float(engine_res.get("long_avg_price", 0.0))
                 price_long_limit = price_long / long_dist
                 size_long_usd = long_qty_to_close * price_long_limit
                 tasks.append(self.orders[long_ex].place_order(native_long, "SELL", size_long_usd, price_long_limit, position_side="LONG"))
-            if short_ex in self.orders and short_qty > 0:
+                
+            short_qty_to_close = short_pos.get("size", 0.0)
+            if short_ex in self.orders and short_qty_to_close > 0:
                 short_dist = float(self.cfg["trading_risks"][short_ex.lower()].get("limit_allow_distance", 1.1))
-                short_qty_to_close = max(short_pos.get("size", 0.0), short_qty)
                 price_short = float(self.books[short_ex].get(sym, {}).get("asks", [[0]])[0][0])
                 if price_short <= 0:
                     price_short = float(state["details"].get("entry_short_price", 0.0)) or float(engine_res.get("short_avg_price", 0.0))
@@ -403,8 +410,8 @@ class Main:
                 for res in results:
                     if isinstance(res, Exception):
                         err_str = str(res).lower()
-                        if "position" in err_str or "reduce" in err_str or "margin" in err_str:
-                            log(f"[{sym}] ⚠️ Ордер на закрытие отклонен (возможно поза уже пуста): {res}", level="WARNING")
+                        if "position" in err_str or "reduce" in err_str or "margin" in err_str or "no open" in err_str:
+                            log(f"[{sym}] ⚠️ Ордер на закрытие отклонен (поза уже пуста): {res}", level="WARNING")
                             continue
                         log(f"[{sym}] 🚨 Ошибка закрытия: {res}", level="ERROR")
                         self.pm.rollback_exit(route, sym)

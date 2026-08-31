@@ -12,6 +12,7 @@ import hashlib
 import base64
 import uuid
 import json
+from decimal import Decimal
 
 class InsufficientMarginError(Exception):
     pass
@@ -46,7 +47,8 @@ class BinanceOrder:
             try:
                 async with self.session.get("https://fapi.binance.com/fapi/v1/exchangeInfo") as resp:
                     if resp.status == 200:
-                        self.symbol_info = await resp.json()
+                        data = await resp.json()
+                        self.symbol_info = data.get("symbols", [])
                         log("[BinanceOrder] Exchange specs updated.", level="INFO")
             except asyncio.CancelledError:
                 break
@@ -60,10 +62,9 @@ class BinanceOrder:
 
     @staticmethod
     def get_spec_precisions(symbol_info, symbol):
-        if not symbol_info or not isinstance(symbol_info, dict) or "symbols" not in symbol_info:
+        if not symbol_info:
             return None
-            
-        symbol_data = next((item for item in symbol_info.get("symbols", []) if item.get('symbol') == symbol), None)
+        symbol_data = next((item for item in symbol_info if item.get('symbol') == symbol), None)
         if not symbol_data:
             return None
 
@@ -74,10 +75,11 @@ class BinanceOrder:
             return None
 
         def count_decimal_places(number):
-            number_str = f"{float(number):.10f}".rstrip('0')
-            if '.' in number_str:
-                return len(number_str.split('.')[-1])
-            return 0
+            try:
+                d = Decimal(str(number))
+                return max(0, -d.as_tuple().exponent)
+            except Exception:
+                return 0
 
         qty_precission = count_decimal_places(lot_size_filter['stepSize'])
         price_precision = count_decimal_places(price_filter['tickSize'])
@@ -103,14 +105,17 @@ class BinanceOrder:
         quantity = round(raw_qty, qty_prec) if qty_prec > 0 else int(raw_qty)
         price = round(price, price_prec) if price_prec > 0 else int(price)
             
+        qty_str = f"{quantity:.{qty_prec}f}" if qty_prec > 0 else f"{int(quantity)}"
+        price_str = f"{price:.{price_prec}f}" if price_prec > 0 else f"{int(price)}"
+
         timestamp = int(time.time() * 1000)
         
         pos_side_str = f"&positionSide={position_side.upper()}" if position_side else ""
         
         if order_type.upper() == "LIMIT":
-            query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=LIMIT&timeInForce=IOC&quantity={quantity}&price={price}&timestamp={timestamp}"
+            query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=LIMIT&timeInForce=IOC&quantity={qty_str}&price={price_str}&timestamp={timestamp}"
         else:
-            query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=MARKET&quantity={quantity}&timestamp={timestamp}"
+            query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=MARKET&quantity={qty_str}&timestamp={timestamp}"
             
         signature = self._generate_signature(query_string)
         
@@ -305,10 +310,11 @@ class KucoinOrder:
             return None
             
         def count_decimal_places(number):
-            number_str = f"{float(number):.10f}".rstrip('0')
-            if '.' in number_str:
-                return len(number_str.split('.')[-1])
-            return 0
+            try:
+                d = Decimal(str(number))
+                return max(0, -d.as_tuple().exponent)
+            except Exception:
+                return 0
             
         qty_precision = count_decimal_places(symbol_data.get('lotSize', 1))
         price_precision = count_decimal_places(symbol_data.get('tickSize', 0.1))
@@ -337,6 +343,9 @@ class KucoinOrder:
         quantity = max(1, quantity)
         price = round(price, price_prec) if price_prec > 0 else int(price)
         
+        qty_str = f"{quantity:.{qty_prec}f}" if qty_prec > 0 else f"{int(quantity)}"
+        price_str = f"{price:.{price_prec}f}" if price_prec > 0 else f"{int(price)}"
+        
         endpoint = "/api/v1/orders"
         now = str(int(time.time() * 1000))
         
@@ -347,7 +356,7 @@ class KucoinOrder:
             "clientOid": str(uuid.uuid4()),
             "symbol": symbol,
             "side": side.lower(),
-            "size": str(quantity),
+            "size": qty_str,
             "leverage": leverage,
             "marginMode": marginMode
         }
@@ -355,7 +364,7 @@ class KucoinOrder:
         if order_type.upper() == "LIMIT":
             body["type"] = "limit"
             body["timeInForce"] = "IOC"
-            body["price"] = str(price)
+            body["price"] = price_str
         else:
             body["type"] = "market"
             
