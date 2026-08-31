@@ -173,7 +173,8 @@ class TradeAnalytics:
         except Exception as e:
             log(f"Error submitting IO tasks in analytics: {e}", level="ERROR")
             
-        self.active_trade = {} 
+        self.active_trade = {}
+        return trade_obj 
 
 
 def generate_global_report(log_dir: str = "logs/analytics"):

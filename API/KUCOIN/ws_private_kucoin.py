@@ -90,11 +90,11 @@ class KucoinPositionStream:
             self.is_connected = True
             log(f"[KUCOIN WS_PRIVATE] Connected successfully.", level="INFO")
             
-            # Subscribe to position topic
+            # Subscribe to position topic (Kucoin uses :all for all contracts)
             sub_msg = {
                 "id": int(time.time() * 1000),
                 "type": "subscribe",
-                "topic": "/contract/position:*",
+                "topic": "/contract/position:all",
                 "privateChannel": True,
                 "response": True
             }
@@ -152,6 +152,11 @@ class KucoinPositionStream:
             except Exception:
                 continue
 
+            msg_type = data.get("type")
+            if msg_type == "error":
+                log(f"[KUCOIN WS_PRIVATE] Error from server: {data.get('data')}", level="ERROR")
+                continue
+
             topic = data.get("topic", "")
             if topic.startswith("/contract/position:"):
                 subj = data.get("subject")
@@ -160,16 +165,26 @@ class KucoinPositionStream:
                     symbol = pdata.get("symbol")
                     pos_amt = float(pdata.get("currentQty", 0))
                     ep_raw = float(pdata.get("avgEntryPrice", 0))
+                    pos_side = (pdata.get("positionSide") or "").upper()
                     
                     if symbol:
                         if symbol not in self.positions:
                             self.positions[symbol] = {"LONG": {"size": 0.0, "price": 0.0}, "SHORT": {"size": 0.0, "price": 0.0}}
                         
-                        side = "LONG" if pos_amt > 0 else "SHORT"
-                        self.positions[symbol][side] = {
-                            "size": abs(pos_amt),
-                            "price": ep_raw
-                        }
+                        if pos_side == "LONG":
+                            self.positions[symbol]["LONG"] = {"size": abs(float(pos_amt)), "price": ep_raw if pos_amt != 0 else 0.0}
+                        elif pos_side == "SHORT":
+                            self.positions[symbol]["SHORT"] = {"size": abs(float(pos_amt)), "price": ep_raw if pos_amt != 0 else 0.0}
+                        else:
+                            if pos_amt > 0:
+                                self.positions[symbol]["LONG"] = {"size": float(pos_amt), "price": ep_raw}
+                                self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
+                            elif pos_amt < 0:
+                                self.positions[symbol]["SHORT"] = {"size": abs(float(pos_amt)), "price": ep_raw}
+                                self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
+                            else:
+                                self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
+                                self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
 
     async def start(self):
         self._external_stop = False

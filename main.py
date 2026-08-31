@@ -281,8 +281,22 @@ class Main:
                 long_ex, short_ex, engine_res
             )
             
-            long_pos = self.orders[long_ex].get_executed_position(native_long, "LONG") if long_ex in self.orders else {"size": 0.0, "price": 0.0}
-            short_pos = self.orders[short_ex].get_executed_position(native_short, "SHORT") if short_ex in self.orders else {"size": 0.0, "price": 0.0}
+            long_pos = {"size": 0.0, "price": 0.0}
+            short_pos = {"size": 0.0, "price": 0.0}
+            for _ in range(15):
+                if long_ex in self.orders:
+                    long_pos = self.orders[long_ex].get_executed_position(native_long, "LONG")
+                if short_ex in self.orders:
+                    short_pos = self.orders[short_ex].get_executed_position(native_short, "SHORT")
+                if (long_ex not in self.orders or long_pos["size"] > 0) and (short_ex not in self.orders or short_pos["size"] > 0):
+                    break
+                await asyncio.sleep(0.1)
+                
+            # If still 0, verify with exact REST endpoint (immune to WS packet drops)
+            if long_ex in self.orders and long_pos["size"] == 0:
+                long_pos = await self.orders[long_ex].get_exact_position(native_long, "LONG")
+            if short_ex in self.orders and short_pos["size"] == 0:
+                short_pos = await self.orders[short_ex].get_exact_position(native_short, "SHORT")
             
             if long_pos["size"] > 0:
                 exec_res["long_executed_volume_rate"] = long_pos["size"] / engine_res["long_qty"] if engine_res.get("long_qty", 0) > 0 else 1.0
@@ -349,23 +363,30 @@ class Main:
             native_long = self.discovery.coin_to_native.get(sym, {}).get(long_ex, sym)
             native_short = self.discovery.coin_to_native.get(sym, {}).get(short_ex, sym)
             
-            long_rate = state["details"].get("long_executed_volume_rate", 1.0)
-            short_rate = state["details"].get("short_executed_volume_rate", 1.0)
-            
             engine_res = state["details"].get("engine_res", {})
             
+            long_pos = await self.orders[long_ex].get_exact_position(native_long, "LONG") if long_ex in self.orders else {"size": 0.0}
+            short_pos = await self.orders[short_ex].get_exact_position(native_short, "SHORT") if short_ex in self.orders else {"size": 0.0}
+            
+            long_qty = engine_res.get("long_qty", 0.0)
+            short_qty = engine_res.get("short_qty", 0.0)
+            
             tasks = []
-            if long_ex in self.orders and long_rate > 0:
+            if long_ex in self.orders and long_qty > 0:
                 long_dist = float(self.cfg["trading_risks"][long_ex.lower()].get("limit_allow_distance", 1.1))
-                long_qty_to_close = engine_res.get("long_qty", 0.0) * long_rate
-                price_long = float(self.books[long_ex].get(sym, {}).get("bids", [[0]])[0][0]) 
+                long_qty_to_close = max(long_pos.get("size", 0.0), long_qty)
+                price_long = float(self.books[long_ex].get(sym, {}).get("bids", [[0]])[0][0])
+                if price_long <= 0:
+                    price_long = float(state["details"].get("entry_long_price", 0.0)) or float(engine_res.get("long_avg_price", 0.0))
                 price_long_limit = price_long / long_dist
                 size_long_usd = long_qty_to_close * price_long_limit
                 tasks.append(self.orders[long_ex].place_order(native_long, "SELL", size_long_usd, price_long_limit, position_side="LONG"))
-            if short_ex in self.orders and short_rate > 0:
+            if short_ex in self.orders and short_qty > 0:
                 short_dist = float(self.cfg["trading_risks"][short_ex.lower()].get("limit_allow_distance", 1.1))
-                short_qty_to_close = engine_res.get("short_qty", 0.0) * short_rate
+                short_qty_to_close = max(short_pos.get("size", 0.0), short_qty)
                 price_short = float(self.books[short_ex].get(sym, {}).get("asks", [[0]])[0][0])
+                if price_short <= 0:
+                    price_short = float(state["details"].get("entry_short_price", 0.0)) or float(engine_res.get("short_avg_price", 0.0))
                 price_short_limit = price_short * short_dist
                 size_short_usd = short_qty_to_close * price_short_limit
                 tasks.append(self.orders[short_ex].place_order(native_short, "BUY", size_short_usd, price_short_limit, position_side="SHORT"))
@@ -374,6 +395,10 @@ class Main:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for res in results:
                     if isinstance(res, Exception):
+                        err_str = str(res).lower()
+                        if "position" in err_str or "reduce" in err_str or "margin" in err_str:
+                            log(f"[{sym}] ⚠️ Ордер на закрытие отклонен (возможно поза уже пуста): {res}", level="WARNING")
+                            continue
                         log(f"[{sym}] 🚨 Ошибка закрытия: {res}", level="ERROR")
                         self.pm.rollback_exit(route, sym)
                         state["details"]["next_close_attempt"] = time.time() + 10.0  # Cooldown 10s
@@ -389,8 +414,14 @@ class Main:
             if cancel_tasks:
                 await asyncio.gather(*cancel_tasks, return_exceptions=True)
             
+            # Пересчитываем актуальные fill_rate из живых позиций
             long_rate = state["details"].get("long_executed_volume_rate", 1.0)
             short_rate = state["details"].get("short_executed_volume_rate", 1.0)
+            # Если ставки были 0 из-за лага WS, но ордер реально был выставлен — ставим 1.0
+            if long_rate <= 0.0 and long_qty > 0:
+                long_rate = 1.0
+            if short_rate <= 0.0 and short_qty > 0:
+                short_rate = 1.0
             
             _, exit_res = self.engine.evaluate_exit(
                 self.books[long_ex].get(sym, {}),
@@ -417,7 +448,7 @@ class Main:
             long_executed_usd = (engine_res.get("long_qty", 0.0) * long_rate) * long_close_price
             short_executed_usd = (engine_res.get("short_qty", 0.0) * short_rate) * short_close_price
                 
-            self.analytics_map[sym].record_close(
+            trade_record = self.analytics_map[sym].record_close(
                 long_price_close=long_close_price,
                 short_price_close=short_close_price,
                 spread_out=exit_res.get("vwap_spread_out") or 0.0, 
@@ -427,6 +458,9 @@ class Main:
             )
             
             net_yield = exit_res.get("net_yield")
+            if net_yield is None and trade_record:
+                net_yield = trade_record.get("Net_PnL")
+                
             exit_level_idx = exit_res.get("exit_level_index", 0)
             
             should_ban = False

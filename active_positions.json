@@ -1,111 +1,21 @@
 {
     "BINANCE_KUCOIN": {
-        "XAN": {
+        "ZORA": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "TAC": {
+        "EIGEN": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "HBAR": {
+        "PENGU": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "BLESS": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "WLD": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "LDO": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "MANTRA": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "USELESS": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "SUI": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "UB": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "ALLO": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "ASTER": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "CHIP": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "BCH": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "PAXG": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "TURBO": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "VELVET": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "ONDO": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "SPX": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "BANK": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "OPG": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "ADA": {
+        "ACE": {
             "current_position": false,
             "pending_action": null,
             "details": {}
@@ -115,47 +25,27 @@
             "pending_action": null,
             "details": {}
         },
-        "ZEN": {
+        "BEAT": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "ICP": {
+        "AVAX": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "TRX": {
+        "SUI": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "XLM": {
+        "ZKP": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "BNB": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "LINK": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "CAP": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "O": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "BTR": {
+        "POWER": {
             "current_position": false,
             "pending_action": null,
             "details": {}
@@ -165,7 +55,137 @@
             "pending_action": null,
             "details": {}
         },
-        "XMR": {
+        "APE": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "FET": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "STX": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "BTR": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "INJ": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "TIA": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "DOGS": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "PTB": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "LINK": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ARB": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "TNSR": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "LDO": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ZEN": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "WLD": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "CAP": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "CYS": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "CHIP": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ZKC": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "XAUT": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "VIRTUAL": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "OP": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "UNI": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "BNB": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "LIGHT": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "HBAR": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "DOT": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "FF": {
             "current_position": false,
             "pending_action": null,
             "details": {}
@@ -180,62 +200,7 @@
             "pending_action": null,
             "details": {}
         },
-        "FET": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "AVAX": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "LIGHT": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "RIVER": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "HYPE": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "INJ": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "CRV": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "NIL": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "ETH": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "WIF": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "PIEVERSE": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "UNI": {
+        "CLO": {
             "current_position": false,
             "pending_action": null,
             "details": {}
@@ -245,67 +210,7 @@
             "pending_action": null,
             "details": {}
         },
-        "SOL": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "JUP": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "MAGMA": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "COTI": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "BEAT": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "XRP": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "ZKP": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "APT": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "VIRTUAL": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "HEMI": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "BTC": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "EDEN": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "TWT": {
+        "GRAM": {
             "current_position": false,
             "pending_action": null,
             "details": {}
@@ -315,32 +220,37 @@
             "pending_action": null,
             "details": {}
         },
-        "CLO": {
+        "CAKE": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "LTC": {
+        "ASTER": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "DOS": {
+        "XLM": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "PENGU": {
+        "JUP": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "1000BONK": {
+        "AUCTION": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "BICO": {
+        "NOT": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "UAI": {
             "current_position": false,
             "pending_action": null,
             "details": {}
@@ -350,27 +260,22 @@
             "pending_action": null,
             "details": {}
         },
-        "TIA": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "DASH": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
-        "ARB": {
-            "current_position": false,
-            "pending_action": null,
-            "details": {}
-        },
         "ZEC": {
             "current_position": false,
             "pending_action": null,
             "details": {}
         },
-        "NEAR": {
+        "ICP": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "USELESS": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "LTC": {
             "current_position": false,
             "pending_action": null,
             "details": {}
@@ -380,7 +285,202 @@
             "pending_action": null,
             "details": {}
         },
+        "BCH": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ONDO": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "POL": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "XMR": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "BTC": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "GALA": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ADA": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "WIF": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "JASMY": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "SEI": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "BLESS": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "DASH": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "O": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "RIVER": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "TWT": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ZK": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "CRV": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "APT": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "0G": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ALLO": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "TRX": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "AEVO": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "DOS": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
         "DOGE": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "PAXG": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "FLOCK": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "HYPE": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "BICO": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "XRP": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ETH": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "HEMI": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "SPX": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "SKR": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "SOL": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "1000BONK": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "4": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "LIT": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ZBT": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "NEAR": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "EDEN": {
             "current_position": false,
             "pending_action": null,
             "details": {}

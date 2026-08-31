@@ -168,7 +168,7 @@ class BinancePositionStream:
                 self.positions[symbol] = {"LONG": {"size": 0.0, "price": 0.0}, "SHORT": {"size": 0.0, "price": 0.0}}
                 
             self.positions[symbol][pos_side_raw] = {
-                "size": float(pos_amt),
+                "size": abs(float(pos_amt)),
                 "price": float(ep_raw)
             }
 
