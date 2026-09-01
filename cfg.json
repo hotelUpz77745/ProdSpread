@@ -25,18 +25,18 @@
             "paper_start_balance": 13.89,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0005,
-            "volatility_discount_entry": 0.5,
+            "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.9,
-            "limit_allow_distance": 1.0015,
+            "limit_allow_distance": 1.0020,
             "max_positions": 1
         },
         "kucoin": {
             "paper_start_balance": 11.92,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0006,
-            "volatility_discount_entry": 0.5,
+            "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.9,
-            "limit_allow_distance": 1.0015,
+            "limit_allow_distance": 1.0020,
             "max_positions": 1
         },
         "okx": {
