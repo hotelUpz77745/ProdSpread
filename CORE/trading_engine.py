@@ -18,6 +18,7 @@ class TradingEngine:
         # Строго читаем через [''] без get(..., default)
         self.spread_entry = float(self.cfg["trading_rules"]["entry"]["spread_entry"])
         self.check_synthetic_exit = bool(self.cfg["trading_rules"]["entry"]["check_synthetic_exit"])
+        self.check_worst_case_spread = bool(self.cfg["trading_rules"]["entry"].get("check_worst_case_spread", False))
         self.check_synthetic_slippage = bool(self.cfg["trading_rules"]["entry"].get("check_synthetic_slippage", False))
         self.max_slippage_ratio = float(self.cfg["trading_rules"]["entry"].get("max_slippage_ratio", 0.5))
         self.hard_max_slippage = float(self.cfg["trading_rules"]["entry"].get("hard_max_slippage", 0.015))
@@ -62,6 +63,17 @@ class TradingEngine:
         if vwap_spread < self.spread_entry:
             return False, {"reason": f"LOW_SPREAD ({vwap_spread * 100:.3f}% < {self.spread_entry * 100:.3f}%)"}
             
+        if self.check_worst_case_spread:
+            long_dist = float(self.trading_risks[long_ex.lower()].get("limit_allow_distance", 1.0))
+            short_dist = float(self.trading_risks[short_ex.lower()].get("limit_allow_distance", 1.0))
+            
+            worst_long_price = long_vwap_ask * long_dist
+            worst_short_price = short_vwap_bid / short_dist
+            worst_spread = (worst_short_price - worst_long_price) / worst_long_price
+            
+            if worst_spread < self.spread_entry:
+                return False, {"reason": f"WORST_CASE_SPREAD_TOO_LOW (Worst: {worst_spread*100:.3f}% < Target: {self.spread_entry*100:.3f}%)"}
+                
         # СИНТЕТИЧЕСКАЯ ПРОВЕРКА ВЫХОДА (Round-Trip Liquidity Check)
         # Опциональный рубильник в конфиге. Симулирует немедленный выход из позиции.
         if self.check_synthetic_exit:
