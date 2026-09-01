@@ -96,7 +96,7 @@
     "trading_rules": {
         "entry": {
             "max_desync_ms": null,
-            "spread_entry": 0.007,
+            "spread_entry": 0.008,
             "min_fill_rate": 0.4,
             "top_n_candidates": 6,
             "check_synthetic_exit": true,
