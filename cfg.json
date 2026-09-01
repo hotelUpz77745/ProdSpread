@@ -99,7 +99,6 @@
             "spread_entry": 0.008,
             "min_fill_rate": 0.5,
             "top_n_candidates": 6,
-            "check_worst_case_spread": true,
             "check_synthetic_exit": true,
             "check_synthetic_slippage": true,
             "max_slippage_ratio": 0.5,
