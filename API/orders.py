@@ -151,7 +151,7 @@ class BinanceOrder:
         pos_side_str = f"&positionSide={position_side.upper()}" if position_side else ""
         
         if order_type.upper() == "LIMIT":
-            query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=LIMIT&timeInForce=GTC&quantity={qty_str}&price={price_str}&timestamp={timestamp}"
+            query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=LIMIT&timeInForce=IOC&quantity={qty_str}&price={price_str}&timestamp={timestamp}"
         else:
             query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=MARKET&quantity={qty_str}&timestamp={timestamp}"
             
@@ -425,7 +425,7 @@ class KucoinOrder:
         
         if order_type.upper() == "LIMIT":
             body["type"] = "limit"
-            body["timeInForce"] = "GTC"
+            body["timeInForce"] = "IOC"
             body["price"] = price_str
         else:
             body["type"] = "market"

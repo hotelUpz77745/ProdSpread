@@ -95,14 +95,7 @@ async def run_test(test_coin: str = "DOGE", test_size_usd: float = 6.0, executio
     print(f"⏳ Выдержка паузы {execution_pause}с в стакане...")
     await asyncio.sleep(execution_pause)
     
-    # 7. Отмена всех ордеров
-    t_cancel_0 = time.time()
-    await asyncio.gather(
-        b_order.cancel_all_orders(native_binance),
-        k_order.cancel_all_orders(native_kucoin),
-        return_exceptions=True
-    )
-    print(f"🚫 Отмена ордеров выполнена за {(time.time()-t_cancel_0)*1000:.1f} мс")
+    # 7. (Отмена удалена, так как используется IOC)
     
     # 8. Проверка налитого объема через 1 сек
     await asyncio.sleep(1.0)
@@ -127,11 +120,6 @@ async def run_test(test_coin: str = "DOGE", test_size_usd: float = 6.0, executio
         close_res = await asyncio.gather(*close_tasks, return_exceptions=True)
         print(f"🏁 Закрывающие ордера отправлены: {close_res}")
         await asyncio.sleep(1.0)
-        await asyncio.gather(
-            b_order.cancel_all_orders(native_binance),
-            k_order.cancel_all_orders(native_kucoin),
-            return_exceptions=True
-        )
         
     b_pos_final = await b_order.get_exact_position(native_binance, "LONG")
     k_pos_final = await k_order.get_exact_position(native_kucoin, "SHORT")

@@ -182,16 +182,9 @@ class ExecutorProcess:
                         self.ban_coin(sym, reason=str(res), duration_sec=3600)
                     break
                     
+        # Ждем только для того, чтобы WebSocket успел обновить локальный стейт позиций
         await asyncio.sleep(self.cfg["EXECUTION_PAUSE"])
-        
-        cancel_tasks = []
-        if long_ex in self.orders:
-            cancel_tasks.append(self.orders[long_ex].cancel_all_orders(native_long))
-        if short_ex in self.orders:
-            cancel_tasks.append(self.orders[short_ex].cancel_all_orders(native_short))
-        if cancel_tasks:
-            await asyncio.gather(*cancel_tasks, return_exceptions=True)
-            
+
         long_pos = {"size": 0.0, "price": 0.0}
         short_pos = {"size": 0.0, "price": 0.0}
         for _ in range(15):
@@ -342,16 +335,9 @@ class ExecutorProcess:
                     self.pm.rollback_exit(route, sym)
                     return
                     
+        # Ждем только для того, чтобы WebSocket успел обновить локальный стейт позиций
         await asyncio.sleep(self.cfg["EXECUTION_PAUSE"])
         
-        cancel_tasks = []
-        if long_ex in self.orders:
-            cancel_tasks.append(self.orders[long_ex].cancel_all_orders(native_long))
-        if short_ex in self.orders:
-            cancel_tasks.append(self.orders[short_ex].cancel_all_orders(native_short))
-        if cancel_tasks:
-            await asyncio.gather(*cancel_tasks, return_exceptions=True)
-            
         self.pm.confirm_exit(route, sym)
         if self.writer:
             asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {"route": route, "sym": sym}))

@@ -249,11 +249,9 @@ async def test_emergency_execute_close_price_fallback():
     mock_b_order = AsyncMock()
     mock_b_order.get_exact_position = AsyncMock(return_value={"size": 250.0, "price": 0.20})
     mock_b_order.place_order = AsyncMock(return_value={"orderId": 999})
-    mock_b_order.cancel_all_orders = AsyncMock()
     
     mock_k_order = AsyncMock()
     mock_k_order.get_exact_position = AsyncMock(return_value={"size": 0.0, "price": 0.0})
-    mock_k_order.cancel_all_orders = AsyncMock()
     
     executor.orders = {
         "BINANCE": mock_b_order,
@@ -344,14 +342,12 @@ async def test_execute_open_low_fill_rate_recovery():
     mock_b = AsyncMock()
     mock_b.check_order_size = MagicMock()
     mock_b.place_order = AsyncMock(return_value={"orderId": 111})
-    mock_b.cancel_all_orders = AsyncMock()
     mock_b.get_executed_position = MagicMock(return_value={"size": 250.0, "price": 0.20})
     mock_b.get_exact_position = AsyncMock(return_value={"size": 250.0, "price": 0.20})
     
     mock_k = AsyncMock()
     mock_k.check_order_size = MagicMock()
     mock_k.place_order = AsyncMock(return_value={"orderId": 222})
-    mock_k.cancel_all_orders = AsyncMock()
     mock_k.get_executed_position = MagicMock(return_value={"size": 0.0, "price": 0.0})
     mock_k.get_exact_position = AsyncMock(return_value={"size": 0.0, "price": 0.0})
     
