@@ -23,7 +23,7 @@
     "trading_risks": {
         "binance": {
             "paper_start_balance": 11.86,
-            "trade_size_usd": 25.0,
+            "trade_size_usd": 50.0,
             "taker_fee": 0.0005,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 1.0,
@@ -32,7 +32,7 @@
         },
         "kucoin": {
             "paper_start_balance": 13.99,
-            "trade_size_usd": 25.0,
+            "trade_size_usd": 50.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.5,
             "volatility_discount_exit": 1.0,
