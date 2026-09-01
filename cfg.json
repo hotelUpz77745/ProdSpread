@@ -25,7 +25,8 @@
             "paper_start_balance": 11.86,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0005,
-            "volatility_discount": 0.6,
+            "volatility_discount_entry": 0.6,
+            "volatility_discount_exit": 1.0,
             "limit_allow_distance": 1.1,
             "max_positions": 1
         },
@@ -33,7 +34,8 @@
             "paper_start_balance": 13.99,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0006,
-            "volatility_discount": 0.7,
+            "volatility_discount_entry": 0.7,
+            "volatility_discount_exit": 1.0,
             "limit_allow_distance": 1.1,
             "max_positions": 1
         },
@@ -41,7 +43,8 @@
             "paper_start_balance": 30.0,
             "trade_size_usd": 100.0,
             "taker_fee": 0.0006,
-            "volatility_discount": 0.7,
+            "volatility_discount_entry": 0.7,
+            "volatility_discount_exit": 1.0,
             "limit_allow_distance": 1.1,
             "max_positions": 1
         },
@@ -49,7 +52,8 @@
             "paper_start_balance": 30.0,
             "trade_size_usd": 100.0,
             "taker_fee": 0.0006,
-            "volatility_discount": 0.7,
+            "volatility_discount_entry": 0.7,
+            "volatility_discount_exit": 1.0,
             "limit_allow_distance": 1.1,
             "max_positions": 1
         }

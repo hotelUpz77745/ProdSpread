@@ -10,10 +10,11 @@ class LeverageSetter:
     Кеширует успешные результаты в CACHE/leverage_cache.json для избежания
     лимитов API бирж при перезапусках.
     """
-    def __init__(self, main_bot):
-        self.bot = main_bot
+    def __init__(self, cfg, orders, coin_to_native):
+        self.cfg = cfg
+        self.orders = orders
+        self.coin_to_native = coin_to_native
         self.cache_path = os.path.join("CACHE", "leverage_cache.json")
-        self.cfg = self.bot.cfg
         self._cache = self._load_cache()
         
     def _load_cache(self) -> Dict:
@@ -49,9 +50,9 @@ class LeverageSetter:
             "BITGET": set()
         }
         
-        for generic_sym, ex_map in self.bot.discovery.coin_to_native.items():
+        for generic_sym, ex_map in self.coin_to_native.items():
             for ex, native_sym in ex_map.items():
-                if self.bot.orders.get(ex) and self.bot.orders[ex].api_key:
+                if self.orders.get(ex) and self.orders[ex].api_key:
                     symbols_per_exchange[ex].add(native_sym)
                     
         new_settings_applied = False
@@ -64,7 +65,7 @@ class LeverageSetter:
             ex_settings = self.cfg["margin_settings"][ex_name]
             target_leverage = ex_settings["leverage"]
             target_margin = ex_settings["margin_type"]
-            order_adapter = self.bot.orders[ex_name]
+            order_adapter = self.orders[ex_name]
                 
             # Инициализируем кэш для биржи если нет
             if ex_name not in self._cache:

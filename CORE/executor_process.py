@@ -137,17 +137,31 @@ class ExecutorProcess:
         native_long = self.coin_to_native.get(sym, {}).get(long_ex, sym)
         native_short = self.coin_to_native.get(sym, {}).get(short_ex, sym)
         
+        long_dist = float(self.cfg["trading_risks"][long_ex.lower()].get("limit_allow_distance", 1.1)) if long_ex in self.orders else 1.1
+        short_dist = float(self.cfg["trading_risks"][short_ex.lower()].get("limit_allow_distance", 1.1)) if short_ex in self.orders else 1.1
+        
+        price_long_limit = engine_res.get("long_avg_price") * long_dist
+        size_long_usd = engine_res.get("long_qty") * price_long_limit
+        
+        price_short_limit = engine_res.get("short_avg_price") / short_dist
+        size_short_usd = engine_res.get("short_qty") * price_short_limit
+        
+        # Pre-flight validation
+        try:
+            if long_ex in self.orders:
+                self.orders[long_ex].check_order_size(native_long, size_long_usd, price_long_limit)
+            if short_ex in self.orders:
+                self.orders[short_ex].check_order_size(native_short, size_short_usd, price_short_limit)
+        except Exception as e:
+            log(f"[{sym}] 🚨 Ошибка валидации размера ордеров до входа: {e}", level="ERROR")
+            self.ban_coin(sym, reason=f"Order Size Validation Error: {e}", duration_sec=3600)
+            return
+
         tasks = []
         if long_ex in self.orders:
-            long_dist = float(self.cfg["trading_risks"][long_ex.lower()].get("limit_allow_distance", 1.1))
-            price_long_limit = engine_res.get("long_avg_price") * long_dist
-            size_long_usd = engine_res.get("long_qty") * price_long_limit
             tasks.append(self.orders[long_ex].place_order(native_long, "BUY", size_long_usd, price_long_limit, position_side="LONG"))
             
         if short_ex in self.orders:
-            short_dist = float(self.cfg["trading_risks"][short_ex.lower()].get("limit_allow_distance", 1.1))
-            price_short_limit = engine_res.get("short_avg_price") / short_dist
-            size_short_usd = engine_res.get("short_qty") * price_short_limit
             tasks.append(self.orders[short_ex].place_order(native_short, "SELL", size_short_usd, price_short_limit, position_side="SHORT"))
             
         has_error = False
@@ -355,6 +369,7 @@ class ExecutorProcess:
                             routes = payload.get("routes", [])
                             active_symbols = payload.get("active_symbols", [])
                             self.pm = PositionManager(self.cfg, EXCHANGES, routes, active_symbols)
+                            asyncio.create_task(LeverageSetter(self.cfg, self.orders, self.coin_to_native).setup())
                         elif msg_type == "CMD_OPEN":
                             asyncio.create_task(self.execute_open(payload))
                         elif msg_type == "CMD_CLOSE":

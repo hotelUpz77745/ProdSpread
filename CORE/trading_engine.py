@@ -24,9 +24,11 @@ class TradingEngine:
         self.decay_map = self.cfg["trading_rules"]["exit"]["profit_decay_map"]
         self.trading_risks = self.cfg["trading_risks"]
 
-    def _get_vol_discount(self, exchange_name: str) -> float:
-        # exchange_name is lowercased for config match
-        return float(self.trading_risks[exchange_name.lower()]["volatility_discount"])
+    def _get_vol_discount_entry(self, exchange_name: str) -> float:
+        return float(self.trading_risks[exchange_name.lower()].get("volatility_discount_entry", 0.6))
+
+    def _get_vol_discount_exit(self, exchange_name: str) -> float:
+        return float(self.trading_risks[exchange_name.lower()].get("volatility_discount_exit", 1.0))
 
     def _get_fee(self, exchange_name: str) -> float:
         return float(self.trading_risks[exchange_name.lower()]["taker_fee"])
@@ -42,8 +44,8 @@ class TradingEngine:
         long_ex = self.exchanges[long_idx]
         short_ex = self.exchanges[short_idx]
         
-        long_vol = self._get_vol_discount(long_ex)
-        short_vol = self._get_vol_discount(short_ex)
+        long_vol = self._get_vol_discount_entry(long_ex)
+        short_vol = self._get_vol_discount_entry(short_ex)
         
         # Для лонга - покупаем из асков. Для шорта - продаем в биды.
         long_vwap_ask = OrderbookUtils.calculate_vwap_by_usd(long_book["asks"], size_usd, long_vol)
@@ -64,8 +66,10 @@ class TradingEngine:
         # Опциональный рубильник в конфиге. Симулирует немедленный выход из позиции.
         if self.check_synthetic_exit:
             # Продаем купленный лонг (в BIDS) и откупаем проданный шорт (из ASKS)
-            long_exit_vwap_bid = OrderbookUtils.calculate_vwap_by_qty(long_book.get("bids", []), long_qty, long_vol)
-            short_exit_vwap_ask = OrderbookUtils.calculate_vwap_by_qty(short_book.get("asks", []), short_qty, short_vol)
+            long_vol_exit = self._get_vol_discount_exit(long_ex)
+            short_vol_exit = self._get_vol_discount_exit(short_ex)
+            long_exit_vwap_bid = OrderbookUtils.calculate_vwap_by_qty(long_book.get("bids", []), long_qty, long_vol_exit)
+            short_exit_vwap_ask = OrderbookUtils.calculate_vwap_by_qty(short_book.get("asks", []), short_qty, short_vol_exit)
             
             # Если обратный стакан пуст или не может поглотить наш сайз - отбой
             if long_exit_vwap_bid <= 0 or short_exit_vwap_ask <= 0:
@@ -119,12 +123,12 @@ class TradingEngine:
                 return True, {"net_yield": None, "target_val": reported_target, "vwap_spread_out": None, "long_close_price": None, "short_close_price": None, "reason": "TTL_EXPIRED_STALE_DATA", "exit_level_index": exit_level_index}
             return False, {"net_yield": None, "target_val": reported_target, "reason": "STALE_DATA", "exit_level_index": exit_level_index}
             
-        long_vol = self._get_vol_discount(long_ex)
-        short_vol = self._get_vol_discount(short_ex)
+        long_vol_exit = self._get_vol_discount_exit(long_ex)
+        short_vol_exit = self._get_vol_discount_exit(short_ex)
         
         # Для закрытия лонга - продаем в биды. Для закрытия шорта - покупаем из асков.
-        long_vwap_bid = OrderbookUtils.calculate_vwap_by_qty(long_book.get("bids", []), long_qty, long_vol)
-        short_vwap_ask = OrderbookUtils.calculate_vwap_by_qty(short_book.get("asks", []), short_qty, short_vol)
+        long_vwap_bid = OrderbookUtils.calculate_vwap_by_qty(long_book.get("bids", []), long_qty, long_vol_exit)
+        short_vwap_ask = OrderbookUtils.calculate_vwap_by_qty(short_book.get("asks", []), short_qty, short_vol_exit)
         
         if long_vwap_bid <= 0 or short_vwap_ask <= 0:
             if is_ttl:
@@ -161,8 +165,8 @@ class TradingEngine:
                            short_ex: str,
                            expected_res: Dict[str, Any]) -> Dict[str, Any]:
                            
-        long_vol = self._get_vol_discount(long_ex)
-        short_vol = self._get_vol_discount(short_ex)
+        long_vol = self._get_vol_discount_entry(long_ex)
+        short_vol = self._get_vol_discount_entry(short_ex)
         
         long_qty = expected_res["long_qty"]
         short_qty = expected_res["short_qty"]

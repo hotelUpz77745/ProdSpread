@@ -100,6 +100,27 @@ class BinanceOrder:
     def _generate_signature(self, query_string: str) -> str:
         return hmac.new(self.api_secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
 
+    def check_order_size(self, symbol: str, size_usd: float, price: float):
+        if not price or price <= 0:
+            raise ValueError(f"[{symbol}] Reference price is required to calculate quantity")
+            
+        if not self.symbol_info:
+            raise ValueError(f"[{symbol}] Exchange specs not loaded yet")
+            
+        symbol_data = next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
+        if not symbol_data:
+            raise ValueError(f"[{symbol}] Precision rules not found in specs")
+            
+        lot_size_filter = next((f for f in symbol_data.get("filters", []) if f.get("filterType") == "LOT_SIZE"), None)
+        step_size = lot_size_filter.get('stepSize', '1') if lot_size_filter else '1'
+        
+        raw_qty = size_usd / price
+        qty_str = round_by_step(raw_qty, step_size)
+        
+        if float(qty_str) <= 0:
+            raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_qty={raw_qty}, step_size={step_size}).")
+
+
     async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None):
         if not price or price <= 0:
             raise ValueError(f"[{symbol}] Reference price is required to calculate quantity")
@@ -120,6 +141,10 @@ class BinanceOrder:
         raw_qty = size_usd / price
         qty_str = round_by_step(raw_qty, step_size)
         price_str = round_by_step(price, tick_size)
+        
+        if float(qty_str) <= 0:
+            raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_qty={raw_qty}, step_size={step_size}).")
+
 
         timestamp = int(time.time() * 1000)
         
@@ -339,6 +364,27 @@ class KucoinOrder:
         h = hmac.new(self.api_secret.encode('utf-8'), str_to_sign.encode('utf-8'), hashlib.sha256)
         return base64.b64encode(h.digest()).decode('utf-8')
 
+    def check_order_size(self, symbol: str, size_usd: float, price: float):
+        if not price or price <= 0:
+            raise ValueError(f"[{symbol}] Reference price is required to calculate quantity")
+            
+        if not self.symbol_info:
+            raise ValueError(f"[{symbol}] Exchange specs not loaded yet")
+            
+        symbol_data = next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
+        if not symbol_data:
+            raise ValueError(f"[{symbol}] Precision rules not found in specs")
+            
+        lot_size = symbol_data.get('lotSize', 1)
+        multiplier = float(symbol_data.get('multiplier', 1.0))
+        
+        raw_lots = (size_usd / price) / multiplier
+        qty_str = round_by_step(raw_lots, lot_size)
+        
+        if float(qty_str) <= 0:
+            raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_lots={raw_lots}, lot_size={lot_size}, multiplier={multiplier}).")
+
+
     async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None):
         if not price or price <= 0:
             raise ValueError(f"[{symbol}] Reference price is required to calculate quantity")
@@ -355,10 +401,12 @@ class KucoinOrder:
         multiplier = float(symbol_data.get('multiplier', 1.0))
         
         raw_lots = (size_usd / price) / multiplier
-        raw_lots = max(1.0, raw_lots)
         
         qty_str = round_by_step(raw_lots, lot_size)
         price_str = round_by_step(price, tick_size)
+        
+        if float(qty_str) <= 0:
+            raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_lots={raw_lots}, lot_size={lot_size}, multiplier={multiplier}).")
         
         endpoint = "/api/v1/orders"
         now = str(int(time.time() * 1000))
@@ -654,6 +702,9 @@ class KucoinOrder:
         return {"size": 0.0, "price": 0.0}
 
 class OkxOrder:
+    def check_order_size(self, symbol: str, size_usd: float, price: float):
+        pass
+
     async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None):
         log(f"[OkxOrder] Виртуальный ордер {side} создан для {symbol}, объем {size_usd} USD", level="DEBUG")
         await asyncio.sleep(0.005)
@@ -674,6 +725,9 @@ class OkxOrder:
         return {"size": 0.0, "price": 0.0}
 
 class BitgetOrder:
+    def check_order_size(self, symbol: str, size_usd: float, price: float):
+        pass
+
     async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None):
         log(f"[BitgetOrder] Виртуальный ордер {side} создан для {symbol}, объем {size_usd} USD", level="DEBUG")
         await asyncio.sleep(0.005)

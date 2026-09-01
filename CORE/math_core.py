@@ -150,12 +150,11 @@ def pre_calculate_orderbook(prices: np.ndarray, active_routes: np.ndarray, top_n
             continue
             
         # [ИСТОРИЧЕСКАЯ СПРАВКА]
-        # В бумажном боте (PapperSpread) использовалась формула деления на верхнюю точку (Шорт):
+        # Возвращена формула деления на верхнюю точку (Шорт):
         # spread_1 = (bid2 - ask1) / bid2 * 100.0
-        # Это давало более жесткий фильтр. Сейчас мы перешли на классический ROI (деление на нижнюю точку - Лонг),
-        # что синхронизирует математику с trading_engine.py (evaluate_entry).
-        spread_1 = (bid2 - ask1) / ask1 * 100.0
-        spread_2 = (bid1 - ask2) / ask2 * 100.0
+        # Это дает более жесткий фильтр от шума, синхронизировано с PapperSpread.
+        spread_1 = (bid2 - ask1) / bid2 * 100.0
+        spread_2 = (bid1 - ask2) / bid1 * 100.0
         
         if spread_1 >= spread_2:
             out[i, 0] = ex1       
