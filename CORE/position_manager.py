@@ -124,8 +124,8 @@ class PositionManager:
         state["details"].update({
             "long_ex": long_ex,
             "short_ex": short_ex,
-            "entry_long_price": exec_res["actual_long_price"],
-            "entry_short_price": exec_res["actual_short_price"],
+            "entry_long_price": exec_res.get("actual_long_price", 0.0),
+            "entry_short_price": exec_res.get("actual_short_price", 0.0),
             "long_executed_volume_rate": exec_res.get("long_executed_volume_rate", 1.0),
             "short_executed_volume_rate": exec_res.get("short_executed_volume_rate", 1.0),
             "open_time": open_time
