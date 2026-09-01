@@ -43,18 +43,18 @@
             "paper_start_balance": 30.0,
             "trade_size_usd": 100.0,
             "taker_fee": 0.0006,
-            "volatility_discount_entry": 0.5,
+            "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.9,
-            "limit_allow_distance": 1.0015,
+            "limit_allow_distance": 1.0020,
             "max_positions": 1
         },
         "bitget": {
-            "paper_start_balance": 30.0,
-            "trade_size_usd": 100.0,
+            "paper_start_balance": 15.0,
+            "trade_size_usd": 50.0,
             "taker_fee": 0.0006,
-            "volatility_discount_entry": 0.5,
+            "volatility_discount_entry": 0.35,
             "volatility_discount_exit": 0.9,
-            "limit_allow_distance": 1.0015,
+            "limit_allow_distance": 1.0020,
             "max_positions": 1
         }
     },
@@ -67,9 +67,9 @@
     "active_routes": {
         "BINANCE_KUCOIN": true,
         "BINANCE_OKX": false,
-        "BINANCE_BITGET": false,
+        "BINANCE_BITGET": true,
         "KUCOIN_OKX": false,
-        "KUCOIN_BITGET": false,
+        "KUCOIN_BITGET": true,
         "OKX_BITGET": false
     },
     "setup_margin_leverage": true,

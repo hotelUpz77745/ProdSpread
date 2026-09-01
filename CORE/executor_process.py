@@ -19,6 +19,7 @@ from utils import SessionManager
 from API.orders import BinanceOrder, KucoinOrder, OkxOrder, BitgetOrder, InsufficientMarginError
 from API.BINANCE.ws_private_binance import BinancePositionStream
 from API.KUCOIN.ws_private_kucoin import KucoinPositionStream
+from API.BITGET.ws_private_bitget import BitgetPositionStream
 from API.settlement import ExchangeSettlement
 from CORE.position_manager import PositionManager
 from CORE.leverage_setter import LeverageSetter
@@ -46,6 +47,11 @@ class ExecutorProcess:
             api_secret=os.environ.get("KUCOIN_API_SECRET", ""),
             api_passphrase=os.environ.get("KUCOIN_API_PASSPHRASE", "")
         )
+        self.bitget_pos_stream = BitgetPositionStream(
+            api_key=os.environ.get("BITGET_API_KEY", ""),
+            api_secret=os.environ.get("BITGET_API_SECRET", ""),
+            api_passphrase=os.environ.get("BITGET_API_PASSPHRASE", "")
+        )
         
         # Orders
         self.orders = {
@@ -64,7 +70,13 @@ class ExecutorProcess:
                 margin_settings=self.cfg["margin_settings"]["KUCOIN"]
             ),
             "OKX": OkxOrder(),
-            "BITGET": BitgetOrder()
+            "BITGET": BitgetOrder(
+                api_key=os.environ.get("BITGET_API_KEY", ""),
+                api_secret=os.environ.get("BITGET_API_SECRET", ""),
+                api_passphrase=os.environ.get("BITGET_API_PASSPHRASE", ""),
+                margin_settings=self.cfg.get("margin_settings", {}).get("BITGET", {"margin_type": "crossed", "leverage": 10}),
+                session=None
+            )
         }
         
         # Settlement
@@ -119,6 +131,7 @@ class ExecutorProcess:
         self.session = await SessionManager().get_session()
         self.orders["BINANCE"].session = self.session
         self.orders["KUCOIN"].session = self.session
+        self.orders["BITGET"].session = self.session
         self.settlement._session = self.session
         
         self.orders["BINANCE"].start()
@@ -128,6 +141,8 @@ class ExecutorProcess:
             asyncio.create_task(self.binance_pos_stream.start())
         if os.environ.get("KUCOIN_API_KEY"):
             asyncio.create_task(self.kucoin_pos_stream.start())
+        if os.environ.get("BITGET_API_KEY"):
+            asyncio.create_task(self.bitget_pos_stream.run())
 
     async def execute_open(self, data: dict):
         sym = data["sym"]

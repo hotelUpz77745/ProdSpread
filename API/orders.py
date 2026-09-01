@@ -725,22 +725,112 @@ class OkxOrder:
         return {"size": 0.0, "price": 0.0}
 
 class BitgetOrder:
+    def __init__(self, api_key: str, api_secret: str, api_passphrase: str, margin_settings: dict, session):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.api_passphrase = api_passphrase
+        self.margin_settings = margin_settings
+        self.session = session
+        self.symbol_info = []
+
+    def _generate_signature(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
+        message = timestamp + method.upper() + request_path + body
+        mac = hmac.new(bytes(self.api_secret, encoding='utf8'), bytes(message, encoding='utf-8'), digestmod='sha256')
+        return base64.b64encode(mac.digest()).decode('utf-8')
+
+    async def update_symbol_info(self):
+        url = "https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES"
+        async with self.session.get(url) as resp:
+            data = await resp.json()
+            if data.get("code") == "00000":
+                self.symbol_info = data.get("data", [])
+
     def check_order_size(self, symbol: str, size_usd: float, price: float):
-        pass
+        if not price or price <= 0:
+            raise ValueError(f"[{symbol}] Reference price is required to calculate quantity")
+            
+        if not self.symbol_info:
+            raise ValueError(f"[{symbol}] Exchange specs not loaded yet")
+            
+        symbol_data = next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
+        if not symbol_data:
+            raise ValueError(f"[{symbol}] Precision rules not found in specs")
+            
+        sizeMultiplier = float(symbol_data.get('sizeMultiplier', 1.0))
+        volumePlace = int(symbol_data.get('volumePlace', 0))
+        
+        raw_qty = (size_usd / price) / sizeMultiplier
+        qty_str = f"{raw_qty:.{volumePlace}f}"
+        
+        if float(qty_str) <= 0:
+            raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_qty={raw_qty}).")
 
     async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None):
-        log(f"[BitgetOrder] Виртуальный ордер {side} создан для {symbol}, объем {size_usd} USD", level="DEBUG")
-        await asyncio.sleep(0.005)
+        if not price or price <= 0:
+            raise ValueError(f"[{symbol}] Reference price is required")
+        if not self.symbol_info:
+            raise ValueError(f"[{symbol}] Specs not loaded")
+            
+        symbol_data = next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
+        if not symbol_data:
+            raise ValueError(f"[{symbol}] Precision rules not found")
+            
+        sizeMultiplier = float(symbol_data.get('sizeMultiplier', 1.0))
+        volumePlace = int(symbol_data.get('volumePlace', 0))
+        pricePlace = int(symbol_data.get('pricePlace', 2))
         
+        raw_qty = (size_usd / price) / sizeMultiplier
+        qty_str = f"{raw_qty:.{volumePlace}f}"
+        price_str = f"{price:.{pricePlace}f}"
+        
+        if float(qty_str) <= 0:
+            raise ValueError(f"[{symbol}] Calculated order size is 0")
+        
+        endpoint = "/api/v2/mix/order/place-order"
+        now = str(int(time.time() * 1000))
+        
+        body = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "marginMode": self.margin_settings["margin_type"].lower(),
+            "marginCoin": "USDT",
+            "size": qty_str,
+            "side": side.lower(),
+            "tradeSide": "open" if not position_side else ("close" if position_side.lower() == "reduce" else "open"),
+            "orderType": order_type.lower(),
+            "clientOid": str(uuid.uuid4())
+        }
+        if order_type.upper() == "LIMIT":
+            body["price"] = price_str
+            body["force"] = "ioc"
+            
+        body_str = json.dumps(body)
+        signature = self._generate_signature(now, "POST", endpoint, body_str)
+        
+        headers = {
+            'ACCESS-KEY': self.api_key,
+            'ACCESS-SIGN': signature,
+            'ACCESS-TIMESTAMP': now,
+            'ACCESS-PASSPHRASE': self.api_passphrase,
+            'Content-Type': 'application/json'
+        }
+        
+        url = f"https://api.bitget.com{endpoint}"
+        async with self.session.post(url, headers=headers, data=body_str) as resp:
+            data = await resp.json()
+            if data.get('code') != '00000':
+                raise Exception(f"Bitget API Error: {data}")
+            return data
+
     async def cancel_all_orders(self, symbol: str):
         pass
-        
-    async def set_margin_type(self, symbol: str, margin_type: str, **kwargs) -> bool:
+
+    async def set_margin_type(self, symbol: str, margin_type: str, leverage: int = None) -> bool:
         return True
-        
+
     async def set_leverage(self, symbol: str, leverage: int, **kwargs) -> bool:
         return True
-        
+
     def get_executed_position(self, symbol: str, side: str):
         return {"size": 0.0, "price": 0.0}
 
