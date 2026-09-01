@@ -278,11 +278,17 @@ import concurrent.futures
 # Глобальный экземпляр
 _global_logger = UnifiedLogger("SYSTEM")
 _log_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+_log_pid = os.getpid()
 
 def log(msg: str, level: str = "DEBUG", *args, throttle_sec: int = 0, throttle_key: Optional[str] = None, exc: Exception = None, is_signal: bool = False, **kwargs):
     lvl = level.upper()
     if lvl == "ERROR" and throttle_sec == 0:
         throttle_sec = 5  # Anti-spam for identical errors
+        
+    global _log_executor, _log_pid
+    if os.getpid() != _log_pid:
+        _log_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        _log_pid = os.getpid()
         
     def _do_log():
         if lvl == "INFO":
