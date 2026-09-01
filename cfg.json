@@ -27,7 +27,7 @@
             "taker_fee": 0.0005,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 1.0,
-            "limit_allow_distance": 1.1,
+            "limit_allow_distance": 1.0015,
             "max_positions": 1
         },
         "kucoin": {
@@ -36,7 +36,7 @@
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.5,
             "volatility_discount_exit": 1.0,
-            "limit_allow_distance": 1.1,
+            "limit_allow_distance": 1.0015,
             "max_positions": 1
         },
         "okx": {
@@ -45,7 +45,7 @@
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.5,
             "volatility_discount_exit": 1.0,
-            "limit_allow_distance": 1.1,
+            "limit_allow_distance": 1.0015,
             "max_positions": 1
         },
         "bitget": {
@@ -54,7 +54,7 @@
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.5,
             "volatility_discount_exit": 1.0,
-            "limit_allow_distance": 1.1,
+            "limit_allow_distance": 1.0015,
             "max_positions": 1
         }
     },
