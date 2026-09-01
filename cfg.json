@@ -22,10 +22,10 @@
     },
     "trading_risks": {
         "binance": {
-            "paper_start_balance": 14.10,
+            "paper_start_balance": 14.21,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0005,
-            "volatility_discount_entry": 0.3,
+            "volatility_discount_entry": 0.35,
             "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0020,
             "max_positions": 1
@@ -34,7 +34,7 @@
             "paper_start_balance": 11.87,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0006,
-            "volatility_discount_entry": 0.3,
+            "volatility_discount_entry": 0.35,
             "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0020,
             "max_positions": 1
