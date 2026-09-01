@@ -273,9 +273,11 @@ class Main:
                             
                             for ex_name, ex_idx in EX_TO_IDX.items():
                                 book = self.books[ex_name].get(sym)
+                                ts_val = self.ts[ex_name].get(sym, 0)
                                 if book and book.get("bids") and book.get("asks"):
-                                    prices_array[ex_idx, 0] = book["asks"][0][0]
-                                    prices_array[ex_idx, 1] = book["bids"][0][0]
+                                    if (now - ts_val) <= 5.0:  # is stale check
+                                        prices_array[ex_idx, 0] = book["asks"][0][0]
+                                        prices_array[ex_idx, 1] = book["bids"][0][0]
                             
                             candidates = pre_calculate_orderbook(prices_array, self.active_routes_array, top_n=self.top_n_candidates)
                             
@@ -285,10 +287,10 @@ class Main:
                                     continue
                                 long_ex, short_ex = IDX_TO_EX[long_idx], IDX_TO_EX[short_idx]
                                 
-                                if sym not in self.event_ts[long_ex] or sym not in self.event_ts[short_ex]:
+                                if sym not in self.ts[long_ex] or sym not in self.ts[short_ex]:
                                     continue
                                 
-                                diff_ms = abs(self.event_ts[long_ex][sym] - self.event_ts[short_ex][sym])
+                                diff_ms = abs(self.ts[long_ex][sym] - self.ts[short_ex][sym]) * 1000.0
                                 if self.entry_desync_limit is not None and diff_ms > self.entry_desync_limit:
                                     continue
                                 
