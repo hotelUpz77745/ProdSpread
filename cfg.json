@@ -22,7 +22,7 @@
     },
     "trading_risks": {
         "binance": {
-            "paper_start_balance": 13.27,
+            "paper_start_balance": 13.89,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0005,
             "volatility_discount_entry": 0.5,
