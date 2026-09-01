@@ -22,20 +22,20 @@
     },
     "trading_risks": {
         "binance": {
-            "paper_start_balance": 11.86,
+            "paper_start_balance": 13.27,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0005,
             "volatility_discount_entry": 0.4,
-            "volatility_discount_exit": 1.0,
+            "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0015,
             "max_positions": 1
         },
         "kucoin": {
-            "paper_start_balance": 13.99,
+            "paper_start_balance": 11.92,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.5,
-            "volatility_discount_exit": 1.0,
+            "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0015,
             "max_positions": 1
         },
@@ -44,7 +44,7 @@
             "trade_size_usd": 100.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.5,
-            "volatility_discount_exit": 1.0,
+            "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0015,
             "max_positions": 1
         },
@@ -53,7 +53,7 @@
             "trade_size_usd": 100.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.5,
-            "volatility_discount_exit": 1.0,
+            "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0015,
             "max_positions": 1
         }
@@ -109,47 +109,47 @@
                 {
                     "index": 0,
                     "seconds": 0,
-                    "target_val": 0.005
+                    "target_val": 0.0025
                 },
                 {
                     "index": 1,
                     "seconds": 5,
-                    "target_val": 0.004
+                    "target_val": 0.0015
                 },
                 {
                     "index": 2,
                     "seconds": 15,
-                    "target_val": 0.003
+                    "target_val": 0.001
                 },
                 {
                     "index": 3,
                     "seconds": 30,
-                    "target_val": 0.002
+                    "target_val": 0.0
                 },
                 {
                     "index": 4,
                     "seconds": 60,
-                    "target_val": 0.001
+                    "target_val": -0.001
                 },
                 {
                     "index": 5,
                     "seconds": 120,
-                    "target_val": 0.0
+                    "target_val": -0.002
                 },
                 {
                     "index": 6,
                     "seconds": 300,
-                    "target_val": -0.001
+                    "target_val": -0.003
                 },
                 {
                     "index": 7,
                     "seconds": 600,
-                    "target_val": -0.002
+                    "target_val": -0.004
                 },
                 {
                     "index": 8,
                     "seconds": 1260,
-                    "target_val": -0.005
+                    "target_val": -0.006
                 },
                 {
                     "index": 9,

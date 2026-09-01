@@ -12,7 +12,6 @@ import json
 import numpy as np
 import multiprocessing as mp
 from dotenv import load_dotenv
-# import aiohttp
 
 load_dotenv()
 
@@ -21,6 +20,7 @@ from CORE.trading_engine import TradingEngine
 from CORE.math_core import pre_calculate_orderbook
 from CORE.position_manager import PositionManager
 from CORE.executor_process import run_executor_process
+from CORE.ipc_socket import async_write_msg, async_read_msg
 
 from c_log import log
 from API.BINANCE.stakan import BinanceStakanStream
@@ -68,7 +68,8 @@ class Main:
         self.active_routes_array = None
         
         # IPC to Executor Process
-        self.market_pipe, self.executor_pipe = mp.Pipe(duplex=True)
+        self.executor_writer = None
+        self.server = None
         self.executor_proc = None
 
     def _load_banned(self):
@@ -114,43 +115,50 @@ class Main:
             return True
         return False
 
-    async def _handle_ipc_events(self):
+    async def _handle_ipc_events(self, reader, writer):
         """Асинхронная вычитка событий и статусов из процесса исполнения."""
-        loop = asyncio.get_running_loop()
-        while True:
-            try:
-                has_data = await loop.run_in_executor(None, self.market_pipe.poll, 0.01)
-                if has_data:
-                    msg_type, payload = self.market_pipe.recv()
-                    if msg_type == "POS_OPENED":
-                        route = payload["route"]
-                        sym = payload["sym"]
-                        exec_res = payload["exec_res"]
-                        open_time = payload["open_time"]
-                        self.pm.confirm_entry(exec_res["long_ex"], exec_res["short_ex"], sym, exec_res, open_time)
-                    elif msg_type == "POS_CLOSED":
-                        route = payload["route"]
-                        sym = payload["sym"]
-                        self.pm.confirm_exit(route, sym)
-                    elif msg_type == "BAN_UPDATE":
-                        sym = payload["symbol"]
-                        exp = payload["expire_time"]
-                        self.banned_symbols[sym] = exp
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                log(f"[MarketProcess] Ошибка чтения IPC: {e}", level="WARNING")
-            await asyncio.sleep(0.01)
+        self.executor_writer = writer
+        try:
+            while True:
+                msg_type, payload = await async_read_msg(reader)
+                if msg_type == "POS_OPENED":
+                    route = payload["route"]
+                    sym = payload["sym"]
+                    exec_res = payload["exec_res"]
+                    open_time = payload["open_time"]
+                    self.pm.confirm_entry(exec_res["long_ex"], exec_res["short_ex"], sym, exec_res, open_time)
+                elif msg_type == "POS_CLOSED":
+                    route = payload["route"]
+                    sym = payload["sym"]
+                    self.pm.confirm_exit(route, sym)
+                elif msg_type == "BAN_UPDATE":
+                    sym = payload["symbol"]
+                    exp = payload["expire_time"]
+                    self.banned_symbols[sym] = exp
+        except EOFError:
+            log("[MarketProcess] Соединение с Executor разорвано.", level="WARNING")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log(f"[MarketProcess] Ошибка чтения IPC: {e}", level="WARNING")
 
     async def run(self):
         log("==================================================", level="INFO")
         log("🚀 ProdSpread v2 (2-Process HFT Architecture) Запуск!", level="INFO")
         log("==================================================", level="INFO")
 
-        # 1. Запуск процесса исполнения (Executor Process)
-        self.executor_proc = mp.Process(target=run_executor_process, args=(self.executor_pipe, self.cfg), daemon=True)
+        # 1. Запуск IPC сервера и процесса исполнения (Executor Process)
+        self.server = await asyncio.start_server(self._handle_ipc_events, '127.0.0.1', 0)
+        port = self.server.sockets[0].getsockname()[1]
+        log(f"[MAIN] Запущен локальный IPC TCP сервер на порту {port}", level="INFO")
+
+        self.executor_proc = mp.Process(target=run_executor_process, args=(port, self.cfg), daemon=True)
         self.executor_proc.start()
         log(f"[MAIN] Executor Process запущен (PID: {self.executor_proc.pid})", level="INFO")
+
+        # Ждем пока Executor подключится (writer появится)
+        while self.executor_writer is None:
+            await asyncio.sleep(0.01)
 
         # 2. Построение топологии
         log("Initializing DiscoveryManager...", level="INFO")
@@ -168,7 +176,7 @@ class Main:
         self.pm = PositionManager(self.cfg, EXCHANGES, self.route_names, active_symbols)
 
         # Передаем топологию и роуты в процесс исполнения
-        self.market_pipe.send(("INIT_TOPOLOGY", {
+        asyncio.create_task(async_write_msg(self.executor_writer, "INIT_TOPOLOGY", {
             "coin_to_native": self.discovery.coin_to_native,
             "routes": self.route_names,
             "active_symbols": active_symbols
@@ -190,9 +198,6 @@ class Main:
                     handler = self._make_depth_handler(ex)
                     asyncio.create_task(self.streams[ex].run(handler))
                     log(f"Started {ex} Public Orderbook WS stream ({len(syms)} symbols)", level="INFO")
-
-        # 4. Запуск обработчика входящих IPC событий
-        asyncio.create_task(self._handle_ipc_events())
 
         # 5. Главный вычислительный цикл (Numba JIT)
         prices_array = np.full((7, 2), [np.inf, 0.0], dtype=np.float64)
@@ -251,12 +256,13 @@ class Main:
                         if is_exit:
                             self.pm.lock_for_exit(route, sym)
                             # Отправляем команду закрытия в Executor Process
-                            self.market_pipe.send(("CMD_CLOSE", {
-                                "route": route,
-                                "sym": sym,
-                                "exit_res": exit_res,
-                                "duration_sec": duration_sec
-                            }))
+                            if self.executor_writer:
+                                asyncio.create_task(async_write_msg(self.executor_writer, "CMD_CLOSE", {
+                                    "route": route,
+                                    "sym": sym,
+                                    "exit_res": exit_res,
+                                    "duration_sec": duration_sec
+                                }))
 
                     # --- ENTRY MONITORING ---
                     if not funding_skip:
@@ -307,13 +313,14 @@ class Main:
                                         self.pm.lock_for_entry(long_ex, short_ex, sym, engine_res)
                                         route = f"{long_ex}_{short_ex}"
                                         # Отправляем команду на открытие в Executor Process
-                                        self.market_pipe.send(("CMD_OPEN", {
-                                            "sym": sym,
-                                            "route": route,
-                                            "long_ex": long_ex,
-                                            "short_ex": short_ex,
-                                            "engine_res": engine_res
-                                        }))
+                                        if self.executor_writer:
+                                            asyncio.create_task(async_write_msg(self.executor_writer, "CMD_OPEN", {
+                                                "sym": sym,
+                                                "route": route,
+                                                "long_ex": long_ex,
+                                                "short_ex": short_ex,
+                                                "engine_res": engine_res
+                                            }))
                                         break
 
                 except asyncio.CancelledError:
@@ -336,15 +343,18 @@ class Main:
             await self.discovery.aclose()
             
             # Остановка Executor Process
-            if self.market_pipe:
+            if self.executor_writer:
                 try:
-                    self.market_pipe.send(("SHUTDOWN", None))
+                    asyncio.create_task(async_write_msg(self.executor_writer, "SHUTDOWN", None))
                 except Exception:
                     pass
             if self.executor_proc and self.executor_proc.is_alive():
                 self.executor_proc.join(timeout=2.0)
                 if self.executor_proc.is_alive():
                     self.executor_proc.terminate()
+            if self.server:
+                self.server.close()
+                await self.server.wait_closed()
 
             await SessionManager().close_all()
 

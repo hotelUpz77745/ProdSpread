@@ -23,13 +23,17 @@ from API.settlement import ExchangeSettlement
 from CORE.position_manager import PositionManager
 from CORE.leverage_setter import LeverageSetter
 from analytics import TradeAnalytics, generate_global_report
+from CORE.ipc_socket import async_write_msg, async_read_msg
+
 
 EXCHANGES = ["BINANCE", "KUCOIN", "OKX", "BITGET"]
 
 class ExecutorProcess:
-    def __init__(self, pipe, cfg: dict):
-        self.pipe = pipe
+    def __init__(self, port: int, cfg: dict):
+        self.port = port
         self.cfg = cfg
+        self.reader = None
+        self.writer = None
         self.session = None
         
         # Streams
@@ -107,7 +111,8 @@ class ExecutorProcess:
         else:
             log(f"[{sym}] 🚫 Монета заблокирована ({reason}).", level="WARNING")
         # Notify Market Process
-        self.pipe.send(("BAN_UPDATE", {"symbol": sym, "expire_time": expire_time}))
+        if self.writer:
+            asyncio.create_task(async_write_msg(self.writer, "BAN_UPDATE", {"symbol": sym, "expire_time": expire_time}))
 
     async def init_runtime(self):
         self._load_banned()
@@ -244,12 +249,13 @@ class ExecutorProcess:
         self.analytics_map[sym].record_open(route, "LONG_SHORT", long_ex, short_ex, exec_res["entry_long_price"], exec_res["entry_short_price"], spread_val, 0.0)
         
         # Notify Market Process
-        self.pipe.send(("POS_OPENED", {
-            "route": route,
-            "sym": sym,
-            "exec_res": exec_res,
-            "open_time": exec_res["open_time"]
-        }))
+        if self.writer:
+            asyncio.create_task(async_write_msg(self.writer, "POS_OPENED", {
+                "route": route,
+                "sym": sym,
+                "exec_res": exec_res,
+                "open_time": exec_res["open_time"]
+            }))
 
     async def execute_close(self, data: dict):
         route = data["route"]
@@ -275,7 +281,8 @@ class ExecutorProcess:
         if long_pos.get("size", 0.0) <= 0 and short_pos.get("size", 0.0) <= 0:
             log(f"[{sym}] Обе ноги уже закрыты на биржах (0.0). Завершаем выход.", level="INFO")
             self.pm.confirm_exit(route, sym)
-            self.pipe.send(("POS_CLOSED", {"route": route, "sym": sym}))
+            if self.writer:
+                asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {"route": route, "sym": sym}))
             asyncio.create_task(self._post_close_settlement(sym, native_long, native_short, long_ex, short_ex, open_time_ms))
             return
             
@@ -324,7 +331,8 @@ class ExecutorProcess:
             await asyncio.gather(*cancel_tasks, return_exceptions=True)
             
         self.pm.confirm_exit(route, sym)
-        self.pipe.send(("POS_CLOSED", {"route": route, "sym": sym}))
+        if self.writer:
+            asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {"route": route, "sym": sym}))
         asyncio.create_task(self._post_close_settlement(sym, native_long, native_short, long_ex, short_ex, open_time_ms))
 
     async def _post_close_settlement(self, sym: str, native_long: str, native_short: str, long_ex: str, short_ex: str, open_time_ms: int):
@@ -354,53 +362,66 @@ class ExecutorProcess:
 
     async def run(self):
         await self.init_runtime()
-        log("[ExecutorProcess] Процесс исполнения ордеров запущен и готов к командам.", level="INFO")
+        log("[ExecutorProcess] Подключение к IPC серверу...", level="INFO")
         
-        loop = asyncio.get_running_loop()
+        # Подключаемся к локальному порту
+        for _ in range(10):
+            try:
+                self.reader, self.writer = await asyncio.open_connection('127.0.0.1', self.port)
+                break
+            except Exception:
+                await asyncio.sleep(0.5)
+                
+        if not self.reader:
+            log("[ExecutorProcess] Не удалось подключиться к IPC серверу.", level="ERROR")
+            return
+            
+        log("[ExecutorProcess] Процесс исполнения ордеров подключен и готов к командам.", level="INFO")
+        
         try:
             while self._running:
-                # Проверяем pipe на наличие команд без блокировки event loop
-                has_data = await loop.run_in_executor(None, self.pipe.poll, 0.05)
-                if has_data:
-                    try:
-                        msg_type, payload = self.pipe.recv()
-                        if msg_type == "INIT_TOPOLOGY":
-                            self.coin_to_native = payload.get("coin_to_native", {})
-                            routes = payload.get("routes", [])
-                            active_symbols = payload.get("active_symbols", [])
-                            self.pm = PositionManager(self.cfg, EXCHANGES, routes, active_symbols)
-                            asyncio.create_task(LeverageSetter(self.cfg, self.orders, self.coin_to_native).setup())
-                        elif msg_type == "CMD_OPEN":
-                            async def safe_execute_open(data):
-                                try:
-                                    await self.execute_open(data)
-                                except Exception as e:
-                                    log(f"[ExecutorProcess] Ошибка в execute_open: {e}\n{traceback.format_exc()}", level="ERROR")
-                            asyncio.create_task(safe_execute_open(payload))
-                        elif msg_type == "CMD_CLOSE":
-                            async def safe_execute_close(data):
-                                try:
-                                    await self.execute_close(data)
-                                except Exception as e:
-                                    log(f"[ExecutorProcess] Ошибка в execute_close: {e}\n{traceback.format_exc()}", level="ERROR")
-                            asyncio.create_task(safe_execute_close(payload))
-                        elif msg_type == "SHUTDOWN":
-                            self._running = False
-                            break
-                    except EOFError:
+                try:
+                    msg_type, payload = await async_read_msg(self.reader)
+                    if msg_type == "INIT_TOPOLOGY":
+                        self.coin_to_native = payload.get("coin_to_native", {})
+                        routes = payload.get("routes", [])
+                        active_symbols = payload.get("active_symbols", [])
+                        self.pm = PositionManager(self.cfg, EXCHANGES, routes, active_symbols)
+                        asyncio.create_task(LeverageSetter(self.cfg, self.orders, self.coin_to_native).setup())
+                    elif msg_type == "CMD_OPEN":
+                        async def safe_execute_open(data):
+                            try:
+                                await self.execute_open(data)
+                            except Exception as e:
+                                log(f"[ExecutorProcess] Ошибка в execute_open: {e}\n{traceback.format_exc()}", level="ERROR")
+                        asyncio.create_task(safe_execute_open(payload))
+                    elif msg_type == "CMD_CLOSE":
+                        async def safe_execute_close(data):
+                            try:
+                                await self.execute_close(data)
+                            except Exception as e:
+                                log(f"[ExecutorProcess] Ошибка в execute_close: {e}\n{traceback.format_exc()}", level="ERROR")
+                        asyncio.create_task(safe_execute_close(payload))
+                    elif msg_type == "SHUTDOWN":
+                        self._running = False
                         break
-                    except Exception as e:
-                        log(f"[ExecutorProcess] Ошибка обработки команды: {e}", level="ERROR")
-                await asyncio.sleep(0.01)
+                except EOFError:
+                    log("[ExecutorProcess] IPC соединение разорвано.", level="WARNING")
+                    break
+                except Exception as e:
+                    log(f"[ExecutorProcess] Ошибка обработки команды: {e}", level="ERROR")
         finally:
             log("[ExecutorProcess] Завершение работы, закрытие сессий...", level="INFO")
+            if self.writer:
+                self.writer.close()
+                await self.writer.wait_closed()
             from utils import SessionManager
             await SessionManager().close_all()
 
-def run_executor_process(pipe, cfg: dict):
+def run_executor_process(port: int, cfg: dict):
     """Entrypoint для отдельного процесса multiprocessing."""
     try:
-        executor = ExecutorProcess(pipe, cfg)
+        executor = ExecutorProcess(port, cfg)
         asyncio.run(executor.run())
     except KeyboardInterrupt:
         pass
