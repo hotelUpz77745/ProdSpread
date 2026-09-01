@@ -6,7 +6,7 @@
     },
     "SYMBOLS_GLOBAL_WHITELIST": [],
     "QUOTE": "USDT",
-    "MAIN_LOOP_DELAY": 0.005,
+    "MAIN_LOOP_DELAY": 0.0,
     "measure_loop_speed": false,
     "EXECUTION_PAUSE": 0.020,
     "topology_rebuild_interval_sec": null,
@@ -25,7 +25,7 @@
             "paper_start_balance": 13.27,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0005,
-            "volatility_discount_entry": 0.4,
+            "volatility_discount_entry": 0.5,
             "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0015,
             "max_positions": 1
@@ -96,8 +96,8 @@
     "trading_rules": {
         "entry": {
             "max_desync_ms": null,
-            "spread_entry": 0.008,
-            "min_fill_rate": 0.4,
+            "spread_entry": 0.009,
+            "min_fill_rate": 0.5,
             "top_n_candidates": 6,
             "check_synthetic_exit": true,
             "check_synthetic_slippage": true,
@@ -109,51 +109,41 @@
                 {
                     "index": 0,
                     "seconds": 0,
-                    "target_val": 0.0025
+                    "target_val": 0.0045
                 },
                 {
                     "index": 1,
                     "seconds": 5,
-                    "target_val": 0.0015
+                    "target_val": 0.0035
                 },
                 {
                     "index": 2,
                     "seconds": 15,
-                    "target_val": 0.001
+                    "target_val": 0.0025
                 },
                 {
                     "index": 3,
                     "seconds": 30,
-                    "target_val": 0.0
+                    "target_val": 0.0015
                 },
                 {
                     "index": 4,
                     "seconds": 60,
-                    "target_val": -0.001
+                    "target_val": -0.00
                 },
                 {
                     "index": 5,
-                    "seconds": 120,
+                    "seconds": 180,
                     "target_val": -0.002
                 },
                 {
                     "index": 6,
-                    "seconds": 300,
-                    "target_val": -0.003
-                },
-                {
-                    "index": 7,
-                    "seconds": 600,
+                    "seconds": 360,
                     "target_val": -0.004
                 },
                 {
-                    "index": 8,
-                    "seconds": 1260,
-                    "target_val": -0.006
-                },
-                {
-                    "index": 9,
-                    "seconds": 2040,
+                    "index": 7,
+                    "seconds": 780,
                     "target_val": -999.0
                 }
             ]
