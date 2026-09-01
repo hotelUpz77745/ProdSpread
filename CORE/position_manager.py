@@ -16,8 +16,8 @@ class PositionManager:
         # Лимиты из конфига (default 1 если не указано)
         self.max_pos = {}
         for ex in self.exchanges:
-            risk_cfg = self.cfg.get("trading_risks", {}).get(ex.lower(), {})
-            self.max_pos[ex] = risk_cfg.get("max_positions", 1)
+            risk_cfg = self.cfg["trading_risks"][ex.lower()]
+            self.max_pos[ex] = risk_cfg["max_positions"]
             
         # Состояние по биржам: сколько активно и сколько в ожидании (pending)
         self.exchange_state = {ex: {"current": 0, "pending": 0} for ex in self.exchanges}

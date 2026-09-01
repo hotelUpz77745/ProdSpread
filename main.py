@@ -47,7 +47,7 @@ class Main:
         # Configs
         self.entry_desync_limit = self.cfg["trading_rules"]["entry"]["max_desync_ms"]
         self.top_n_candidates   = self.cfg["trading_rules"]["entry"]["top_n_candidates"]
-        self.topology_rebuild_interval = self.cfg.get("topology_rebuild_interval_sec", None)
+        self.topology_rebuild_interval = self.cfg["topology_rebuild_interval_sec"]
         
         self.funding_is_active = self.cfg["trading_rules"]["funding_filter"]["is_active"]
         self.funding_skip_sec = self.cfg["trading_rules"]["funding_filter"]["skip_if_less_than_sec"]
@@ -164,12 +164,12 @@ class Main:
         log("Initializing DiscoveryManager...", level="INFO")
         await self.discovery.build_topology(self.banned_symbols)
         
-        active_routes_cfg = self.cfg.get("active_routes", {})
+        active_routes_cfg = self.cfg["active_routes"]
         self.route_names = list(active_routes_cfg.keys())
         self.active_routes_array = np.array([
             [EX_TO_IDX[r.split("_")[0]], EX_TO_IDX[r.split("_")[1]]]
             for r in self.route_names
-            if active_routes_cfg.get(r, False)
+            if active_routes_cfg[r]
         ], dtype=np.int64)
 
         active_symbols = list(self.discovery.active_pairs_map.keys())

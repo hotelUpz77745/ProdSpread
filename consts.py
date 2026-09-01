@@ -33,5 +33,5 @@ LOG_TO_CONSOLE = LOGGING_CFG["log_to_console"]
 LOG_TO_FILE = LOGGING_CFG["log_to_file"]
 TIME_ZONE = LOGGING_CFG["TIME_ZONE"]
 
-VOLUME_FILTERS = cfg.get("volume_filters", {})
-ACTIVE_ROUTES = cfg.get("active_routes", {})
+VOLUME_FILTERS = cfg["volume_filters"]
+ACTIVE_ROUTES = cfg["active_routes"]

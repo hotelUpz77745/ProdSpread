@@ -89,14 +89,14 @@ class TradeAnalytics:
         
         gross_pnl = (long_pnl + short_pnl) / 2.0
         
-        long_cfg = self.risks_cfg.get(long_ex.lower(), {})
-        short_cfg = self.risks_cfg.get(short_ex.lower(), {})
+        long_cfg = self.risks_cfg[long_ex.lower()]
+        short_cfg = self.risks_cfg[short_ex.lower()]
         
-        actual_long_usd = long_executed_usd if long_executed_usd is not None else long_cfg.get("trade_size_usd", 100.0)
-        actual_short_usd = short_executed_usd if short_executed_usd is not None else short_cfg.get("trade_size_usd", 100.0)
+        actual_long_usd = long_executed_usd if long_executed_usd is not None else long_cfg["trade_size_usd"]
+        actual_short_usd = short_executed_usd if short_executed_usd is not None else short_cfg["trade_size_usd"]
         
-        l_fee_usd = actual_long_usd * (long_cfg.get("taker_fee", 0.0006) * 2.0)
-        s_fee_usd = actual_short_usd * (short_cfg.get("taker_fee", 0.0006) * 2.0)
+        l_fee_usd = actual_long_usd * (long_cfg["taker_fee"] * 2.0)
+        s_fee_usd = actual_short_usd * (short_cfg["taker_fee"] * 2.0)
         
         long_pnl_usd = actual_long_usd * long_pnl - l_fee_usd
         short_pnl_usd = actual_short_usd * short_pnl - s_fee_usd
