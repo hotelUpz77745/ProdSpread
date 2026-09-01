@@ -371,9 +371,19 @@ class ExecutorProcess:
                             self.pm = PositionManager(self.cfg, EXCHANGES, routes, active_symbols)
                             asyncio.create_task(LeverageSetter(self.cfg, self.orders, self.coin_to_native).setup())
                         elif msg_type == "CMD_OPEN":
-                            asyncio.create_task(self.execute_open(payload))
+                            async def safe_execute_open(data):
+                                try:
+                                    await self.execute_open(data)
+                                except Exception as e:
+                                    log(f"[ExecutorProcess] Ошибка в execute_open: {e}\n{traceback.format_exc()}", level="ERROR")
+                            asyncio.create_task(safe_execute_open(payload))
                         elif msg_type == "CMD_CLOSE":
-                            asyncio.create_task(self.execute_close(payload))
+                            async def safe_execute_close(data):
+                                try:
+                                    await self.execute_close(data)
+                                except Exception as e:
+                                    log(f"[ExecutorProcess] Ошибка в execute_close: {e}\n{traceback.format_exc()}", level="ERROR")
+                            asyncio.create_task(safe_execute_close(payload))
                         elif msg_type == "SHUTDOWN":
                             self._running = False
                             break
