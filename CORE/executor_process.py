@@ -237,7 +237,7 @@ class ExecutorProcess:
         if has_error or l_rate < min_fill or s_rate < min_fill:
             log(f"[{sym}] 🚨 Низкий fill_rate! L:{l_rate*100:.1f}% S:{s_rate*100:.1f}%. Экстренный выход!", level="ERROR")
             self.pm.confirm_entry(long_ex, short_ex, sym, exec_res, time.time())
-            self.pm.request_exit(route, sym)
+            self.pm.lock_for_exit(route, sym)
             await self.execute_close({"route": route, "sym": sym, "reason": "LOW_FILL_RATE", "data": exec_res})
             return
             
