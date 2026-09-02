@@ -127,27 +127,22 @@
                 },
                 {
                     "index": 3,
-                    "seconds": 300,
-                    "target_val": 0.0015
+                    "seconds": 180,
+                    "target_val": 0.0010
                 },
                 {
                     "index": 4,
-                    "seconds": 600,
-                    "target_val": 0.0005
+                    "seconds": 300,
+                    "target_val": 0.0000
                 },
                 {
                     "index": 5,
-                    "seconds": 900,
-                    "target_val": -0.001
+                    "seconds": 600,
+                    "target_val": -0.0010
                 },
                 {
                     "index": 6,
-                    "seconds": 1140,
-                    "target_val": -0.003
-                },
-                {
-                    "index": 7,
-                    "seconds": 1260,
+                    "seconds": 900,
                     "target_val": -999.0
                 }
             ]
