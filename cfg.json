@@ -22,7 +22,7 @@
     },
     "trading_risks": {
         "binance": {
-            "paper_start_balance": 14.86,
+            "paper_start_balance": 13.32,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0005,
             "volatility_discount_entry": 0.35,
@@ -31,7 +31,7 @@
             "max_positions": 1
         },
         "kucoin": {
-            "paper_start_balance": 11.22,
+            "paper_start_balance": 11.20,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.35,
@@ -49,7 +49,7 @@
             "max_positions": 1
         },
         "bitget": {
-            "paper_start_balance": 11.99,
+            "paper_start_balance": 12.23,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.35,
@@ -97,7 +97,7 @@
     },
     "trading_rules": {
         "entry": {
-            "order_execution_type": "LIMIT_GTC",
+            "order_execution_type": "IOC",
             "order_execution_type_desc": "Allowed values: IOC | LIMIT_GTC",
             "max_desync_ms": null,
             "spread_entry": 0.007,
