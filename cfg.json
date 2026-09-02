@@ -8,7 +8,7 @@
     "QUOTE": "USDT",
     "MAIN_LOOP_DELAY": 0.0,
     "measure_loop_speed": false,
-    "EXECUTION_PAUSE": 0.020,
+    "EXECUTION_PAUSE": 0.035,
     "topology_rebuild_interval_sec": null,
     "logging": {
         "debug": false,
@@ -97,7 +97,7 @@
     },
     "trading_rules": {
         "entry": {
-            "order_execution_type": "IOC",
+            "order_execution_type": "LIMIT_GTC",
             "order_execution_type_desc": "Allowed values: IOC | LIMIT_GTC",
             "max_desync_ms": null,
             "spread_entry": 0.007,

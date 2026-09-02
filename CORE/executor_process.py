@@ -216,7 +216,7 @@ class ExecutorProcess:
         # Ждем EXECUTION_PAUSE
         await asyncio.sleep(self.execution_pause)
 
-        # Если режим LIMIT_GTC, отменяем остатки неналитых ордеров
+        # Если режим LIMIT_GTC, отправляем отмену остатков неналитых ордеров (асинхронно, не блокируя event loop)
         if order_policy == "LIMIT_GTC":
             cancel_tasks = []
             if long_ex in self.orders:
@@ -224,22 +224,37 @@ class ExecutorProcess:
             if short_ex in self.orders:
                 cancel_tasks.append(self.orders[short_ex].cancel_all_orders(native_short))
             if cancel_tasks:
-                await asyncio.gather(*cancel_tasks, return_exceptions=True)
+                asyncio.create_task(asyncio.gather(*cancel_tasks, return_exceptions=True))
 
+        # Высокоскоростной мониторинг заливки (микро-петля каждые 2 мс с таймаутом = EXECUTION_PAUSE)
         long_pos = {"size": 0.0, "price": 0.0}
         short_pos = {"size": 0.0, "price": 0.0}
-        for _ in range(15):
+        req_long_qty = engine_res.get("long_qty", 0.0)
+        req_short_qty = engine_res.get("short_qty", 0.0)
+        min_fill = self.min_fill_rate
+
+        poll_interval = 0.002  # 2 мс
+        max_iterations = max(5, int(self.execution_pause / poll_interval))
+
+        for _ in range(max_iterations):
             if long_ex in self.orders:
                 long_pos = self.orders[long_ex].get_executed_position(native_long, "LONG")
             if short_ex in self.orders:
                 short_pos = self.orders[short_ex].get_executed_position(native_short, "SHORT")
-            if (long_ex not in self.orders or long_pos["size"] > 0) and (short_ex not in self.orders or short_pos["size"] > 0):
+
+            l_filled = (long_pos.get("size", 0.0) / req_long_qty >= min_fill) if req_long_qty > 0 else True
+            s_filled = (short_pos.get("size", 0.0) / req_short_qty >= min_fill) if req_short_qty > 0 else True
+
+            # Если обе ноги уже залились выше min_fill_rate - мгновенно выходим
+            if l_filled and s_filled:
                 break
-            await asyncio.sleep(0.1)
+
+            await asyncio.sleep(poll_interval)
             
-        if long_ex in self.orders and long_pos["size"] == 0:
+        # Страховочный REST фоллбек: если какая-то нога показывает 0.0, контрольный опрос через REST
+        if long_ex in self.orders and long_pos.get("size", 0.0) == 0.0:
             long_pos = await self.orders[long_ex].get_exact_position(native_long, "LONG")
-        if short_ex in self.orders and short_pos["size"] == 0:
+        if short_ex in self.orders and short_pos.get("size", 0.0) == 0.0:
             short_pos = await self.orders[short_ex].get_exact_position(native_short, "SHORT")
             
         exec_res = {
