@@ -190,38 +190,55 @@ class BinanceOrder:
             log(f"[BinanceOrder] Ошибка отмены ордеров {symbol}: {e}", level="ERROR")
 
     async def set_margin_type(self, symbol: str, margin_type: str, **kwargs) -> bool:
-        try:
-            timestamp = int(time.time() * 1000)
-            query_string = f"symbol={symbol}&marginType={margin_type.upper()}&timestamp={timestamp}"
-            signature = self._generate_signature(query_string)
-            url = f"https://fapi.binance.com/fapi/v1/marginType?{query_string}&signature={signature}"
-            headers = {"X-MBX-APIKEY": self.api_key}
-            
-            async with self.session.post(url, headers=headers) as resp:
-                data = await resp.json()
-                if resp.status == 200:
-                    return True
-                if data.get("code") == -4046: # No need to change
-                    return True
-                raise Exception(f"{data}")
-        except Exception as e:
-            raise Exception(f"MarginType Error: {e}")
+        for attempt in range(3):
+            try:
+                timestamp = int(time.time() * 1000)
+                query_string = f"symbol={symbol}&marginType={margin_type.upper()}&timestamp={timestamp}"
+                signature = self._generate_signature(query_string)
+                url = f"https://fapi.binance.com/fapi/v1/marginType?{query_string}&signature={signature}"
+                headers = {"X-MBX-APIKEY": self.api_key}
+                
+                async with self.session.post(url, headers=headers) as resp:
+                    data = await resp.json()
+                    if resp.status == 200:
+                        return True
+                    if resp.status == 429 or data.get("code") == 429 or data.get("code") == -1003:
+                        await asyncio.sleep(1.0 + attempt * 0.5)
+                        continue
+                    if data.get("code") == -4046: # No need to change
+                        return True
+                    log(f"[BinanceOrder] Ошибка set_margin_type {symbol}: {data}", level="WARNING")
+                    return False
+            except Exception as e:
+                log(f"[BinanceOrder] Исключение set_margin_type {symbol}: {e}", level="ERROR")
+                return False
+        return False
 
     async def set_leverage(self, symbol: str, leverage: int, **kwargs) -> bool:
-        try:
-            timestamp = int(time.time() * 1000)
-            query_string = f"symbol={symbol}&leverage={leverage}&timestamp={timestamp}"
-            signature = self._generate_signature(query_string)
-            url = f"https://fapi.binance.com/fapi/v1/leverage?{query_string}&signature={signature}"
-            headers = {"X-MBX-APIKEY": self.api_key}
-            
-            async with self.session.post(url, headers=headers) as resp:
-                data = await resp.json()
-                if resp.status == 200:
-                    return True
-                raise Exception(f"{data}")
-        except Exception as e:
-            raise Exception(f"Leverage Error: {e}")
+        for attempt in range(3):
+            try:
+                timestamp = int(time.time() * 1000)
+                query_string = f"symbol={symbol}&leverage={leverage}&timestamp={timestamp}"
+                signature = self._generate_signature(query_string)
+                url = f"https://fapi.binance.com/fapi/v1/leverage?{query_string}&signature={signature}"
+                headers = {"X-MBX-APIKEY": self.api_key}
+                
+                async with self.session.post(url, headers=headers) as resp:
+                    data = await resp.json()
+                    if resp.status == 200:
+                        return True
+                    if resp.status == 429 or data.get("code") == 429 or data.get("code") == -1003:
+                        await asyncio.sleep(1.0 + attempt * 0.5)
+                        continue
+                    msg = str(data.get("msg", "")).lower()
+                    if "no need to change" in msg:
+                        return True
+                    log(f"[BinanceOrder] Ошибка set_leverage {symbol}: {data}", level="WARNING")
+                    return False
+            except Exception as e:
+                log(f"[BinanceOrder] Исключение set_leverage {symbol}: {e}", level="ERROR")
+                return False
+        return False
 
     async def warmup(self):
         """Отправляет фейковый POST запрос для прогрева WAF/Gateway и TLS туннеля"""
@@ -568,36 +585,43 @@ class KucoinOrder:
         Для ISOLATED: leverage передается в том же запросе (биржа обновляет его сразу).
         Для CROSS: leverage не передается здесь, он ставится отдельно через changeCrossUserLeverage.
         """
-        try:
-            now = str(int(time.time() * 1000))
-            body = {"symbol": symbol, "marginMode": margin_type.upper()}
-            if margin_type.upper() == "ISOLATED" and leverage is not None:
-                body["leverage"] = str(leverage)
-            body_str = json.dumps(body)
-            endpoint = "/api/v2/position/changeMarginMode"
-            str_to_sign = now + "POST" + endpoint + body_str
-            signature = self._generate_signature(str_to_sign)
-            
-            passphrase_hmac = hmac.new(self.api_secret.encode('utf-8'), self.api_passphrase.encode('utf-8'), hashlib.sha256)
-            encrypted_passphrase = base64.b64encode(passphrase_hmac.digest()).decode('utf-8')
-            
-            headers = {
-                'KC-API-KEY': self.api_key,
-                'KC-API-SIGN': signature,
-                'KC-API-TIMESTAMP': now,
-                'KC-API-PASSPHRASE': encrypted_passphrase,
-                'KC-API-KEY-VERSION': '2',
-                'Content-Type': 'application/json'
-            }
-            
-            url = f"https://api-futures.kucoin.com{endpoint}"
-            async with self.session.post(url, headers=headers, data=body_str) as resp:
-                data = await resp.json()
-                if data.get('code') == '200000':
-                    return True
-                raise Exception(f"{data}")
-        except Exception as e:
-            raise Exception(f"Kucoin MarginType Error: {e}")
+        for attempt in range(3):
+            try:
+                now = str(int(time.time() * 1000))
+                body = {"symbol": symbol, "marginMode": margin_type.upper()}
+                if margin_type.upper() == "ISOLATED" and leverage is not None:
+                    body["leverage"] = str(leverage)
+                body_str = json.dumps(body)
+                endpoint = "/api/v2/position/changeMarginMode"
+                str_to_sign = now + "POST" + endpoint + body_str
+                signature = self._generate_signature(str_to_sign)
+                
+                passphrase_hmac = hmac.new(self.api_secret.encode('utf-8'), self.api_passphrase.encode('utf-8'), hashlib.sha256)
+                encrypted_passphrase = base64.b64encode(passphrase_hmac.digest()).decode('utf-8')
+                
+                headers = {
+                    'KC-API-KEY': self.api_key,
+                    'KC-API-SIGN': signature,
+                    'KC-API-TIMESTAMP': now,
+                    'KC-API-PASSPHRASE': encrypted_passphrase,
+                    'KC-API-KEY-VERSION': '2',
+                    'Content-Type': 'application/json'
+                }
+                
+                url = f"https://api-futures.kucoin.com{endpoint}"
+                async with self.session.post(url, headers=headers, data=body_str) as resp:
+                    data = await resp.json()
+                    if data.get('code') == '200000':
+                        return True
+                    if resp.status == 429 or data.get("code") == "429000" or data.get("code") == "400014":
+                        await asyncio.sleep(1.0 + attempt * 0.5)
+                        continue
+                    log(f"[KucoinOrder] Ошибка set_margin_type {symbol}: {data}", level="WARNING")
+                    return False
+            except Exception as e:
+                log(f"[KucoinOrder] Исключение set_margin_type {symbol}: {e}", level="ERROR")
+                return False
+        return False
         
     async def set_leverage(self, symbol: str, leverage: int, margin_type: str = "CROSS") -> bool:
         """
@@ -609,34 +633,41 @@ class KucoinOrder:
         if margin_type.upper() == "ISOLATED":
             # Для изолированной маржи плечо уже выставлено в set_margin_type
             return True
-        try:
-            now = str(int(time.time() * 1000))
-            body = {"symbol": symbol, "leverage": str(leverage)}
-            body_str = json.dumps(body)
-            endpoint = "/api/v2/changeCrossUserLeverage"
-            str_to_sign = now + "POST" + endpoint + body_str
-            signature = self._generate_signature(str_to_sign)
-            
-            passphrase_hmac = hmac.new(self.api_secret.encode('utf-8'), self.api_passphrase.encode('utf-8'), hashlib.sha256)
-            encrypted_passphrase = base64.b64encode(passphrase_hmac.digest()).decode('utf-8')
-            
-            headers = {
-                'KC-API-KEY': self.api_key,
-                'KC-API-SIGN': signature,
-                'KC-API-TIMESTAMP': now,
-                'KC-API-PASSPHRASE': encrypted_passphrase,
-                'KC-API-KEY-VERSION': '2',
-                'Content-Type': 'application/json'
-            }
-            
-            url = f"https://api-futures.kucoin.com{endpoint}"
-            async with self.session.post(url, headers=headers, data=body_str) as resp:
-                data = await resp.json()
-                if data.get('code') == '200000':
-                    return True
-                raise Exception(f"{data}")
-        except Exception as e:
-            raise Exception(f"Kucoin Leverage Error: {e}")
+        for attempt in range(3):
+            try:
+                now = str(int(time.time() * 1000))
+                body = {"symbol": symbol, "leverage": str(leverage)}
+                body_str = json.dumps(body)
+                endpoint = "/api/v2/changeCrossUserLeverage"
+                str_to_sign = now + "POST" + endpoint + body_str
+                signature = self._generate_signature(str_to_sign)
+                
+                passphrase_hmac = hmac.new(self.api_secret.encode('utf-8'), self.api_passphrase.encode('utf-8'), hashlib.sha256)
+                encrypted_passphrase = base64.b64encode(passphrase_hmac.digest()).decode('utf-8')
+                
+                headers = {
+                    'KC-API-KEY': self.api_key,
+                    'KC-API-SIGN': signature,
+                    'KC-API-TIMESTAMP': now,
+                    'KC-API-PASSPHRASE': encrypted_passphrase,
+                    'KC-API-KEY-VERSION': '2',
+                    'Content-Type': 'application/json'
+                }
+                
+                url = f"https://api-futures.kucoin.com{endpoint}"
+                async with self.session.post(url, headers=headers, data=body_str) as resp:
+                    data = await resp.json()
+                    if data.get('code') == '200000':
+                        return True
+                    if resp.status == 429 or data.get("code") == "429000" or data.get("code") == "400014":
+                        await asyncio.sleep(1.0 + attempt * 0.5)
+                        continue
+                    log(f"[KucoinOrder] Ошибка set_leverage {symbol}: {data}", level="WARNING")
+                    return False
+            except Exception as e:
+                log(f"[KucoinOrder] Исключение set_leverage {symbol}: {e}", level="ERROR")
+                return False
+        return False
 
     def get_multiplier(self, symbol: str) -> float:
         if self.symbol_info:
@@ -701,6 +732,8 @@ class KucoinOrder:
         if self.position_stream and symbol in self.position_stream.positions:
             self.position_stream.positions[symbol][side.upper()] = {"size": 0.0, "price": 0.0}
         return {"size": 0.0, "price": 0.0}
+
+
 
 class OkxOrder:
     def check_order_size(self, symbol: str, size_usd: float, price: float):
@@ -921,84 +954,94 @@ class BitgetOrder:
     async def set_margin_type(self, symbol: str, margin_type: str, leverage: int = None) -> bool:
         if not self.api_key:
             return False
-        try:
-            if not self.session:
-                from utils import SessionManager
-                self.session = await SessionManager().get_session()
-                
-            mm = margin_type.lower()
-            if mm == "cross":
-                mm = "crossed"
-                
-            endpoint = "/api/v2/mix/account/set-margin-mode"
-            body = {
-                "symbol": symbol,
-                "productType": "USDT-FUTURES",
-                "marginCoin": "USDT",
-                "marginMode": mm
-            }
-            body_str = json.dumps(body)
-            now = str(int(time.time() * 1000))
-            sig = self._generate_signature(now, "POST", endpoint, body_str)
-            headers = {
-                'ACCESS-KEY': self.api_key,
-                'ACCESS-SIGN': sig,
-                'ACCESS-TIMESTAMP': now,
-                'ACCESS-PASSPHRASE': self.api_passphrase,
-                'Content-Type': 'application/json'
-            }
-            url = f"https://api.bitget.com{endpoint}"
-            async with self.session.post(url, headers=headers, data=body_str) as resp:
-                data = await resp.json()
-                if data.get('code') == '00000':
-                    return True
-                msg = str(data.get('msg', '')).lower()
-                if "no need to change" in msg or "not changed" in msg or "same" in msg:
-                    return True
-                log(f"[BitgetOrder] Ошибка set_margin_type {symbol}: {data}", level="WARNING")
+        for attempt in range(3):
+            try:
+                if not self.session:
+                    from utils import SessionManager
+                    self.session = await SessionManager().get_session()
+                    
+                mm = margin_type.lower()
+                if mm == "cross":
+                    mm = "crossed"
+                    
+                endpoint = "/api/v2/mix/account/set-margin-mode"
+                body = {
+                    "symbol": symbol,
+                    "productType": "USDT-FUTURES",
+                    "marginCoin": "USDT",
+                    "marginMode": mm
+                }
+                body_str = json.dumps(body)
+                now = str(int(time.time() * 1000))
+                sig = self._generate_signature(now, "POST", endpoint, body_str)
+                headers = {
+                    'ACCESS-KEY': self.api_key,
+                    'ACCESS-SIGN': sig,
+                    'ACCESS-TIMESTAMP': now,
+                    'ACCESS-PASSPHRASE': self.api_passphrase,
+                    'Content-Type': 'application/json'
+                }
+                url = f"https://api.bitget.com{endpoint}"
+                async with self.session.post(url, headers=headers, data=body_str) as resp:
+                    data = await resp.json()
+                    if data.get('code') == '00000':
+                        return True
+                    if str(data.get('code')) == '429':
+                        await asyncio.sleep(1.0 + attempt * 0.5)
+                        continue
+                    msg = str(data.get('msg', '')).lower()
+                    if "no need to change" in msg or "not changed" in msg or "same" in msg:
+                        return True
+                    log(f"[BitgetOrder] Ошибка set_margin_type {symbol}: {data}", level="WARNING")
+                    return False
+            except Exception as e:
+                log(f"[BitgetOrder] Исключение set_margin_type {symbol}: {e}", level="ERROR")
                 return False
-        except Exception as e:
-            log(f"[BitgetOrder] Исключение set_margin_type {symbol}: {e}", level="ERROR")
-            return False
+        return False
 
     async def set_leverage(self, symbol: str, leverage: int, **kwargs) -> bool:
         if not self.api_key:
             return False
-        try:
-            if not self.session:
-                from utils import SessionManager
-                self.session = await SessionManager().get_session()
-                
-            endpoint = "/api/v2/mix/account/set-leverage"
-            body = {
-                "symbol": symbol,
-                "productType": "USDT-FUTURES",
-                "marginCoin": "USDT",
-                "leverage": str(leverage)
-            }
-            body_str = json.dumps(body)
-            now = str(int(time.time() * 1000))
-            sig = self._generate_signature(now, "POST", endpoint, body_str)
-            headers = {
-                'ACCESS-KEY': self.api_key,
-                'ACCESS-SIGN': sig,
-                'ACCESS-TIMESTAMP': now,
-                'ACCESS-PASSPHRASE': self.api_passphrase,
-                'Content-Type': 'application/json'
-            }
-            url = f"https://api.bitget.com{endpoint}"
-            async with self.session.post(url, headers=headers, data=body_str) as resp:
-                data = await resp.json()
-                if data.get('code') == '00000':
-                    return True
-                msg = str(data.get('msg', '')).lower()
-                if "no need to change" in msg or "not changed" in msg or "same" in msg:
-                    return True
-                log(f"[BitgetOrder] Ошибка set_leverage {symbol}: {data}", level="WARNING")
+        for attempt in range(3):
+            try:
+                if not self.session:
+                    from utils import SessionManager
+                    self.session = await SessionManager().get_session()
+                    
+                endpoint = "/api/v2/mix/account/set-leverage"
+                body = {
+                    "symbol": symbol,
+                    "productType": "USDT-FUTURES",
+                    "marginCoin": "USDT",
+                    "leverage": str(leverage)
+                }
+                body_str = json.dumps(body)
+                now = str(int(time.time() * 1000))
+                sig = self._generate_signature(now, "POST", endpoint, body_str)
+                headers = {
+                    'ACCESS-KEY': self.api_key,
+                    'ACCESS-SIGN': sig,
+                    'ACCESS-TIMESTAMP': now,
+                    'ACCESS-PASSPHRASE': self.api_passphrase,
+                    'Content-Type': 'application/json'
+                }
+                url = f"https://api.bitget.com{endpoint}"
+                async with self.session.post(url, headers=headers, data=body_str) as resp:
+                    data = await resp.json()
+                    if data.get('code') == '00000':
+                        return True
+                    if str(data.get('code')) == '429':
+                        await asyncio.sleep(1.0 + attempt * 0.5)
+                        continue
+                    msg = str(data.get('msg', '')).lower()
+                    if "no need to change" in msg or "not changed" in msg or "same" in msg:
+                        return True
+                    log(f"[BitgetOrder] Ошибка set_leverage {symbol}: {data}", level="WARNING")
+                    return False
+            except Exception as e:
+                log(f"[BitgetOrder] Исключение set_leverage {symbol}: {e}", level="ERROR")
                 return False
-        except Exception as e:
-            log(f"[BitgetOrder] Исключение set_leverage {symbol}: {e}", level="ERROR")
-            return False
+        return False
 
     def get_executed_position(self, symbol: str, side: str):
         if self.position_stream:
