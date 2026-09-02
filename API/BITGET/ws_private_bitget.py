@@ -37,8 +37,8 @@ class BitgetPositionStream:
         if self.session:
             await self.session.close()
 
-    def start(self):
-        return asyncio.create_task(self.run())
+    async def start(self):
+        await self.run()
             
     def _generate_signature(self, timestamp: str) -> str:
         message = timestamp + "GET" + "/user/verify"
