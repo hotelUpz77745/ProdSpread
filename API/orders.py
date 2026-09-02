@@ -121,7 +121,7 @@ class BinanceOrder:
             raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_qty={raw_qty}, step_size={step_size}).")
 
 
-    async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None):
+    async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None, time_in_force: str = "IOC"):
         if not price or price <= 0:
             raise ValueError(f"[{symbol}] Reference price is required to calculate quantity")
             
@@ -151,7 +151,8 @@ class BinanceOrder:
         pos_side_str = f"&positionSide={position_side.upper()}" if position_side else ""
         
         if order_type.upper() == "LIMIT":
-            query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=LIMIT&timeInForce=IOC&quantity={qty_str}&price={price_str}&timestamp={timestamp}"
+            tif = (time_in_force or "IOC").upper()
+            query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=LIMIT&timeInForce={tif}&quantity={qty_str}&price={price_str}&timestamp={timestamp}"
         else:
             query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=MARKET&quantity={qty_str}&timestamp={timestamp}"
             
@@ -385,7 +386,7 @@ class KucoinOrder:
             raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_lots={raw_lots}, lot_size={lot_size}, multiplier={multiplier}).")
 
 
-    async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None):
+    async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None, time_in_force: str = "IOC"):
         if not price or price <= 0:
             raise ValueError(f"[{symbol}] Reference price is required to calculate quantity")
             
@@ -425,7 +426,7 @@ class KucoinOrder:
         
         if order_type.upper() == "LIMIT":
             body["type"] = "limit"
-            body["timeInForce"] = "IOC"
+            body["timeInForce"] = (time_in_force or "IOC").upper()
             body["price"] = price_str
         else:
             body["type"] = "market"
@@ -776,7 +777,7 @@ class BitgetOrder:
         if float(qty_str) <= 0:
             raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_qty={raw_qty}).")
 
-    async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None):
+    async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None, time_in_force: str = "IOC"):
         if not price or price <= 0:
             raise ValueError(f"[{symbol}] Reference price is required")
         if not self.symbol_info:
@@ -814,10 +815,14 @@ class BitgetOrder:
                 
         trade_side = "close" if is_close else "open"
 
+        mm = self.margin_settings["margin_type"].lower()
+        if mm == "cross":
+            mm = "crossed"
+
         body = {
             "symbol": symbol,
             "productType": "USDT-FUTURES",
-            "marginMode": self.margin_settings["margin_type"].lower(),
+            "marginMode": mm,
             "marginCoin": "USDT",
             "size": qty_str,
             "side": side.lower(),
@@ -827,7 +832,7 @@ class BitgetOrder:
         }
         if order_type.upper() == "LIMIT":
             body["price"] = price_str
-            body["force"] = "ioc"
+            body["force"] = (time_in_force or "IOC").lower()
             
         body_str = json.dumps(body)
         signature = self._generate_signature(now, "POST", endpoint, body_str)
@@ -844,17 +849,156 @@ class BitgetOrder:
         async with self.session.post(url, headers=headers, data=body_str) as resp:
             data = await resp.json()
             if data.get('code') != '00000':
+                msg = data.get('msg', str(data))
+                code_str = str(data.get('code'))
+                if "margin" in msg.lower() or "balance" in msg.lower() or code_str in ("40754", "43012", "40762"):
+                    raise InsufficientMarginError(f"Bitget API Error: {data}")
                 raise Exception(f"Bitget API Error: {data}")
             return data
 
     async def cancel_all_orders(self, symbol: str):
-        pass
+        if not self.api_key:
+            return
+        try:
+            if not self.session:
+                from utils import SessionManager
+                self.session = await SessionManager().get_session()
+                
+            endpoint_get = f"/api/v2/mix/order/orders-pending?symbol={symbol}&productType=USDT-FUTURES"
+            now = str(int(time.time() * 1000))
+            sig = self._generate_signature(now, "GET", endpoint_get)
+            headers = {
+                'ACCESS-KEY': self.api_key,
+                'ACCESS-SIGN': sig,
+                'ACCESS-TIMESTAMP': now,
+                'ACCESS-PASSPHRASE': self.api_passphrase
+            }
+            async with self.session.get(f"https://api.bitget.com{endpoint_get}", headers=headers) as resp:
+                data = await resp.json()
+                orders = data.get('data', {}).get('entrustedList', []) or []
+                
+            if not orders:
+                return
+                
+            order_ids = [str(o['orderId']) for o in orders if 'orderId' in o]
+            if not order_ids:
+                return
+                
+            if len(order_ids) == 1:
+                endpoint_cancel = "/api/v2/mix/order/cancel-order"
+                body = {
+                    "symbol": symbol,
+                    "productType": "USDT-FUTURES",
+                    "orderId": order_ids[0]
+                }
+            else:
+                endpoint_cancel = "/api/v2/mix/order/cancel-batch-orders"
+                body = {
+                    "symbol": symbol,
+                    "productType": "USDT-FUTURES",
+                    "orderIdList": order_ids
+                }
+                
+            now_c = str(int(time.time() * 1000))
+            body_str = json.dumps(body)
+            sig_c = self._generate_signature(now_c, "POST", endpoint_cancel, body_str)
+            headers_c = {
+                'ACCESS-KEY': self.api_key,
+                'ACCESS-SIGN': sig_c,
+                'ACCESS-TIMESTAMP': now_c,
+                'ACCESS-PASSPHRASE': self.api_passphrase,
+                'Content-Type': 'application/json'
+            }
+            async with self.session.post(f"https://api.bitget.com{endpoint_cancel}", headers=headers_c, data=body_str) as resp_c:
+                res_c = await resp_c.json()
+                if res_c.get('code') == '00000':
+                    log(f"[BitgetOrder] Отменены ордера по {symbol}: {order_ids}", level="INFO")
+                else:
+                    log(f"[BitgetOrder] Ошибка отмены ордеров {symbol}: {res_c}", level="WARNING")
+        except Exception as e:
+            log(f"[BitgetOrder] Ошибка отмены ордеров {symbol}: {e}", level="ERROR")
 
     async def set_margin_type(self, symbol: str, margin_type: str, leverage: int = None) -> bool:
-        return True
+        if not self.api_key:
+            return False
+        try:
+            if not self.session:
+                from utils import SessionManager
+                self.session = await SessionManager().get_session()
+                
+            mm = margin_type.lower()
+            if mm == "cross":
+                mm = "crossed"
+                
+            endpoint = "/api/v2/mix/account/set-margin-mode"
+            body = {
+                "symbol": symbol,
+                "productType": "USDT-FUTURES",
+                "marginCoin": "USDT",
+                "marginMode": mm
+            }
+            body_str = json.dumps(body)
+            now = str(int(time.time() * 1000))
+            sig = self._generate_signature(now, "POST", endpoint, body_str)
+            headers = {
+                'ACCESS-KEY': self.api_key,
+                'ACCESS-SIGN': sig,
+                'ACCESS-TIMESTAMP': now,
+                'ACCESS-PASSPHRASE': self.api_passphrase,
+                'Content-Type': 'application/json'
+            }
+            url = f"https://api.bitget.com{endpoint}"
+            async with self.session.post(url, headers=headers, data=body_str) as resp:
+                data = await resp.json()
+                if data.get('code') == '00000':
+                    return True
+                msg = str(data.get('msg', '')).lower()
+                if "no need to change" in msg or "not changed" in msg or "same" in msg:
+                    return True
+                log(f"[BitgetOrder] Ошибка set_margin_type {symbol}: {data}", level="WARNING")
+                return False
+        except Exception as e:
+            log(f"[BitgetOrder] Исключение set_margin_type {symbol}: {e}", level="ERROR")
+            return False
 
     async def set_leverage(self, symbol: str, leverage: int, **kwargs) -> bool:
-        return True
+        if not self.api_key:
+            return False
+        try:
+            if not self.session:
+                from utils import SessionManager
+                self.session = await SessionManager().get_session()
+                
+            endpoint = "/api/v2/mix/account/set-leverage"
+            body = {
+                "symbol": symbol,
+                "productType": "USDT-FUTURES",
+                "marginCoin": "USDT",
+                "leverage": str(leverage)
+            }
+            body_str = json.dumps(body)
+            now = str(int(time.time() * 1000))
+            sig = self._generate_signature(now, "POST", endpoint, body_str)
+            headers = {
+                'ACCESS-KEY': self.api_key,
+                'ACCESS-SIGN': sig,
+                'ACCESS-TIMESTAMP': now,
+                'ACCESS-PASSPHRASE': self.api_passphrase,
+                'Content-Type': 'application/json'
+            }
+            url = f"https://api.bitget.com{endpoint}"
+            async with self.session.post(url, headers=headers, data=body_str) as resp:
+                data = await resp.json()
+                if data.get('code') == '00000':
+                    return True
+                msg = str(data.get('msg', '')).lower()
+                if "no need to change" in msg or "not changed" in msg or "same" in msg:
+                    return True
+                log(f"[BitgetOrder] Ошибка set_leverage {symbol}: {data}", level="WARNING")
+                return False
+        except Exception as e:
+            log(f"[BitgetOrder] Исключение set_leverage {symbol}: {e}", level="ERROR")
+            return False
 
     def get_executed_position(self, symbol: str, side: str):
         if self.position_stream:

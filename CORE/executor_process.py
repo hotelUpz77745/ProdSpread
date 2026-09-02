@@ -92,6 +92,10 @@ class ExecutorProcess:
             bitget_passphrase=os.environ.get("BITGET_API_PASSPHRASE", "")
         )
         
+        self.order_execution_type = self.cfg["trading_rules"]["entry"]["order_execution_type"].upper()
+        self.min_fill_rate = float(self.cfg["trading_rules"]["entry"]["min_fill_rate"])
+        self.execution_pause = float(self.cfg["EXECUTION_PAUSE"])
+        
         self.pm = None
         self.analytics_map = {}
         self.banned_symbols = {}
@@ -162,8 +166,11 @@ class ExecutorProcess:
         native_long = self.coin_to_native.get(sym, {}).get(long_ex, sym)
         native_short = self.coin_to_native.get(sym, {}).get(short_ex, sym)
         
-        long_dist = float(self.cfg["trading_risks"][long_ex.lower()].get("limit_allow_distance", 1.1)) if long_ex in self.orders else 1.1
-        short_dist = float(self.cfg["trading_risks"][short_ex.lower()].get("limit_allow_distance", 1.1)) if short_ex in self.orders else 1.1
+        order_policy = self.order_execution_type
+        tif = "GTC" if order_policy == "LIMIT_GTC" else "IOC"
+
+        long_dist = float(self.cfg["trading_risks"][long_ex.lower()]["limit_allow_distance"]) if long_ex in self.orders else 1.1
+        short_dist = float(self.cfg["trading_risks"][short_ex.lower()]["limit_allow_distance"]) if short_ex in self.orders else 1.1
         
         price_long_limit = engine_res.get("long_avg_price") * long_dist
         size_long_usd = engine_res.get("long_qty") * price_long_limit
@@ -180,14 +187,18 @@ class ExecutorProcess:
         except Exception as e:
             log(f"[{sym}] 🚨 Ошибка валидации размера ордеров до входа: {e}", level="ERROR")
             self.ban_coin(sym, reason=f"Order Size Validation Error: {e}", duration_sec=3600)
+            if self.writer:
+                asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
+                    "route": route, "sym": sym, "long_ex": long_ex, "short_ex": short_ex
+                }))
             return
 
         tasks = []
         if long_ex in self.orders:
-            tasks.append(self.orders[long_ex].place_order(native_long, "BUY", size_long_usd, price_long_limit, position_side="LONG"))
+            tasks.append(self.orders[long_ex].place_order(native_long, "BUY", size_long_usd, price_long_limit, position_side="LONG", time_in_force=tif))
             
         if short_ex in self.orders:
-            tasks.append(self.orders[short_ex].place_order(native_short, "SELL", size_short_usd, price_short_limit, position_side="SHORT"))
+            tasks.append(self.orders[short_ex].place_order(native_short, "SELL", size_short_usd, price_short_limit, position_side="SHORT", time_in_force=tif))
             
         has_error = False
         if tasks:
@@ -197,13 +208,23 @@ class ExecutorProcess:
                     has_error = True
                     log(f"[{sym}] 🚨 Ошибка входа! Рассинхрон ног: {res}.", level="ERROR")
                     if isinstance(res, InsufficientMarginError):
-                        self.ban_coin(sym, reason="Недостаточно маржи (Binance Margin Error)", duration_sec=86400)
+                        self.ban_coin(sym, reason="Недостаточно маржи (Margin Error)", duration_sec=86400)
                     else:
                         self.ban_coin(sym, reason=str(res), duration_sec=3600)
                     break
                     
-        # Ждем только для того, чтобы WebSocket успел обновить локальный стейт позиций
-        await asyncio.sleep(self.cfg["EXECUTION_PAUSE"])
+        # Ждем EXECUTION_PAUSE
+        await asyncio.sleep(self.execution_pause)
+
+        # Если режим LIMIT_GTC, отменяем остатки неналитых ордеров
+        if order_policy == "LIMIT_GTC":
+            cancel_tasks = []
+            if long_ex in self.orders:
+                cancel_tasks.append(self.orders[long_ex].cancel_all_orders(native_long))
+            if short_ex in self.orders:
+                cancel_tasks.append(self.orders[short_ex].cancel_all_orders(native_short))
+            if cancel_tasks:
+                await asyncio.gather(*cancel_tasks, return_exceptions=True)
 
         long_pos = {"size": 0.0, "price": 0.0}
         short_pos = {"size": 0.0, "price": 0.0}
@@ -243,11 +264,19 @@ class ExecutorProcess:
         else:
             exec_res["short_executed_volume_rate"] = 0.0
             
-        min_fill = self.cfg["trading_rules"]["entry"].get("min_fill_rate", 0.85)
+        min_fill = self.min_fill_rate
         l_rate = exec_res["long_executed_volume_rate"]
         s_rate = exec_res["short_executed_volume_rate"]
         
         if has_error or l_rate < min_fill or s_rate < min_fill:
+            if long_pos["size"] == 0.0 and short_pos["size"] == 0.0:
+                log(f"[{sym}] ⚠️ Ни одна нога не была залита (0.0). Сброс входа.", level="WARNING")
+                if self.writer:
+                    asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
+                        "route": route, "sym": sym, "long_ex": long_ex, "short_ex": short_ex
+                    }))
+                return
+
             log(f"[{sym}] 🚨 Низкий fill_rate! L:{l_rate*100:.1f}% S:{s_rate*100:.1f}%. Экстренный выход!", level="ERROR")
             self.pm.confirm_entry(long_ex, short_ex, sym, exec_res, time.time())
             self.pm.lock_for_exit(route, sym)
@@ -303,6 +332,9 @@ class ExecutorProcess:
         exit_res = data.get("exit_res", {})
         emergency_data = data.get("data", {})
         
+        order_policy = self.order_execution_type
+        tif = "GTC" if order_policy == "LIMIT_GTC" else "IOC"
+        
         long_qty_to_close = long_pos.get("size", 0.0)
         if long_ex in self.orders and long_qty_to_close > 0:
             long_dist = float(self.cfg["trading_risks"][long_ex.lower()]["limit_allow_distance"])
@@ -319,7 +351,7 @@ class ExecutorProcess:
             if price_long > 0:
                 price_long_limit = price_long / long_dist
                 size_long_usd = long_qty_to_close * price_long_limit
-                tasks.append(self.orders[long_ex].place_order(native_long, "SELL", size_long_usd, price_long_limit, position_side="LONG"))
+                tasks.append(self.orders[long_ex].place_order(native_long, "SELL", size_long_usd, price_long_limit, position_side="LONG", time_in_force=tif))
             else:
                 log(f"[{sym}] 🚨 Не удалось определить цену закрытия для LONG {long_ex}", level="ERROR")
             
@@ -339,7 +371,7 @@ class ExecutorProcess:
             if price_short > 0:
                 price_short_limit = price_short * short_dist
                 size_short_usd = short_qty_to_close * price_short_limit
-                tasks.append(self.orders[short_ex].place_order(native_short, "BUY", size_short_usd, price_short_limit, position_side="SHORT"))
+                tasks.append(self.orders[short_ex].place_order(native_short, "BUY", size_short_usd, price_short_limit, position_side="SHORT", time_in_force=tif))
             else:
                 log(f"[{sym}] 🚨 Не удалось определить цену закрытия для SHORT {short_ex}", level="ERROR")
             
@@ -355,8 +387,18 @@ class ExecutorProcess:
                     self.pm.rollback_exit(route, sym)
                     return
                     
-        # Ждем только для того, чтобы WebSocket успел обновить локальный стейт позиций
-        await asyncio.sleep(self.cfg["EXECUTION_PAUSE"])
+        # Ждем EXECUTION_PAUSE
+        await asyncio.sleep(self.execution_pause)
+        
+        # Если режим LIMIT_GTC, отменяем остатки неналитых ордеров закрытия
+        if order_policy == "LIMIT_GTC":
+            cancel_tasks = []
+            if long_ex in self.orders:
+                cancel_tasks.append(self.orders[long_ex].cancel_all_orders(native_long))
+            if short_ex in self.orders:
+                cancel_tasks.append(self.orders[short_ex].cancel_all_orders(native_short))
+            if cancel_tasks:
+                await asyncio.gather(*cancel_tasks, return_exceptions=True)
         
         self.pm.confirm_exit(route, sym)
         if self.writer:

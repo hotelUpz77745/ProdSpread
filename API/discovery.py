@@ -127,6 +127,17 @@ class DiscoveryManager:
                 self.ws_routes[ex].append(native_ticker)
                 self.coin_to_native[coin][ex] = native_ticker
 
+        # Step 6: Подсчет и логирование общих символов по каждой активной связке
+        self.route_symbol_counts = {}
+        for route, is_active in ACTIVE_ROUTES.items():
+            if is_active:
+                parts = route.split("_")
+                if len(parts) == 2:
+                    ex1, ex2 = parts[0], parts[1]
+                    common = [c for c, exs in self.active_pairs_map.items() if ex1 in exs and ex2 in exs]
+                    self.route_symbol_counts[route] = len(common)
+                    logger.info(f"📊 Связка {route}: {len(common)} общих монет")
+
         logger.info(f"Topology built: {len(self.active_pairs_map)} valid coins across {len(needed_exchanges)} exchanges.")
 
 

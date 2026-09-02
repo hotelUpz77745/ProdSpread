@@ -92,14 +92,19 @@ class PositionManager:
         if self.route_state[route]["is_locked"]:
             return False
             
-        # Проверяем, нет ли уже открытой позиции по этой монете на этой связке
-        state = self.positions[route].get(sym)
-        if not state:
+        # Строгая проверка лимита бирж: current + pending не должен превышать max_positions
+        ex1_used = self.exchange_state[long_ex]["current"] + self.exchange_state[long_ex]["pending"]
+        ex2_used = self.exchange_state[short_ex]["current"] + self.exchange_state[short_ex]["pending"]
+        if ex1_used >= self.max_pos[long_ex] or ex2_used >= self.max_pos[short_ex]:
             return False
-            
-        if state["current_position"] or state["pending_action"] is not None:
-            return False
-            
+
+        # Глобальная проверка символа по ВСЕМ маршрутам:
+        # монета не должна быть открыта ни на одной из связок, и по ней не должно быть активных действий
+        for r in self.route_names:
+            st = self.positions[r].get(sym)
+            if st and (st["current_position"] or st["pending_action"] is not None):
+                return False
+                
         return True
         
     def lock_for_entry(self, long_ex: str, short_ex: str, sym: str, engine_res: dict):
@@ -148,16 +153,26 @@ class PositionManager:
             state["pending_action"] = None
             state["details"] = {}
             
-            self.exchange_state[long_ex]["pending"] -= 1
-            self.exchange_state[short_ex]["pending"] -= 1
+            self.exchange_state[long_ex]["pending"] = max(0, self.exchange_state[long_ex]["pending"] - 1)
+            self.exchange_state[short_ex]["pending"] = max(0, self.exchange_state[short_ex]["pending"] - 1)
             
             self._update_locks()
+            self._save_state()
 
     def lock_for_exit(self, route: str, sym: str):
         self.positions[route][sym]["pending_action"] = "CLOSE"
         
     def confirm_exit(self, route: str, sym: str):
-        state = self.positions[route][sym]
+        state = self.positions[route].get(sym)
+        if not state:
+            return
+            
+        # Если позиция еще была в стадии OPEN (аварийный сброс ноги при входе)
+        if state["pending_action"] == "OPEN":
+            long_ex, short_ex = route.split('_')
+            self.rollback_entry(long_ex, short_ex, sym)
+            return
+
         if state["pending_action"] != "CLOSE":
             return
             
@@ -170,8 +185,8 @@ class PositionManager:
         state["pending_action"] = None
         state["details"] = {}
         
-        self.exchange_state[long_ex]["current"] -= 1
-        self.exchange_state[short_ex]["current"] -= 1
+        self.exchange_state[long_ex]["current"] = max(0, self.exchange_state[long_ex]["current"] - 1)
+        self.exchange_state[short_ex]["current"] = max(0, self.exchange_state[short_ex]["current"] - 1)
         
         self._update_locks()
         self._save_state()

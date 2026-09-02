@@ -127,6 +127,11 @@ class Main:
                     exec_res = payload["exec_res"]
                     open_time = payload["open_time"]
                     self.pm.confirm_entry(exec_res["long_ex"], exec_res["short_ex"], sym, exec_res, open_time)
+                elif msg_type == "POS_FAILED":
+                    long_ex = payload["long_ex"]
+                    short_ex = payload["short_ex"]
+                    sym = payload["sym"]
+                    self.pm.rollback_entry(long_ex, short_ex, sym)
                 elif msg_type == "POS_CLOSED":
                     route = payload["route"]
                     sym = payload["sym"]
@@ -164,6 +169,9 @@ class Main:
         log("Initializing DiscoveryManager...", level="INFO")
         await self.discovery.build_topology(self.banned_symbols)
         
+        for r_name, r_count in getattr(self.discovery, "route_symbol_counts", {}).items():
+            log(f"[Topology] 📊 Связка {r_name}: {r_count} общих монет", level="INFO")
+            
         active_routes_cfg = self.cfg["active_routes"]
         self.route_names = list(active_routes_cfg.keys())
         self.active_routes_array = np.array([

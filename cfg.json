@@ -22,19 +22,19 @@
     },
     "trading_risks": {
         "binance": {
-            "paper_start_balance": 14.21,
+            "paper_start_balance": 14.61,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0005,
-            "volatility_discount_entry": 0.35,
+            "volatility_discount_entry": 0.60,
             "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0020,
             "max_positions": 1
         },
         "kucoin": {
-            "paper_start_balance": 11.87,
+            "paper_start_balance": 11.79,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0006,
-            "volatility_discount_entry": 0.35,
+            "volatility_discount_entry": 0.60,
             "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0020,
             "max_positions": 1
@@ -49,10 +49,10 @@
             "max_positions": 1
         },
         "bitget": {
-            "paper_start_balance": 15.0,
+            "paper_start_balance": 12.0,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0006,
-            "volatility_discount_entry": 0.35,
+            "volatility_discount_entry": 0.60,
             "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0020,
             "max_positions": 1
@@ -65,11 +65,11 @@
         "BITGET": 1000000.0
     },
     "active_routes": {
-        "BINANCE_KUCOIN": false,
+        "BINANCE_KUCOIN": true,
         "BINANCE_OKX": false,
         "BINANCE_BITGET": true,
         "KUCOIN_OKX": false,
-        "KUCOIN_BITGET": false,
+        "KUCOIN_BITGET": true,
         "OKX_BITGET": false
     },
     "setup_margin_leverage": true,
@@ -86,17 +86,21 @@
         },
         "OKX": {
             "leverage": 5,
-            "margin_type": "cross"
+            "margin_type": "cross",
+            "desc": "margin_type allowed values: isolated | cross"
         },
         "BITGET": {
-            "leverage": 5,
-            "margin_type": "cross"
+            "leverage": 20,
+            "margin_type": "crossed",
+            "desc": "margin_type allowed values: isolated | crossed"
         }
     },
     "trading_rules": {
         "entry": {
+            "order_execution_type": "LIMIT_GTC",
+            "order_execution_type_desc": "Allowed values: IOC | LIMIT_GTC",
             "max_desync_ms": null,
-            "spread_entry": 0.008,
+            "spread_entry": 0.007,
             "min_fill_rate": 0.5,
             "top_n_candidates": 6,
             "check_synthetic_exit": true,
