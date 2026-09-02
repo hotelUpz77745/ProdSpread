@@ -43,9 +43,11 @@ class PositionManager:
                 
             for route, sym_map in saved_positions.items():
                 if route not in self.positions:
-                    continue
+                    self.positions[route] = {}
+                    
                 for sym, state in sym_map.items():
-                    if sym in self.positions[route] and state.get("current_position"):
+                    # Только если позиция реально активна, мы её подгружаем
+                    if state.get("current_position"):
                         # Защита от старых/кривых стейтов - сбрасываем pending_action, если был крэш
                         state["pending_action"] = None
                         self.positions[route][sym] = state
