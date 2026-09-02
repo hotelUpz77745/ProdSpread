@@ -6,3 +6,4 @@ tests/
 CACHE/
 banned_symbols.json
 active_positions.json
+scratch/
