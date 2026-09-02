@@ -845,8 +845,15 @@ class BitgetOrder:
                 is_close = True
             elif p_side == "SHORT" and side.upper() == "BUY":
                 is_close = True
-                
-        trade_side = "close" if is_close else "open"
+
+        # Bitget v2 API: place-order с tradeSide="close" возвращает 22002.
+        # Для закрытия используем специальный эндпоинт close-positions.
+        if is_close and position_side:
+            hold = position_side.upper()
+            if hold in ("LONG", "SHORT"):
+                return await self._close_position(symbol, hold.lower())
+
+        trade_side = "open"
 
         mm = self.margin_settings["margin_type"].lower()
         if mm == "cross":
@@ -887,6 +894,33 @@ class BitgetOrder:
                 if "margin" in msg.lower() or "balance" in msg.lower() or code_str in ("40754", "43012", "40762"):
                     raise InsufficientMarginError(f"Bitget API Error: {data}")
                 raise Exception(f"Bitget API Error: {data}")
+            return data
+
+    async def _close_position(self, symbol: str, hold_side: str):
+        """Закрытие позиции через специальный эндпоинт Bitget close-positions."""
+        endpoint = "/api/v2/mix/order/close-positions"
+        now = str(int(time.time() * 1000))
+        body = {
+            "symbol": symbol,
+            "productType": "USDT-FUTURES",
+            "holdSide": hold_side
+        }
+        body_str = json.dumps(body)
+        signature = self._generate_signature(now, "POST", endpoint, body_str)
+        headers = {
+            'ACCESS-KEY': self.api_key,
+            'ACCESS-SIGN': signature,
+            'ACCESS-TIMESTAMP': now,
+            'ACCESS-PASSPHRASE': self.api_passphrase,
+            'Content-Type': 'application/json'
+        }
+        url = f"https://api.bitget.com{endpoint}"
+        async with self.session.post(url, headers=headers, data=body_str) as resp:
+            data = await resp.json()
+            if data.get('code') != '00000':
+                msg = data.get('msg', str(data))
+                raise Exception(f"Bitget API Error: {data}")
+            log(f"[BitgetOrder] Позиция {symbol} ({hold_side}) закрыта: {data}", level="INFO")
             return data
 
     async def cancel_all_orders(self, symbol: str):
