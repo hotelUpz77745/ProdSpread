@@ -117,37 +117,37 @@
                 },
                 {
                     "index": 1,
-                    "seconds": 5,
+                    "seconds": 15,
                     "target_val": 0.0035
                 },
                 {
                     "index": 2,
-                    "seconds": 15,
+                    "seconds": 60,
                     "target_val": 0.0025
                 },
                 {
                     "index": 3,
-                    "seconds": 30,
+                    "seconds": 300,
                     "target_val": 0.0015
                 },
                 {
                     "index": 4,
-                    "seconds": 60,
-                    "target_val": -0.00
+                    "seconds": 900,
+                    "target_val": 0.0005
                 },
                 {
                     "index": 5,
-                    "seconds": 180,
-                    "target_val": -0.002
+                    "seconds": 1800,
+                    "target_val": -0.001
                 },
                 {
                     "index": 6,
-                    "seconds": 360,
-                    "target_val": -0.004
+                    "seconds": 3600,
+                    "target_val": -0.003
                 },
                 {
                     "index": 7,
-                    "seconds": 780,
+                    "seconds": 7200,
                     "target_val": -999.0
                 }
             ]
