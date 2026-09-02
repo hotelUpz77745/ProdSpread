@@ -65,11 +65,11 @@
         "BITGET": 1000000.0
     },
     "active_routes": {
-        "BINANCE_KUCOIN": true,
+        "BINANCE_KUCOIN": false,
         "BINANCE_OKX": false,
         "BINANCE_BITGET": true,
         "KUCOIN_OKX": false,
-        "KUCOIN_BITGET": true,
+        "KUCOIN_BITGET": false,
         "OKX_BITGET": false
     },
     "setup_margin_leverage": true,

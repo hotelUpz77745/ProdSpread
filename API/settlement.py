@@ -16,12 +16,16 @@ class ExchangeSettlement:
     def __init__(self, 
                  binance_key: str, binance_secret: str,
                  kucoin_key: str, kucoin_secret: str, kucoin_passphrase: str,
+                 bitget_key: str = "", bitget_secret: str = "", bitget_passphrase: str = "",
                  session: Optional[aiohttp.ClientSession] = None):
         self.binance_key = binance_key
         self.binance_secret = binance_secret
         self.kucoin_key = kucoin_key
         self.kucoin_secret = kucoin_secret
         self.kucoin_passphrase = kucoin_passphrase
+        self.bitget_key = bitget_key
+        self.bitget_secret = bitget_secret
+        self.bitget_passphrase = bitget_passphrase
         self._session = session
         self._bnb_price_cache = {"price": 0.0, "ts": 0.0}
 
@@ -159,6 +163,62 @@ class ExchangeSettlement:
 
         return {"realized_pnl": 0.0, "commission": 0.0, "net_pnl": 0.0}
 
+    def _generate_bitget_signature(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
+        message = timestamp + method.upper() + request_path + body
+        mac = hmac.new(bytes(self.bitget_secret, encoding='utf8'), bytes(message, encoding='utf-8'), digestmod=hashlib.sha256)
+        return base64.b64encode(mac.digest()).decode('utf-8')
+
+    async def get_bitget_position_pnl(self, symbol: str, start_time_ms: int) -> Dict[str, Any]:
+        """
+        Запрашивает историю закрытых позиций на Bitget (/api/v2/mix/position/history-position).
+        Поле `netProfit` на Bitget УЖЕ включает в себя комиссии и фандинг.
+        """
+        if not self.bitget_key or not self.bitget_secret:
+            return {"realized_pnl": 0.0, "commission": 0.0, "net_pnl": 0.0}
+
+        try:
+            session = await self._get_session()
+            now = str(int(time.time() * 1000))
+            clean_symbol = symbol.replace("_UMCBL", "").strip().upper()
+            endpoint = f"/api/v2/mix/position/history-position?productType=USDT-FUTURES&symbol={clean_symbol}&pageSize=5"
+            sig = self._generate_bitget_signature(now, "GET", endpoint)
+
+            headers = {
+                'ACCESS-KEY': self.bitget_key,
+                'ACCESS-SIGN': sig,
+                'ACCESS-TIMESTAMP': now,
+                'ACCESS-PASSPHRASE': self.bitget_passphrase,
+                'Content-Type': 'application/json'
+            }
+            url = f"https://api.bitget.com{endpoint}"
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("code") == "00000" and data.get("data"):
+                        items = data["data"].get("list", [])
+                        for item in items:
+                            if item.get("symbol") == clean_symbol:
+                                u_time = int(item.get("uTime") or item.get("cTime") or 0)
+                                if u_time >= (start_time_ms - 3000):
+                                    net_pnl = float(item.get("netProfit", 0.0))
+                                    open_fee = float(item.get("openFeeTotal", 0.0))
+                                    close_fee = float(item.get("closeFeeTotal", 0.0))
+                                    gross_pnl = float(item.get("cumRealisedPnl", 0.0))
+                                    return {
+                                        "realized_pnl": gross_pnl,
+                                        "commission": open_fee + close_fee,
+                                        "net_pnl": net_pnl,
+                                        "close_price": float(item.get("closePriceAvg", 0.0)),
+                                        "open_price": float(item.get("openPriceAvg", 0.0))
+                                    }
+                else:
+                    err = await resp.text()
+                    log(f"[Settlement] Bitget history-position error ({resp.status}): {err}", level="WARNING")
+        except Exception as e:
+            log(f"[Settlement] Bitget history-position exception: {e}", level="ERROR")
+
+        return {"realized_pnl": 0.0, "commission": 0.0, "net_pnl": 0.0}
+
     async def settle_trade(self, 
                            sym: str, 
                            native_long: str, 
@@ -180,6 +240,8 @@ class ExchangeSettlement:
             tasks.append(self.get_binance_trade_pnl(native_long, open_time_ms, position_side="LONG"))
         elif long_ex.upper() == "KUCOIN":
             tasks.append(self.get_kucoin_position_pnl(native_long, open_time_ms))
+        elif long_ex.upper() == "BITGET":
+            tasks.append(self.get_bitget_position_pnl(native_long, open_time_ms))
         else:
             tasks.append(asyncio.sleep(0, result={"realized_pnl": 0.0, "commission": 0.0, "net_pnl": 0.0}))
 
@@ -187,6 +249,8 @@ class ExchangeSettlement:
             tasks.append(self.get_binance_trade_pnl(native_short, open_time_ms, position_side="SHORT"))
         elif short_ex.upper() == "KUCOIN":
             tasks.append(self.get_kucoin_position_pnl(native_short, open_time_ms))
+        elif short_ex.upper() == "BITGET":
+            tasks.append(self.get_bitget_position_pnl(native_short, open_time_ms))
         else:
             tasks.append(asyncio.sleep(0, result={"realized_pnl": 0.0, "commission": 0.0, "net_pnl": 0.0}))
 

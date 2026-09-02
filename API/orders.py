@@ -725,13 +725,18 @@ class OkxOrder:
         return {"size": 0.0, "price": 0.0}
 
 class BitgetOrder:
-    def __init__(self, api_key: str, api_secret: str, api_passphrase: str, margin_settings: dict, session):
+    def __init__(self, api_key: str, api_secret: str, api_passphrase: str, margin_settings: dict, session=None, position_stream=None):
         self.api_key = api_key
         self.api_secret = api_secret
         self.api_passphrase = api_passphrase
         self.margin_settings = margin_settings
         self.session = session
+        self.position_stream = position_stream
         self.symbol_info = []
+
+    def start(self):
+        self._bg_task = asyncio.create_task(self.update_symbol_info())
+        return self._bg_task
 
     def _generate_signature(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
         message = timestamp + method.upper() + request_path + body
@@ -739,11 +744,17 @@ class BitgetOrder:
         return base64.b64encode(mac.digest()).decode('utf-8')
 
     async def update_symbol_info(self):
+        if not self.session:
+            from utils import SessionManager
+            self.session = await SessionManager().get_session()
         url = "https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES"
-        async with self.session.get(url) as resp:
-            data = await resp.json()
-            if data.get("code") == "00000":
-                self.symbol_info = data.get("data", [])
+        try:
+            async with self.session.get(url) as resp:
+                data = await resp.json()
+                if data.get("code") == "00000":
+                    self.symbol_info = data.get("data", [])
+        except Exception as e:
+            log(f"[BitgetOrder] Failed to update symbol info: {e}", level="ERROR")
 
     def check_order_size(self, symbol: str, size_usd: float, price: float):
         if not price or price <= 0:
@@ -769,6 +780,8 @@ class BitgetOrder:
         if not price or price <= 0:
             raise ValueError(f"[{symbol}] Reference price is required")
         if not self.symbol_info:
+            await self.update_symbol_info()
+        if not self.symbol_info:
             raise ValueError(f"[{symbol}] Specs not loaded")
             
         symbol_data = next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
@@ -789,6 +802,18 @@ class BitgetOrder:
         endpoint = "/api/v2/mix/order/place-order"
         now = str(int(time.time() * 1000))
         
+        is_close = False
+        if position_side:
+            p_side = position_side.upper()
+            if p_side in ("REDUCE", "CLOSE"):
+                is_close = True
+            elif p_side == "LONG" and side.upper() == "SELL":
+                is_close = True
+            elif p_side == "SHORT" and side.upper() == "BUY":
+                is_close = True
+                
+        trade_side = "close" if is_close else "open"
+
         body = {
             "symbol": symbol,
             "productType": "USDT-FUTURES",
@@ -796,7 +821,7 @@ class BitgetOrder:
             "marginCoin": "USDT",
             "size": qty_str,
             "side": side.lower(),
-            "tradeSide": "open" if not position_side else ("close" if position_side.lower() == "reduce" else "open"),
+            "tradeSide": trade_side,
             "orderType": order_type.lower(),
             "clientOid": str(uuid.uuid4())
         }
@@ -832,9 +857,57 @@ class BitgetOrder:
         return True
 
     def get_executed_position(self, symbol: str, side: str):
+        if self.position_stream:
+            return self.position_stream.get_position(symbol, side)
         return {"size": 0.0, "price": 0.0}
 
-    async def get_exact_position(self, symbol: str, side: str):
+    async def get_position_rest(self, symbol: str, side: str = None) -> dict:
+        if not self.api_key:
+            return {"size": 0.0, "price": 0.0}
+        try:
+            if not self.session:
+                from utils import SessionManager
+                self.session = await SessionManager().get_session()
+            now = str(int(time.time() * 1000))
+            endpoint = f"/api/v2/mix/position/single-position?productType=USDT-FUTURES&symbol={symbol}&marginCoin=USDT"
+            signature = self._generate_signature(now, "GET", endpoint)
+            headers = {
+                'ACCESS-KEY': self.api_key,
+                'ACCESS-SIGN': signature,
+                'ACCESS-TIMESTAMP': now,
+                'ACCESS-PASSPHRASE': self.api_passphrase,
+                'Content-Type': 'application/json'
+            }
+            url = f"https://api.bitget.com{endpoint}"
+            async with self.session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("code") == "00000" and data.get("data"):
+                        for p in data["data"]:
+                            pos_side = (p.get("holdSide") or p.get("posSide") or "").upper()
+                            if side and pos_side != side.upper():
+                                continue
+                            amt = abs(float(p.get("total", 0.0)))
+                            price = float(p.get("openPriceAvg") or p.get("averageOpenPrice") or p.get("breakEvenPrice") or 0.0)
+                            if amt > 0:
+                                if self.position_stream:
+                                    if symbol not in self.position_stream.positions:
+                                        self.position_stream.positions[symbol] = {
+                                            "LONG": {"size": 0.0, "price": 0.0},
+                                            "SHORT": {"size": 0.0, "price": 0.0}
+                                        }
+                                    self.position_stream.positions[symbol][pos_side] = {"size": amt, "price": price}
+                                return {"size": amt, "price": price}
+        except Exception as e:
+            log(f"[BitgetOrder] get_position_rest error: {e}", level="WARNING")
+        return {"size": 0.0, "price": 0.0}
+
+    async def get_exact_position(self, symbol: str, side: str) -> dict:
+        pos = await self.get_position_rest(symbol, side)
+        if pos.get("size", 0.0) > 0:
+            return pos
+        if self.position_stream and symbol in self.position_stream.positions:
+            self.position_stream.positions[symbol][side.upper()] = {"size": 0.0, "price": 0.0}
         return {"size": 0.0, "price": 0.0}
 
 

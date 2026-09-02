@@ -74,8 +74,9 @@ class ExecutorProcess:
                 api_key=os.environ.get("BITGET_API_KEY", ""),
                 api_secret=os.environ.get("BITGET_API_SECRET", ""),
                 api_passphrase=os.environ.get("BITGET_API_PASSPHRASE", ""),
-                margin_settings=self.cfg.get("margin_settings", {}).get("BITGET", {"margin_type": "crossed", "leverage": 10}),
-                session=None
+                margin_settings=self.cfg["margin_settings"]["BITGET"],
+                session=None,
+                position_stream=self.bitget_pos_stream
             )
         }
         
@@ -85,7 +86,10 @@ class ExecutorProcess:
             binance_secret=os.environ.get("BINANCE_API_SECRET", ""),
             kucoin_key=os.environ.get("KUCOIN_API_KEY", ""),
             kucoin_secret=os.environ.get("KUCOIN_API_SECRET", ""),
-            kucoin_passphrase=os.environ.get("KUCOIN_API_PASSPHRASE", "")
+            kucoin_passphrase=os.environ.get("KUCOIN_API_PASSPHRASE", ""),
+            bitget_key=os.environ.get("BITGET_API_KEY", ""),
+            bitget_secret=os.environ.get("BITGET_API_SECRET", ""),
+            bitget_passphrase=os.environ.get("BITGET_API_PASSPHRASE", "")
         )
         
         self.pm = None
@@ -136,13 +140,14 @@ class ExecutorProcess:
         
         self.orders["BINANCE"].start()
         self.orders["KUCOIN"].start()
+        self.orders["BITGET"].start()
         
         if os.environ.get("BINANCE_API_KEY"):
             asyncio.create_task(self.binance_pos_stream.start())
         if os.environ.get("KUCOIN_API_KEY"):
             asyncio.create_task(self.kucoin_pos_stream.start())
         if os.environ.get("BITGET_API_KEY"):
-            asyncio.create_task(self.bitget_pos_stream.run())
+            asyncio.create_task(self.bitget_pos_stream.start())
 
     async def execute_open(self, data: dict):
         sym = data["sym"]

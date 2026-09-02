@@ -48,9 +48,12 @@ async def main():
         size_usd = 6.0
         
         # We need a reference price. Let's fetch it from public API for testing
-        async with session.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={symbol}_UMCBL&productType=USDT-FUTURES") as resp:
+        async with session.get(f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={symbol}&productType=USDT-FUTURES") as resp:
             data = await resp.json()
-            price = float(data['data'][0]['lastPr'])
+            if isinstance(data.get('data'), list):
+                price = float(data['data'][0]['lastPr'])
+            else:
+                price = float(data['data']['lastPr'])
             
         print(f"Current price of {symbol} is {price}")
         
