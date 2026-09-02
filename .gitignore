@@ -4,3 +4,5 @@ logs/
 tests/
 .venv/
 CACHE/
+banned_symbols.json
+active_positions.json
