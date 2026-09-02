@@ -22,7 +22,7 @@
     },
     "trading_risks": {
         "binance": {
-            "paper_start_balance": 14.61,
+            "paper_start_balance": 14.86,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0005,
             "volatility_discount_entry": 0.35,
@@ -31,7 +31,7 @@
             "max_positions": 1
         },
         "kucoin": {
-            "paper_start_balance": 11.79,
+            "paper_start_balance": 11.22,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.35,
@@ -49,7 +49,7 @@
             "max_positions": 1
         },
         "bitget": {
-            "paper_start_balance": 12.0,
+            "paper_start_balance": 11.99,
             "trade_size_usd": 50.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.35,
@@ -137,12 +137,12 @@
                 },
                 {
                     "index": 5,
-                    "seconds": 600,
+                    "seconds": 780,
                     "target_val": -0.0010
                 },
                 {
                     "index": 6,
-                    "seconds": 900,
+                    "seconds": 1260,
                     "target_val": -999.0
                 }
             ]
@@ -155,7 +155,7 @@
         },
         "funding_filter": {
             "is_active": true,
-            "skip_if_less_than_sec": 300,
+            "skip_if_less_than_sec": 600,
             "skip_if_after_while_sec": 300
         }
     }
