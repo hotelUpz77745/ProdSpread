@@ -380,7 +380,7 @@ class ExecutorProcess:
             for res in results:
                 if isinstance(res, Exception):
                     err_str = str(res).lower()
-                    if "position" in err_str or "reduce" in err_str or "margin" in err_str or "no open" in err_str:
+                    if "position" in err_str or "reduce" in err_str or "no open" in err_str:
                         log(f"[{sym}] ⚠️ Ордер на закрытие отклонен (поза уже пуста): {res}", level="WARNING")
                         continue
                     log(f"[{sym}] 🚨 Ошибка закрытия: {res}", level="ERROR")
