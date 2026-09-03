@@ -106,14 +106,7 @@
             "check_synthetic_exit": true,
             "check_synthetic_slippage": true,
             "max_slippage_ratio": 0.5,
-            "hard_max_slippage": 0.015,
-            "unwind_rest_pause_sec": 0.300,
-            "close_rest_pause_sec": 0.200,
-            "asymmetric_fill_ban_sec": 1800,
-            "order_validation_ban_sec": 3600,
-            "margin_error_ban_sec": 86400,
-            "emergency_unwind_max_attempts": 3,
-            "close_verification_max_attempts": 3
+            "hard_max_slippage": 0.015
         },
         "exit": {
             "profit_decay_map": [

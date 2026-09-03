@@ -61,13 +61,6 @@ class PositionFSM:
         self.order_policy = self.cfg["trading_rules"]["entry"]["order_execution_type"].upper()
         self.min_fill_rate = float(self.cfg["trading_rules"]["entry"]["min_fill_rate"])
         self.execution_pause = float(self.cfg["EXECUTION_PAUSE"])
-        self.unwind_rest_pause_sec = float(self.cfg["trading_rules"]["entry"]["unwind_rest_pause_sec"])
-        self.close_rest_pause_sec = float(self.cfg["trading_rules"]["entry"]["close_rest_pause_sec"])
-        self.asymmetric_fill_ban_sec = int(self.cfg["trading_rules"]["entry"]["asymmetric_fill_ban_sec"])
-        self.order_validation_ban_sec = int(self.cfg["trading_rules"]["entry"]["order_validation_ban_sec"])
-        self.margin_error_ban_sec = int(self.cfg["trading_rules"]["entry"]["margin_error_ban_sec"])
-        self.emergency_unwind_max_attempts = int(self.cfg["trading_rules"]["entry"]["emergency_unwind_max_attempts"])
-        self.close_verification_max_attempts = int(self.cfg["trading_rules"]["entry"]["close_verification_max_attempts"])
 
         self.exec_res: Dict[str, Any] = {}
         self.long_pos: Dict[str, float] = {"size": 0.0, "price": 0.0}
@@ -83,7 +76,7 @@ class PositionFSM:
     async def run_open(self) -> bool:
         """
         Запуск пайплайна открытия позиции:
-        IDLE -> SUBMITTING -> [RESTING_BOOK -> CANCELLING (только для LIMIT_GTC)] -> VERIFYING_FILL -> ACTIVE_HEDGED / EMERGENCY_UNWIND / ABORTED
+        IDLE -> SUBMITTING -> RESTING_BOOK -> [CANCELLING (только для LIMIT_GTC)] -> VERIFYING_FILL -> ACTIVE_HEDGED / EMERGENCY_UNWIND / ABORTED
         """
         self._set_state(PositionState.SUBMITTING)
         spread_val = self.engine_res.get("vwap_spread", 0.0)
@@ -107,7 +100,7 @@ class PositionFSM:
                 self.orders[self.short_ex].check_order_size(self.native_short, size_short_usd, price_short_limit)
         except Exception as e:
             log(f"[{self.sym}] 🚨 Ошибка валидации размера ордеров до входа: {e}", level="ERROR")
-            self.ban_coin_cb(self.sym, reason=f"Order Size Validation Error: {e}", duration_sec=self.order_validation_ban_sec)
+            self.ban_coin_cb(self.sym, reason=f"Order Size Validation Error: {e}", duration_sec=3600)
             self._set_state(PositionState.FAILED)
             if self.writer:
                 asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
@@ -134,9 +127,9 @@ class PositionFSM:
                     has_submit_error = True
                     log(f"[{self.sym}] 🚨 Ошибка входа! Рассинхрон ног: {res}.", level="ERROR")
                     if isinstance(res, InsufficientMarginError):
-                        self.ban_coin_cb(self.sym, reason="Недостаточно маржи (Margin Error)", duration_sec=self.margin_error_ban_sec)
+                        self.ban_coin_cb(self.sym, reason="Недостаточно маржи (Margin Error)", duration_sec=86400)
                     else:
-                        self.ban_coin_cb(self.sym, reason=str(res), duration_sec=self.order_validation_ban_sec)
+                        self.ban_coin_cb(self.sym, reason=str(res), duration_sec=3600)
                     break
 
         if has_submit_error:
@@ -153,13 +146,13 @@ class PositionFSM:
             await self._emergency_unwind()
             return False
 
-        # 3. Фаза ожидания в стакане (RESTING_BOOK)
-        # СТРОГО ПОСЛЕ завершения await отправки ордеров ожидаем паузу EXECUTION_PAUSE
-        if self.order_policy == "LIMIT_GTC":
-            self._set_state(PositionState.RESTING_BOOK)
-            await asyncio.sleep(self.execution_pause)
+        # 3. Фаза ожидания налива (RESTING_BOOK)
+        # Пауза EXECUTION_PAUSE выдерживается ОБЯЗАТЕЛЬНО как для LIMIT_GTC, так и для IOC!
+        self._set_state(PositionState.RESTING_BOOK)
+        await asyncio.sleep(self.execution_pause)
 
-            # 4. Фаза отмены остатков (CANCELLING) - БЛОКИРУЮЩАЯ
+        # 4. Фаза отмены остатков (CANCELLING) - только для LIMIT_GTC (в IOC неналитое сжигает сама биржа)
+        if self.order_policy == "LIMIT_GTC":
             self._set_state(PositionState.CANCELLING)
             cancel_tasks = []
             if self.long_ex in self.orders:
@@ -169,7 +162,8 @@ class PositionFSM:
             if cancel_tasks:
                 await asyncio.gather(*cancel_tasks, return_exceptions=True)
 
-        # 5. Фаза верификации налива (VERIFYING_FILL) - ПАРСИМ ИЗ СТАТЫ ВЕБСОКЕТА
+        # 5. Фаза верификации налива (VERIFYING_FILL) - ПАРСИМ ИСКЛЮЧИТЕЛЬНО ИЗ СТАТЫ ВЕБСОКЕТА
+        # На горячем пути — НИКАКИХ медленных REST-запросов, только локальный кэш стримов!
         self._set_state(PositionState.VERIFYING_FILL)
         req_long_qty = self.engine_res.get("long_qty", 0.0)
         req_short_qty = self.engine_res.get("short_qty", 0.0)
@@ -233,7 +227,7 @@ class PositionFSM:
         self._set_state(PositionState.EMERGENCY_UNWIND)
         log(f"[{self.sym}] Запуск зачистки (Emergency Unwind) перед завершением итерации...", level="WARNING")
 
-        for attempt in range(self.emergency_unwind_max_attempts):
+        for attempt in range(3):
             # Точечный GET-запрос посимвольно по обеим участвовавшим биржам
             verify_tasks = []
             long_idx = -1
@@ -282,10 +276,10 @@ class PositionFSM:
 
             if close_tasks:
                 await asyncio.gather(*close_tasks, return_exceptions=True)
-            await asyncio.sleep(self.unwind_rest_pause_sec)
+            await asyncio.sleep(self.execution_pause)
 
-            if attempt == self.emergency_unwind_max_attempts - 1:
-                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позиции после {self.emergency_unwind_max_attempts} попыток Unwind! Остаток L:{l_rem} S:{s_rem}.", level="ERROR")
+            if attempt == 2:
+                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позиции после 3 попыток Unwind! Остаток L:{l_rem} S:{s_rem}.", level="ERROR")
                 self._set_state(PositionState.CLOSING)
                 return
 
@@ -300,7 +294,7 @@ class PositionFSM:
             }))
 
         # Отправляем монету во временный бан, чтобы бот не входил снова в асимметричный стакан
-        self.ban_coin_cb(self.sym, reason="Асимметрия налива (сброс входа)", duration_sec=self.asymmetric_fill_ban_sec)
+        self.ban_coin_cb(self.sym, reason="Асимметрия налива (сброс входа)", duration_sec=1800)
 
     async def run_close(self, exit_res: Dict[str, Any], reason: str = "PROFIT_DECAY") -> bool:
         """
@@ -347,9 +341,9 @@ class PositionFSM:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Контрольный опрос и подчистка остатков (до self.close_verification_max_attempts попыток до подтверждения строго 0.0)
-        for attempt in range(self.close_verification_max_attempts):
-            await asyncio.sleep(self.close_rest_pause_sec)
+        # Контрольный опрос и подчистка остатков (до 3 попыток до подтверждения строго 0.0)
+        for attempt in range(3):
+            await asyncio.sleep(self.execution_pause)
             l_check = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0}
             s_check = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT") if self.short_ex in self.orders else {"size": 0.0}
 
@@ -377,8 +371,8 @@ class PositionFSM:
                     ))
                 return True
                 
-            if attempt == self.close_verification_max_attempts - 1:
-                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позицию (run_close) после {self.close_verification_max_attempts} попыток очистки! Остаток L:{l_rem} S:{s_rem}. Позиция остается в памяти!", level="ERROR")
+            if attempt == 2:
+                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позицию (run_close) после 3 попыток очистки! Остаток L:{l_rem} S:{s_rem}. Позиция остается в памяти!", level="ERROR")
                 self._set_state(PositionState.CLOSING)
                 return False
 
