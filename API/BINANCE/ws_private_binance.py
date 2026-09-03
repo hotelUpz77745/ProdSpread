@@ -1,7 +1,7 @@
-# ==============================================================================
-# Path: API/BINANCE/ws_private_binance.py
-# Role: Connection to User Data Stream for Binance Futures and Position parsing
-# ==============================================================================
+# ============================================================
+# FILE: API/BINANCE/ws_private_binance.py
+# ROLE: Connection to User Data Stream for Binance Futures and Position parsing
+# ============================================================
 
 import asyncio
 import aiohttp
@@ -114,13 +114,11 @@ class BinancePositionStream:
             self.websocket = await self.session.ws_connect(
                 self.ws_url,
                 autoping=True,
-                max_msg_size=0,
                 headers={
                     "User-Agent": "Mozilla/5.0",
-                    "Origin": "https://fapi.binance.com",
-                    "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits"
+                    "Origin": "https://fapi.binance.com"
                 },
-                heartbeat=30.0
+                heartbeat=15.0
             )
             self.is_connected = True
             log(f"[BINANCE WS_PRIVATE] Connected successfully.", level="INFO")
@@ -145,6 +143,30 @@ class BinancePositionStream:
             self.listen_mgr = None
 
         log("BinancePositionStream: WS disconnected", level="INFO")
+
+    async def _handle_order_update(self, data: dict):
+        o = data.get("o", {})
+        raw_symbol = o.get("s", "")
+        symbol = normalize_symbol(raw_symbol)
+        if not symbol:
+            return
+
+        pos_side_raw = (o.get("ps") or "").upper()
+        if not pos_side_raw:
+            return
+
+        order_status = o.get("X", "")
+        cum_qty = float(o.get("z", 0.0))
+        avg_price = float(o.get("ap", 0.0))
+
+        if symbol not in self.positions:
+            self.positions[symbol] = {"LONG": {"size": 0.0, "price": 0.0}, "SHORT": {"size": 0.0, "price": 0.0}}
+
+        if order_status in ("FILLED", "PARTIALLY_FILLED") and cum_qty > 0:
+            self.positions[symbol][pos_side_raw] = {
+                "size": cum_qty,
+                "price": avg_price
+            }
 
     async def _handle_account_update(self, data: dict):
         acc = data.get("a", {})
@@ -182,6 +204,7 @@ class BinancePositionStream:
                 continue
 
             if msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                log(f"[BINANCE WS_PRIVATE] WebSocket closed by server: type={msg.type}, extra={getattr(msg, 'extra', None)}, data={getattr(msg, 'data', None)}", level="WARNING")
                 raise RuntimeError("ws_closed")
 
             if msg.type != aiohttp.WSMsgType.TEXT:
@@ -198,6 +221,8 @@ class BinancePositionStream:
 
             if etype == "ACCOUNT_UPDATE":
                 await self._handle_account_update(data)
+            elif etype == "ORDER_TRADE_UPDATE":
+                await self._handle_order_update(data)
 
     async def start(self):
         self._external_stop = False

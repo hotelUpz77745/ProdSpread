@@ -62,24 +62,27 @@ async def test_adapters():
         data = await resp.json()
         test_price = float(data["price"])
 
-    price_long_limit = test_price * 0.95 # Safe limit below market
-    price_short_limit = test_price * 1.05 # Safe limit above market
+    import json
+    with open("cfg.json", "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    execution_pause = float(cfg["EXECUTION_PAUSE"])
 
-    print(f"--- Тестирование входа (LIMIT GTC, EXECUTION_PAUSE=0.3) ---")
+    price_long_limit = test_price * 0.50 # Deep limit below market (safe, will not fill)
+    price_short_limit = test_price * 1.50 # Deep limit above market (safe, will not fill)
+
+    print(f"--- Тестирование входа (LIMIT GTC, EXECUTION_PAUSE={execution_pause}с) ---")
     
     tasks = []
     tasks.append(binance.place_order(test_symbol, "BUY", test_size_usd, price_long_limit, position_side="LONG", time_in_force="GTC"))
     tasks.append(bitget.place_order(test_symbol, "SELL", test_size_usd, price_short_limit, position_side="SHORT", time_in_force="GTC"))
-    # Kucoin usually uses XRPUSDTM for futures, but orders.py might handle suffix
-    # Let's test Kucoin as BUY just for testing limit
     tasks.append(kucoin.place_order(f"{test_symbol}M", "BUY", test_size_usd, price_long_limit, position_side="LONG", time_in_force="GTC"))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for i, res in enumerate(results):
         print(f"Leg {i} Place Result: {res}")
 
-    print("Ожидание 0.3с (как в EXECUTION_PAUSE)...")
-    await asyncio.sleep(0.3)
+    print(f"Ожидание {execution_pause}с (строго из EXECUTION_PAUSE)...")
+    await asyncio.sleep(execution_pause)
 
     print("--- Тестирование CANCELLING ---")
     cancel_tasks = [
@@ -91,15 +94,11 @@ async def test_adapters():
     for i, res in enumerate(cancel_results):
         print(f"Leg {i} Cancel Result: {res}")
 
-    print("--- Тестирование EMERGENCY UNWIND (Market close) ---")
-    unwind_tasks = [
-        binance.place_order(test_symbol, "SELL", test_size_usd, test_price, order_type="MARKET", position_side="LONG"),
-        bitget.place_order(test_symbol, "BUY", test_size_usd, test_price, order_type="MARKET", position_side="SHORT"),
-        kucoin.place_order(f"{test_symbol}M", "SELL", test_size_usd, test_price, order_type="MARKET", position_side="LONG")
-    ]
-    unwind_results = await asyncio.gather(*unwind_tasks, return_exceptions=True)
-    for i, res in enumerate(unwind_results):
-        print(f"Leg {i} Unwind Result: {res}")
+    print("--- Проверка остаточных позиций через REST GET (Fail-Safe) ---")
+    pos_b = await binance.get_exact_position_guarded(test_symbol, "LONG")
+    pos_bg = await bitget.get_exact_position_guarded(test_symbol, "SHORT")
+    pos_k = await kucoin.get_exact_position_guarded(f"{test_symbol}M", "LONG")
+    print(f"Binance: {pos_b}, Bitget: {pos_bg}, Kucoin: {pos_k}")
 
     await session.close()
     print("Тест завершен.")

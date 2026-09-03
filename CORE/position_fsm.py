@@ -150,27 +150,62 @@ class PositionFSM:
             if cancel_tasks:
                 await asyncio.gather(*cancel_tasks, return_exceptions=True)
 
-        # 5. Фаза верификации налива (VERIFYING_FILL) - ЛОКАЛЬНОЕ ЧТЕНИЕ (СМАРТ)
+        # 5. Фаза верификации налива (VERIFYING_FILL)
         self._set_state(PositionState.VERIFYING_FILL)
         req_long_qty = self.engine_res.get("long_qty", 0.0)
         req_short_qty = self.engine_res.get("short_qty", 0.0)
 
-        # Опрашиваем локальную память (обновляемую бухгалтером WS) мгновенно!
+        # 1. Быстрое чтение из локального кэша WS (нулевая задержка сети)
         if self.long_ex in self.orders:
             self.long_pos = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
         if self.short_ex in self.orders:
             self.short_pos = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
 
-        l_filled = (self.long_pos.get("size", 0.0) / req_long_qty >= self.min_fill_rate) if req_long_qty > 0 else True
-        s_filled = (self.short_pos.get("size", 0.0) / req_short_qty >= self.min_fill_rate) if req_short_qty > 0 else True
-
-        self.open_time = time.time()
-        self.open_time_ms = int(self.open_time * 1000)
-
         l_size = self.long_pos.get("size", 0.0)
         s_size = self.short_pos.get("size", 0.0)
         l_rate = min(1.0, l_size / req_long_qty) if req_long_qty > 0 else 1.0
         s_rate = min(1.0, s_size / req_short_qty) if req_short_qty > 0 else 1.0
+
+        # 2. ПОСЛЕДНЯЯ ЛИНИЯ ОБОРОНЫ (Fail-Safe REST Guard):
+        # Если локальный сокет показал неполный налив или 0.0, либо была ошибка отправки,
+        # категорически ЗАПРЕЩЕНО принимать решение об ABORTED или сбросе без прямого REST GET-запроса!
+        need_rest_check = (
+            has_submit_error or
+            (l_size == 0.0 and s_size == 0.0) or
+            (l_rate < self.min_fill_rate) or
+            (s_rate < self.min_fill_rate)
+        )
+
+        if need_rest_check:
+            verify_tasks = []
+            long_idx = -1
+            short_idx = -1
+            if self.long_ex in self.orders:
+                verify_tasks.append(self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG"))
+                long_idx = len(verify_tasks) - 1
+            if self.short_ex in self.orders:
+                verify_tasks.append(self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT"))
+                short_idx = len(verify_tasks) - 1
+
+            if verify_tasks:
+                results = await asyncio.gather(*verify_tasks, return_exceptions=True)
+                if long_idx >= 0 and not isinstance(results[long_idx], Exception):
+                    rest_pos = results[long_idx]
+                    if rest_pos.get("size", 0.0) > 0 or self.long_pos.get("size", 0.0) == 0.0:
+                        self.long_pos = rest_pos
+                if short_idx >= 0 and not isinstance(results[short_idx], Exception):
+                    rest_pos = results[short_idx]
+                    if rest_pos.get("size", 0.0) > 0 or self.short_pos.get("size", 0.0) == 0.0:
+                        self.short_pos = rest_pos
+
+            # Пересчитываем реальные объемы и коэффициенты заливки по данным REST
+            l_size = self.long_pos.get("size", 0.0)
+            s_size = self.short_pos.get("size", 0.0)
+            l_rate = min(1.0, l_size / req_long_qty) if req_long_qty > 0 else 1.0
+            s_rate = min(1.0, s_size / req_short_qty) if req_short_qty > 0 else 1.0
+
+        self.open_time = time.time()
+        self.open_time_ms = int(self.open_time * 1000)
 
         self.exec_res = {
             "engine_res": self.engine_res,
@@ -189,7 +224,7 @@ class PositionFSM:
         # 6. Ветвление результатов верификации
         if l_size == 0.0 and s_size == 0.0:
             self._set_state(PositionState.ABORTED)
-            log(f"[{self.sym}] ⚠️ Ни одна нога не была залита (0.0). Сброс входа.", level="WARNING")
+            log(f"[{self.sym}] ⚠️ Подтверждено через REST: ни одна нога не залита (0.0). Сброс входа.", level="WARNING")
             if self.writer:
                 asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
                     "route": self.route, "sym": self.sym, "long_ex": self.long_ex, "short_ex": self.short_ex
@@ -198,7 +233,7 @@ class PositionFSM:
 
         if has_submit_error or l_rate < self.min_fill_rate or s_rate < self.min_fill_rate:
             self._set_state(PositionState.EMERGENCY_UNWIND)
-            log(f"[{self.sym}] 🚨 Низкий fill_rate! L:{l_rate*100:.1f}% S:{s_rate*100:.1f}%. Экстренный сброс!", level="ERROR")
+            log(f"[{self.sym}] 🚨 Низкий fill_rate / рассинхрон! L:{l_rate*100:.1f}% S:{s_rate*100:.1f}%. Экстренный сброс!", level="ERROR")
             if self.pm:
                 self.pm.confirm_entry(self.long_ex, self.short_ex, self.sym, self.exec_res, self.open_time)
                 self.pm.lock_for_exit(self.route, self.sym)
@@ -262,6 +297,9 @@ class PositionFSM:
                 if self.pm:
                     self.pm.confirm_exit(self.route, self.sym)
                 break
+            else:
+                self.long_pos = l_check
+                self.short_pos = s_check
             
             if attempt == 2:
                 log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позиции после 3 попыток Unwind! Остаток L:{l_check.get('size')} S:{s_check.get('size')}. Позиция остается в памяти!", level="ERROR")
@@ -299,8 +337,8 @@ class PositionFSM:
         order_type = "MARKET" if is_panic else "LIMIT"
         tif = "IOC"
 
-        long_dist = float(self.cfg["trading_risks"].get(self.long_ex.lower(), {}).get("limit_allow_distance", 1.002))
-        short_dist = float(self.cfg["trading_risks"].get(self.short_ex.lower(), {}).get("limit_allow_distance", 1.002))
+        long_dist = float(self.cfg["trading_risks"][self.long_ex.lower()]["limit_allow_distance"])
+        short_dist = float(self.cfg["trading_risks"][self.short_ex.lower()]["limit_allow_distance"])
 
         tasks = []
         if long_qty > 0 and self.long_ex in self.orders:
