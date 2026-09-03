@@ -452,7 +452,9 @@ class KucoinOrder:
         endpoint = "/api/v1/orders"
         now = str(int(time.time() * 1000))
         
-        leverage = str(self.margin_settings["leverage"])
+        max_lev = int(symbol_data.get('maxLeverage', 20))
+        target_lev = min(int(self.margin_settings["leverage"]), max_lev)
+        leverage = str(target_lev)
         marginMode = str(self.margin_settings["margin_type"]).upper()
 
         body = {
@@ -500,7 +502,7 @@ class KucoinOrder:
             if data.get('code') != '200000':
                 msg = data.get("msg", str(data))
                 log(f"[KucoinOrder] API Error: {msg}", level="ERROR")
-                if "Balance" in msg or "Margin" in msg:
+                if "balance" in msg.lower() or "margin" in msg.lower():
                     raise InsufficientMarginError(msg)
                 raise Exception(f"Kucoin API Error: {msg}")
             log(f"[KucoinOrder] Ордер исполнен: {data}", level="INFO")
