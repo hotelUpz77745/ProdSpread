@@ -262,13 +262,13 @@ class BinanceOrder:
 
     async def get_position_rest(self, symbol: str, side: str = None) -> dict:
         if not self.api_key:
-            return {"size": 0.0, "price": 0.0}
+            return {"size": 0.0, "price": 0.0, "status": "ok"}
         try:
             timestamp = int(time.time() * 1000)
             query_string = f"symbol={symbol}&timestamp={timestamp}"
             sig = self._generate_signature(query_string)
             url = f"https://fapi.binance.com/fapi/v2/positionRisk?{query_string}&signature={sig}"
-            async with self.session.get(url, headers={"X-MBX-APIKEY": self.api_key}) as resp:
+            async with self.session.get(url, headers={"X-MBX-APIKEY": self.api_key}, timeout=aiohttp.ClientTimeout(total=2.0)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     for p in data:
@@ -280,18 +280,35 @@ class BinanceOrder:
                         if amt > 0:
                             if self.position_stream:
                                 self.position_stream.positions.setdefault(symbol, {})[pos_side] = {"size": amt, "price": price}
-                            return {"size": amt, "price": price}
+                            return {"size": amt, "price": price, "status": "ok"}
+                    return {"size": 0.0, "price": 0.0, "status": "ok"}
+                else:
+                    log(f"[BinanceOrder] get_position_rest HTTP {resp.status}", level="WARNING")
+                    return {"size": 0.0, "price": 0.0, "status": "error"}
         except Exception as e:
-            log(f"[BinanceOrder] get_position_rest error: {e}", level="WARNING")
-        return {"size": 0.0, "price": 0.0}
+            log(f"[BinanceOrder] get_position_rest network error: {e}", level="WARNING")
+            return {"size": 0.0, "price": 0.0, "status": "error"}
 
     async def get_exact_position(self, symbol: str, side: str) -> dict:
-        pos = await self.get_position_rest(symbol, side)
-        if pos.get("size", 0.0) > 0:
-            return pos
-        if self.position_stream and symbol in self.position_stream.positions:
-            self.position_stream.positions[symbol][side.upper()] = {"size": 0.0, "price": 0.0}
-        return {"size": 0.0, "price": 0.0}
+        return await self.get_exact_position_guarded(symbol, side)
+
+    async def get_exact_position_guarded(self, symbol: str, side: str, max_retries: int = 3, retry_delay: float = 0.015) -> dict:
+        for attempt in range(max_retries):
+            pos = await self.get_position_rest(symbol, side)
+            if pos.get("status") == "ok":
+                if pos.get("size", 0.0) > 0:
+                    return pos
+                # Если биржа вернула честный 0.0
+                if self.position_stream and symbol in self.position_stream.positions:
+                    self.position_stream.positions[symbol][side.upper()] = {"size": 0.0, "price": 0.0}
+                return {"size": 0.0, "price": 0.0, "status": "ok"}
+            # Сетевой сбой - ждем и ретраим
+            await asyncio.sleep(retry_delay * (attempt + 1))
+
+        # Если все ретраи упали - берем последнее известное значение из WS
+        ws_pos = self.get_executed_position(symbol, side)
+        log(f"[BinanceOrder] REST моргнул после {max_retries} ретраев, страховка WS: {ws_pos}", level="WARNING")
+        return {"size": ws_pos.get("size", 0.0), "price": ws_pos.get("price", 0.0), "status": "fallback_ws"}
 
     async def get_active_positions(self) -> list:
         if not self.api_key:
@@ -678,7 +695,7 @@ class KucoinOrder:
 
     async def get_position_rest(self, symbol: str, side: str = None) -> dict:
         if not self.api_key:
-            return {"size": 0.0, "price": 0.0}
+            return {"size": 0.0, "price": 0.0, "status": "ok"}
         try:
             endpoint = "/api/v1/positions"
             now = str(int(time.time() * 1000))
@@ -694,7 +711,7 @@ class KucoinOrder:
                 'KC-API-KEY-VERSION': '2'
             }
             url = f"https://api-futures.kucoin.com{endpoint}"
-            async with self.session.get(url, headers=headers) as resp:
+            async with self.session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=2.0)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("code") == "200000" and data.get("data"):
@@ -706,14 +723,18 @@ class KucoinOrder:
                                 price = float(p.get("avgEntryPrice", 0))
                                 pos_side = (p.get("positionSide") or ("LONG" if raw_lots > 0 else "SHORT")).upper()
                                 if amt != 0:
-                                    res_pos = {"size": abs(amt), "price": price}
+                                    res_pos = {"size": abs(amt), "price": price, "status": "ok"}
                                     if self.position_stream:
                                         self.position_stream.positions.setdefault(symbol, {})[pos_side] = {"size": abs(raw_lots), "price": price}
                                     if not side or side.upper() == pos_side:
                                         return res_pos
+                    return {"size": 0.0, "price": 0.0, "status": "ok"}
+                else:
+                    log(f"[KucoinOrder] get_position_rest HTTP {resp.status}", level="WARNING")
+                    return {"size": 0.0, "price": 0.0, "status": "error"}
         except Exception as e:
-            log(f"[KucoinOrder] get_position_rest error: {e}", level="WARNING")
-        return {"size": 0.0, "price": 0.0}
+            log(f"[KucoinOrder] get_position_rest network error: {e}", level="WARNING")
+            return {"size": 0.0, "price": 0.0, "status": "error"}
 
     def get_executed_position(self, symbol: str, side: str):
         if self.position_stream:
@@ -726,12 +747,22 @@ class KucoinOrder:
         return {"size": 0.0, "price": 0.0}
 
     async def get_exact_position(self, symbol: str, side: str) -> dict:
-        pos = await self.get_position_rest(symbol, side)
-        if pos.get("size", 0.0) > 0:
-            return pos
-        if self.position_stream and symbol in self.position_stream.positions:
-            self.position_stream.positions[symbol][side.upper()] = {"size": 0.0, "price": 0.0}
-        return {"size": 0.0, "price": 0.0}
+        return await self.get_exact_position_guarded(symbol, side)
+
+    async def get_exact_position_guarded(self, symbol: str, side: str, max_retries: int = 3, retry_delay: float = 0.015) -> dict:
+        for attempt in range(max_retries):
+            pos = await self.get_position_rest(symbol, side)
+            if pos.get("status") == "ok":
+                if pos.get("size", 0.0) > 0:
+                    return pos
+                if self.position_stream and symbol in self.position_stream.positions:
+                    self.position_stream.positions[symbol][side.upper()] = {"size": 0.0, "price": 0.0}
+                return {"size": 0.0, "price": 0.0, "status": "ok"}
+            await asyncio.sleep(retry_delay * (attempt + 1))
+
+        ws_pos = self.get_executed_position(symbol, side)
+        log(f"[KucoinOrder] REST моргнул после {max_retries} ретраев, страховка WS: {ws_pos}", level="WARNING")
+        return {"size": ws_pos.get("size", 0.0), "price": ws_pos.get("price", 0.0), "status": "fallback_ws"}
 
 
 
@@ -1084,7 +1115,7 @@ class BitgetOrder:
 
     async def get_position_rest(self, symbol: str, side: str = None) -> dict:
         if not self.api_key:
-            return {"size": 0.0, "price": 0.0}
+            return {"size": 0.0, "price": 0.0, "status": "ok"}
         try:
             if not self.session:
                 from utils import SessionManager
@@ -1100,7 +1131,7 @@ class BitgetOrder:
                 'Content-Type': 'application/json'
             }
             url = f"https://api.bitget.com{endpoint}"
-            async with self.session.get(url, headers=headers) as resp:
+            async with self.session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=2.0)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("code") == "00000" and data.get("data"):
@@ -1118,17 +1149,31 @@ class BitgetOrder:
                                             "SHORT": {"size": 0.0, "price": 0.0}
                                         }
                                     self.position_stream.positions[symbol][pos_side] = {"size": amt, "price": price}
-                                return {"size": amt, "price": price}
+                                return {"size": amt, "price": price, "status": "ok"}
+                    return {"size": 0.0, "price": 0.0, "status": "ok"}
+                else:
+                    log(f"[BitgetOrder] get_position_rest HTTP {resp.status}", level="WARNING")
+                    return {"size": 0.0, "price": 0.0, "status": "error"}
         except Exception as e:
-            log(f"[BitgetOrder] get_position_rest error: {e}", level="WARNING")
-        return {"size": 0.0, "price": 0.0}
+            log(f"[BitgetOrder] get_position_rest network error: {e}", level="WARNING")
+            return {"size": 0.0, "price": 0.0, "status": "error"}
 
     async def get_exact_position(self, symbol: str, side: str) -> dict:
-        pos = await self.get_position_rest(symbol, side)
-        if pos.get("size", 0.0) > 0:
-            return pos
-        if self.position_stream and symbol in self.position_stream.positions:
-            self.position_stream.positions[symbol][side.upper()] = {"size": 0.0, "price": 0.0}
-        return {"size": 0.0, "price": 0.0}
+        return await self.get_exact_position_guarded(symbol, side)
+
+    async def get_exact_position_guarded(self, symbol: str, side: str, max_retries: int = 3, retry_delay: float = 0.015) -> dict:
+        for attempt in range(max_retries):
+            pos = await self.get_position_rest(symbol, side)
+            if pos.get("status") == "ok":
+                if pos.get("size", 0.0) > 0:
+                    return pos
+                if self.position_stream and symbol in self.position_stream.positions:
+                    self.position_stream.positions[symbol][side.upper()] = {"size": 0.0, "price": 0.0}
+                return {"size": 0.0, "price": 0.0, "status": "ok"}
+            await asyncio.sleep(retry_delay * (attempt + 1))
+
+        ws_pos = self.get_executed_position(symbol, side)
+        log(f"[BitgetOrder] REST моргнул после {max_retries} ретраев, страховка WS: {ws_pos}", level="WARNING")
+        return {"size": ws_pos.get("size", 0.0), "price": ws_pos.get("price", 0.0), "status": "fallback_ws"}
 
 

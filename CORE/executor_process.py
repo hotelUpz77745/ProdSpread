@@ -22,6 +22,7 @@ from API.KUCOIN.ws_private_kucoin import KucoinPositionStream
 from API.BITGET.ws_private_bitget import BitgetPositionStream
 from API.settlement import ExchangeSettlement
 from CORE.position_manager import PositionManager
+from CORE.position_fsm import PositionFSM
 from CORE.leverage_setter import LeverageSetter
 from analytics import TradeAnalytics, generate_global_report
 from CORE.ipc_socket import async_write_msg, async_read_msg
@@ -98,6 +99,7 @@ class ExecutorProcess:
         
         self.pm = None
         self.analytics_map = {}
+        self.active_fsm = {}
         self.banned_symbols = {}
         self.coin_to_native = {}
         self._running = True
@@ -159,266 +161,69 @@ class ExecutorProcess:
         long_ex = data["long_ex"]
         short_ex = data["short_ex"]
         engine_res = data["engine_res"]
-        spread_val = engine_res.get("vwap_spread", 0.0)
-        
-        log(f"[{sym}] Открываем: LONG {long_ex} | SHORT {short_ex} | Spread: {spread_val * 100:.2f}%", level="INFO")
-        
-        native_long = self.coin_to_native.get(sym, {}).get(long_ex, sym)
-        native_short = self.coin_to_native.get(sym, {}).get(short_ex, sym)
-        
-        order_policy = self.order_execution_type
-        tif = "GTC" if order_policy == "LIMIT_GTC" else "IOC"
 
-        long_dist = float(self.cfg["trading_risks"][long_ex.lower()]["limit_allow_distance"]) if long_ex in self.orders else 1.1
-        short_dist = float(self.cfg["trading_risks"][short_ex.lower()]["limit_allow_distance"]) if short_ex in self.orders else 1.1
-        
-        price_long_limit = engine_res.get("long_avg_price") * long_dist
-        size_long_usd = engine_res.get("long_qty") * price_long_limit
-        
-        price_short_limit = engine_res.get("short_avg_price") / short_dist
-        size_short_usd = engine_res.get("short_qty") * price_short_limit
-        
-        # Pre-flight validation
-        try:
-            if long_ex in self.orders:
-                self.orders[long_ex].check_order_size(native_long, size_long_usd, price_long_limit)
-            if short_ex in self.orders:
-                self.orders[short_ex].check_order_size(native_short, size_short_usd, price_short_limit)
-        except Exception as e:
-            log(f"[{sym}] 🚨 Ошибка валидации размера ордеров до входа: {e}", level="ERROR")
-            self.ban_coin(sym, reason=f"Order Size Validation Error: {e}", duration_sec=3600)
-            if self.writer:
-                asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
-                    "route": route, "sym": sym, "long_ex": long_ex, "short_ex": short_ex
-                }))
-            return
-
-        tasks = []
-        if long_ex in self.orders:
-            tasks.append(self.orders[long_ex].place_order(native_long, "BUY", size_long_usd, price_long_limit, position_side="LONG", time_in_force=tif))
-            
-        if short_ex in self.orders:
-            tasks.append(self.orders[short_ex].place_order(native_short, "SELL", size_short_usd, price_short_limit, position_side="SHORT", time_in_force=tif))
-            
-        has_error = False
-        if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for res in results:
-                if isinstance(res, Exception):
-                    has_error = True
-                    log(f"[{sym}] 🚨 Ошибка входа! Рассинхрон ног: {res}.", level="ERROR")
-                    if isinstance(res, InsufficientMarginError):
-                        self.ban_coin(sym, reason="Недостаточно маржи (Margin Error)", duration_sec=86400)
-                    else:
-                        self.ban_coin(sym, reason=str(res), duration_sec=3600)
-                    break
-                    
-        # Ждем EXECUTION_PAUSE
-        await asyncio.sleep(self.execution_pause)
-
-        # Если режим LIMIT_GTC, отправляем отмену остатков неналитых ордеров (асинхронно, не блокируя event loop)
-        if order_policy == "LIMIT_GTC":
-            cancel_tasks = []
-            if long_ex in self.orders:
-                cancel_tasks.append(self.orders[long_ex].cancel_all_orders(native_long))
-            if short_ex in self.orders:
-                cancel_tasks.append(self.orders[short_ex].cancel_all_orders(native_short))
-            if cancel_tasks:
-                asyncio.create_task(asyncio.gather(*cancel_tasks, return_exceptions=True))
-
-        # Высокоскоростной мониторинг заливки (микро-петля каждые 2 мс с таймаутом = EXECUTION_PAUSE)
-        long_pos = {"size": 0.0, "price": 0.0}
-        short_pos = {"size": 0.0, "price": 0.0}
-        req_long_qty = engine_res.get("long_qty", 0.0)
-        req_short_qty = engine_res.get("short_qty", 0.0)
-        min_fill = self.min_fill_rate
-
-        poll_interval = 0.002  # 2 мс
-        max_iterations = max(5, int(self.execution_pause / poll_interval))
-
-        for _ in range(max_iterations):
-            if long_ex in self.orders:
-                long_pos = self.orders[long_ex].get_executed_position(native_long, "LONG")
-            if short_ex in self.orders:
-                short_pos = self.orders[short_ex].get_executed_position(native_short, "SHORT")
-
-            l_filled = (long_pos.get("size", 0.0) / req_long_qty >= min_fill) if req_long_qty > 0 else True
-            s_filled = (short_pos.get("size", 0.0) / req_short_qty >= min_fill) if req_short_qty > 0 else True
-
-            # Если обе ноги уже залились выше min_fill_rate - мгновенно выходим
-            if l_filled and s_filled:
-                break
-
-            await asyncio.sleep(poll_interval)
-            
-        # Страховочный REST фоллбек: если какая-то нога показывает 0.0, контрольный опрос через REST
-        if long_ex in self.orders and long_pos.get("size", 0.0) == 0.0:
-            long_pos = await self.orders[long_ex].get_exact_position(native_long, "LONG")
-        if short_ex in self.orders and short_pos.get("size", 0.0) == 0.0:
-            short_pos = await self.orders[short_ex].get_exact_position(native_short, "SHORT")
-            
-        exec_res = {
-            "engine_res": engine_res,
-            "long_ex": long_ex,
-            "short_ex": short_ex,
-            "entry_long_price": engine_res.get("long_avg_price", 0.0),
-            "entry_short_price": engine_res.get("short_avg_price", 0.0),
-            "open_time": time.time(),
-            "open_time_ms": int(time.time() * 1000)
-        }
-        
-        if long_pos["size"] > 0:
-            exec_res["long_executed_volume_rate"] = min(1.0, long_pos["size"] / engine_res["long_qty"]) if engine_res.get("long_qty", 0) > 0 else 1.0
-            exec_res["actual_long_price"] = long_pos["price"]
+        fsm = PositionFSM(
+            sym=sym,
+            route=route,
+            long_ex=long_ex,
+            short_ex=short_ex,
+            engine_res=engine_res,
+            cfg=self.cfg,
+            orders=self.orders,
+            coin_to_native=self.coin_to_native,
+            pm=self.pm,
+            writer=self.writer,
+            ban_coin_cb=self.ban_coin,
+            on_settle_cb=self._post_close_settlement
+        )
+        self.active_fsm[sym] = fsm
+        success = await fsm.run_open()
+        if success:
+            spread_val = engine_res.get("vwap_spread", 0.0)
+            if sym not in self.analytics_map:
+                self.analytics_map[sym] = TradeAnalytics(sym, self.cfg["trading_risks"])
+            self.analytics_map[sym].record_open(
+                route, "LONG_SHORT", long_ex, short_ex,
+                fsm.exec_res.get("entry_long_price", 0.0),
+                fsm.exec_res.get("entry_short_price", 0.0),
+                spread_val, 0.0
+            )
         else:
-            exec_res["long_executed_volume_rate"] = 0.0
-            
-        if short_pos["size"] > 0:
-            exec_res["short_executed_volume_rate"] = min(1.0, short_pos["size"] / engine_res["short_qty"]) if engine_res.get("short_qty", 0) > 0 else 1.0
-            exec_res["actual_short_price"] = short_pos["price"]
-        else:
-            exec_res["short_executed_volume_rate"] = 0.0
-            
-        min_fill = self.min_fill_rate
-        l_rate = exec_res["long_executed_volume_rate"]
-        s_rate = exec_res["short_executed_volume_rate"]
-        
-        if has_error or l_rate < min_fill or s_rate < min_fill:
-            if long_pos["size"] == 0.0 and short_pos["size"] == 0.0:
-                log(f"[{sym}] ⚠️ Ни одна нога не была залита (0.0). Сброс входа.", level="WARNING")
-                if self.writer:
-                    asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
-                        "route": route, "sym": sym, "long_ex": long_ex, "short_ex": short_ex
-                    }))
-                return
-
-            log(f"[{sym}] 🚨 Низкий fill_rate! L:{l_rate*100:.1f}% S:{s_rate*100:.1f}%. Экстренный выход!", level="ERROR")
-            self.pm.confirm_entry(long_ex, short_ex, sym, exec_res, time.time())
-            self.pm.lock_for_exit(route, sym)
-            await self.execute_close({"route": route, "sym": sym, "reason": "LOW_FILL_RATE", "data": exec_res})
-            return
-            
-        self.pm.confirm_entry(long_ex, short_ex, sym, exec_res, time.time())
-        log(f"[{sym}] 🟢 Позиция успешно открыта! Fill rate -> L: {l_rate*100:.1f}% | S: {s_rate*100:.1f}%", level="INFO")
-        
-        if sym not in self.analytics_map:
-            self.analytics_map[sym] = TradeAnalytics(sym, self.cfg["trading_risks"])
-        self.analytics_map[sym].record_open(route, "LONG_SHORT", long_ex, short_ex, exec_res["entry_long_price"], exec_res["entry_short_price"], spread_val, 0.0)
-        
-        # Notify Market Process
-        if self.writer:
-            asyncio.create_task(async_write_msg(self.writer, "POS_OPENED", {
-                "route": route,
-                "sym": sym,
-                "exec_res": exec_res,
-                "open_time": exec_res["open_time"]
-            }))
+            self.active_fsm.pop(sym, None)
 
     async def execute_close(self, data: dict):
-        route = data["route"]
         sym = data["sym"]
-        state = self.pm.positions[route][sym]
-        details = state.get("details", {})
-        long_ex = details.get("long_ex")
-        short_ex = details.get("short_ex")
-        
-        if not long_ex or not short_ex:
-            long_ex, short_ex = route.split('_')
-        open_time_ms = details.get("open_time_ms", int(details.get("open_time", time.time()) * 1000))
-        
-        log(f"[{sym}] Закрываем позицию: LONG {long_ex} | SHORT {short_ex}", level="INFO")
-        
-        native_long = self.coin_to_native.get(sym, {}).get(long_ex, sym)
-        native_short = self.coin_to_native.get(sym, {}).get(short_ex, sym)
-        engine_res = details.get("engine_res", {})
-        
-        long_pos = await self.orders[long_ex].get_exact_position(native_long, "LONG") if long_ex in self.orders else {"size": 0.0}
-        short_pos = await self.orders[short_ex].get_exact_position(native_short, "SHORT") if short_ex in self.orders else {"size": 0.0}
-        
-        if long_pos.get("size", 0.0) <= 0 and short_pos.get("size", 0.0) <= 0:
-            log(f"[{sym}] Обе ноги уже закрыты на биржах (0.0). Завершаем выход.", level="INFO")
-            self.pm.confirm_exit(route, sym)
-            if self.writer:
-                asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {"route": route, "sym": sym}))
-            asyncio.create_task(self._post_close_settlement(sym, native_long, native_short, long_ex, short_ex, open_time_ms))
-            return
-            
-        tasks = []
+        route = data["route"]
         exit_res = data.get("exit_res", {})
-        emergency_data = data.get("data", {})
-        
-        order_policy = self.order_execution_type
-        tif = "GTC" if order_policy == "LIMIT_GTC" else "IOC"
-        
-        long_qty_to_close = long_pos.get("size", 0.0)
-        if long_ex in self.orders and long_qty_to_close > 0:
-            long_dist = float(self.cfg["trading_risks"][long_ex.lower()]["limit_allow_distance"])
-            price_long = float(exit_res.get("long_close_price") or 0.0)
-            if price_long <= 0:
-                price_long = float(long_pos.get("price", 0.0))
-            if price_long <= 0:
-                price_long = float(details.get("entry_long_price", 0.0)) or float(details.get("actual_long_price", 0.0))
-            if price_long <= 0:
-                price_long = float(emergency_data.get("entry_long_price", 0.0)) or float(emergency_data.get("actual_long_price", 0.0))
-            if price_long <= 0:
-                price_long = float(engine_res.get("long_avg_price", 0.0))
-                
-            if price_long > 0:
-                price_long_limit = price_long / long_dist
-                size_long_usd = long_qty_to_close * price_long_limit
-                tasks.append(self.orders[long_ex].place_order(native_long, "SELL", size_long_usd, price_long_limit, position_side="LONG", time_in_force=tif))
-            else:
-                log(f"[{sym}] 🚨 Не удалось определить цену закрытия для LONG {long_ex}", level="ERROR")
-            
-        short_qty_to_close = short_pos.get("size", 0.0)
-        if short_ex in self.orders and short_qty_to_close > 0:
-            short_dist = float(self.cfg["trading_risks"][short_ex.lower()]["limit_allow_distance"])
-            price_short = float(exit_res.get("short_close_price") or 0.0)
-            if price_short <= 0:
-                price_short = float(short_pos.get("price", 0.0))
-            if price_short <= 0:
-                price_short = float(details.get("entry_short_price", 0.0)) or float(details.get("actual_short_price", 0.0))
-            if price_short <= 0:
-                price_short = float(emergency_data.get("entry_short_price", 0.0)) or float(emergency_data.get("actual_short_price", 0.0))
-            if price_short <= 0:
-                price_short = float(engine_res.get("short_avg_price", 0.0))
-                
-            if price_short > 0:
-                price_short_limit = price_short * short_dist
-                size_short_usd = short_qty_to_close * price_short_limit
-                tasks.append(self.orders[short_ex].place_order(native_short, "BUY", size_short_usd, price_short_limit, position_side="SHORT", time_in_force=tif))
-            else:
-                log(f"[{sym}] 🚨 Не удалось определить цену закрытия для SHORT {short_ex}", level="ERROR")
-            
-        if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for res in results:
-                if isinstance(res, Exception):
-                    err_str = str(res).lower()
-                    if "position" in err_str or "reduce" in err_str or "no open" in err_str:
-                        log(f"[{sym}] ⚠️ Ордер на закрытие отклонен (поза уже пуста): {res}", level="WARNING")
-                        continue
-                    log(f"[{sym}] 🚨 Ошибка закрытия: {res}", level="ERROR")
-                    self.pm.rollback_exit(route, sym)
-                    return
-                    
-        # Ждем EXECUTION_PAUSE
-        await asyncio.sleep(self.execution_pause)
-        
-        # Если режим LIMIT_GTC, отменяем остатки неналитых ордеров закрытия
-        if order_policy == "LIMIT_GTC":
-            cancel_tasks = []
-            if long_ex in self.orders:
-                cancel_tasks.append(self.orders[long_ex].cancel_all_orders(native_long))
-            if short_ex in self.orders:
-                cancel_tasks.append(self.orders[short_ex].cancel_all_orders(native_short))
-            if cancel_tasks:
-                await asyncio.gather(*cancel_tasks, return_exceptions=True)
-        
-        self.pm.confirm_exit(route, sym)
-        if self.writer:
-            asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {"route": route, "sym": sym}))
-        asyncio.create_task(self._post_close_settlement(sym, native_long, native_short, long_ex, short_ex, open_time_ms))
+        reason = exit_res.get("reason", data.get("reason", "PROFIT_DECAY"))
+
+        fsm = self.active_fsm.get(sym)
+        if not fsm:
+            # Восстановление FSM для позиций, подгруженных из стейта после перезапуска бота
+            state = self.pm.positions.get(route, {}).get(sym, {})
+            details = state.get("details", {})
+            long_ex = details.get("long_ex") or route.split('_')[0]
+            short_ex = details.get("short_ex") or route.split('_')[1]
+            fsm = PositionFSM(
+                sym=sym,
+                route=route,
+                long_ex=long_ex,
+                short_ex=short_ex,
+                engine_res=details.get("engine_res", {}),
+                cfg=self.cfg,
+                orders=self.orders,
+                coin_to_native=self.coin_to_native,
+                pm=self.pm,
+                writer=self.writer,
+                ban_coin_cb=self.ban_coin,
+                on_settle_cb=self._post_close_settlement
+            )
+            fsm.open_time = details.get("open_time", time.time())
+            fsm.open_time_ms = details.get("open_time_ms", int(fsm.open_time * 1000))
+
+        await fsm.run_close(exit_res, reason=reason)
+        self.active_fsm.pop(sym, None)
+
 
     async def _post_close_settlement(self, sym: str, native_long: str, native_short: str, long_ex: str, short_ex: str, open_time_ms: int):
         """Фоновый расчет реального PnL и клиринг сделки через 1.8 секунды."""
