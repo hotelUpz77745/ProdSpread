@@ -777,6 +777,38 @@ class KucoinOrder:
 
 
 class OkxOrder:
+
+    async def _keepalive_loop(self):
+        while True:
+            try:
+                import asyncio
+                await asyncio.sleep(120)
+                await self.warmup()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                pass
+
+    async def warmup(self):
+        import time
+        if time.time() - getattr(self, "last_activity_ts", 0.0) < 30.0:
+            return
+        try:
+            timestamp = str(int(time.time() * 1000))
+            body = '{"instId":"INVALID-SWAP","tdMode":"cross","side":"buy","ordType":"limit","sz":"1","px":"1"}'
+            signature = self._generate_signature(timestamp, "POST", "/api/v5/trade/order", body)
+            headers = {
+                "OK-ACCESS-KEY": self.api_key,
+                "OK-ACCESS-SIGN": signature,
+                "OK-ACCESS-TIMESTAMP": timestamp,
+                "OK-ACCESS-PASSPHRASE": self.api_passphrase,
+                "Content-Type": "application/json"
+            }
+            async with self.session.post("https://www.okx.com/api/v5/trade/order", headers=headers, data=body) as resp:
+                await resp.read()
+        except Exception:
+            pass
+
     def check_order_size(self, symbol: str, size_usd: float, price: float):
         pass
 
@@ -815,7 +847,50 @@ class BitgetOrder:
         self._bg_task = asyncio.create_task(self.update_symbol_info())
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         return self._bg_task
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+
+    
+    async def _keepalive_loop(self):
+        while True:
+            try:
+                import asyncio
+                await asyncio.sleep(120)
+                await self.warmup()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                pass
+
+    async def warmup(self):
+        import time, json
+        if time.time() - getattr(self, "last_activity_ts", 0.0) < 30.0:
+            return
+        try:
+            timestamp = str(int(time.time() * 1000))
+            body_dict = {
+                "symbol": "INVALIDUSDT",
+                "productType": "usdt-futures",
+                "marginMode": "crossed",
+                "marginCoin": "USDT",
+                "size": "1",
+                "price": "1",
+                "side": "buy",
+                "tradeSide": "open",
+                "orderType": "limit",
+                "force": "ioc"
+            }
+            body = json.dumps(body_dict)
+            signature = self._generate_signature(timestamp, "POST", "/api/v2/mix/order/place-order", body)
+            headers = {
+                "ACCESS-KEY": self.api_key,
+                "ACCESS-SIGN": signature,
+                "ACCESS-TIMESTAMP": timestamp,
+                "ACCESS-PASSPHRASE": self.api_passphrase,
+                "Content-Type": "application/json"
+            }
+            async with self.session.post("https://api.bitget.com/api/v2/mix/order/place-order", headers=headers, data=body) as resp:
+                await resp.read()
+        except Exception:
+            pass
 
     def _generate_signature(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
         message = timestamp + method.upper() + request_path + body
