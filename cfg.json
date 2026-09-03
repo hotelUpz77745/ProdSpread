@@ -27,7 +27,7 @@
             "taker_fee": 0.0005,
             "volatility_discount_entry": 0.5,
             "volatility_discount_exit": 1.0,
-            "limit_allow_distance": 1.0020,
+            "limit_allow_distance": 1.0025,
             "max_positions": 1
         },
         "kucoin": {
@@ -36,7 +36,7 @@
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.5,
             "volatility_discount_exit": 1.0,
-            "limit_allow_distance": 1.0020,
+            "limit_allow_distance": 1.0025,
             "max_positions": 1
         },
         "okx": {
@@ -45,7 +45,7 @@
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.5,
             "volatility_discount_exit": 1.0,
-            "limit_allow_distance": 1.0020,
+            "limit_allow_distance": 1.0025,
             "max_positions": 1
         },
         "bitget": {
@@ -54,7 +54,7 @@
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.5,
             "volatility_discount_exit": 1.0,
-            "limit_allow_distance": 1.0020,
+            "limit_allow_distance": 1.0025,
             "max_positions": 1
         }
     },
@@ -106,7 +106,14 @@
             "check_synthetic_exit": true,
             "check_synthetic_slippage": true,
             "max_slippage_ratio": 0.5,
-            "hard_max_slippage": 0.015
+            "hard_max_slippage": 0.015,
+            "unwind_rest_pause_sec": 0.300,
+            "close_rest_pause_sec": 0.200,
+            "asymmetric_fill_ban_sec": 1800,
+            "order_validation_ban_sec": 3600,
+            "margin_error_ban_sec": 86400,
+            "emergency_unwind_max_attempts": 3,
+            "close_verification_max_attempts": 3
         },
         "exit": {
             "profit_decay_map": [
