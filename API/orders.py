@@ -988,6 +988,7 @@ class BitgetOrder:
                 body = {
                     "symbol": symbol,
                     "productType": "USDT-FUTURES",
+                    "marginCoin": "USDT",
                     "orderId": order_ids[0]
                 }
             else:
@@ -995,6 +996,7 @@ class BitgetOrder:
                 body = {
                     "symbol": symbol,
                     "productType": "USDT-FUTURES",
+                    "marginCoin": "USDT",
                     "orderIdList": order_ids
                 }
                 

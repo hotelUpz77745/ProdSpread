@@ -244,14 +244,16 @@ class PositionFSM:
             if self.long_pos.get("size", 0.0) > 0 and self.long_ex in self.orders:
                 qty = self.long_pos["size"]
                 price = self.long_pos.get("price", 0.0)
-                size_usd = qty * (price if price > 0 else 1.0)
+                if price <= 0: price = self.engine_res.get("long_avg_price", 1.0)
+                size_usd = qty * price
                 close_tasks.append(self.orders[self.long_ex].place_order(
                     self.native_long, "SELL", size_usd, price, order_type="MARKET", position_side="LONG"
                 ))
             if self.short_pos.get("size", 0.0) > 0 and self.short_ex in self.orders:
                 qty = self.short_pos["size"]
                 price = self.short_pos.get("price", 0.0)
-                size_usd = qty * (price if price > 0 else 1.0)
+                if price <= 0: price = self.engine_res.get("short_avg_price", 1.0)
+                size_usd = qty * price
                 close_tasks.append(self.orders[self.short_ex].place_order(
                     self.native_short, "BUY", size_usd, price, order_type="MARKET", position_side="SHORT"
                 ))
@@ -270,12 +272,15 @@ class PositionFSM:
 
             if l_check.get("size", 0.0) == 0.0 and s_check.get("size", 0.0) == 0.0:
                 log(f"[{self.sym}] Emergency Unwind успешно завершен: обе ноги обнулены.", level="INFO")
+                self._set_state(PositionState.SETTLED)
+                if self.pm:
+                    self.pm.confirm_exit(self.route, self.sym)
                 break
-            log(f"[{self.sym}] Emergency Unwind попытка {attempt+1}: остаток L:{l_check.get('size')} S:{s_check.get('size')}, повторяем...", level="WARNING")
-
-        self._set_state(PositionState.SETTLED)
-        if self.pm:
-            self.pm.confirm_exit(self.route, self.sym)
+            
+            if attempt == 2:
+                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позиции после 3 попыток Unwind! Остаток L:{l_check.get('size')} S:{s_check.get('size')}. Позиция остается в памяти!", level="ERROR")
+                self._set_state(PositionState.CLOSING) # Оставляем в процессе закрытия, чтобы watchdog мог подобрать
+                return
 
         if self.writer:
             asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {
@@ -314,17 +319,19 @@ class PositionFSM:
         tasks = []
         if long_qty > 0 and self.long_ex in self.orders:
             price_long = exit_res.get("long_close_price") or l_pos.get("price", 0.0)
+            if price_long <= 0: price_long = self.engine_res.get("long_avg_price", 1.0)
             # При продаже агрессивная лимитка ставится чуть ниже рынка для гарантированного забора бидов
             price_long_limit = (price_long / long_dist) if order_type == "LIMIT" else price_long
-            size_usd = long_qty * (price_long_limit if price_long_limit > 0 else 1.0)
+            size_usd = long_qty * price_long_limit
             tasks.append(self.orders[self.long_ex].place_order(
                 self.native_long, "SELL", size_usd, price_long_limit, order_type=order_type, position_side="LONG", time_in_force=tif
             ))
         if short_qty > 0 and self.short_ex in self.orders:
             price_short = exit_res.get("short_close_price") or s_pos.get("price", 0.0)
+            if price_short <= 0: price_short = self.engine_res.get("short_avg_price", 1.0)
             # При покупке агрессивная лимитка ставится чуть выше рынка для гарантированного забора асков
             price_short_limit = (price_short * short_dist) if order_type == "LIMIT" else price_short
-            size_usd = short_qty * (price_short_limit if price_short_limit > 0 else 1.0)
+            size_usd = short_qty * price_short_limit
             tasks.append(self.orders[self.short_ex].place_order(
                 self.native_short, "BUY", size_usd, price_short_limit, order_type=order_type, position_side="SHORT", time_in_force=tif
             ))
@@ -343,44 +350,47 @@ class PositionFSM:
 
             if l_rem == 0.0 and s_rem == 0.0:
                 log(f"[{self.sym}] Позиция полностью ликвидирована на обеих биржах (0.0).", level="INFO")
-                break
+                
+                if self.long_ex in self.orders:
+                    await self.orders[self.long_ex].cancel_all_orders(self.native_long)
+                if self.short_ex in self.orders:
+                    await self.orders[self.short_ex].cancel_all_orders(self.native_short)
+
+                self._set_state(PositionState.SETTLED)
+                if self.pm:
+                    self.pm.confirm_exit(self.route, self.sym)
+                if self.writer:
+                    asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {
+                        "route": self.route, "sym": self.sym, "reason": reason
+                    }))
+                if self.on_settle_cb:
+                    asyncio.create_task(self.on_settle_cb(
+                        self.sym, self.native_long, self.native_short, self.long_ex, self.short_ex, self.open_time_ms
+                    ))
+                return True
+                
+            if attempt == 2:
+                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позицию (run_close) после 3 попыток очистки! Остаток L:{l_rem} S:{s_rem}. Позиция остается в памяти!", level="ERROR")
+                self._set_state(PositionState.CLOSING)
+                return False
 
             log(f"[{self.sym}] ⚠️ После закрытия обнаружен остаток: L:{l_rem} S:{s_rem}. Попытка аварийного сброса #{attempt+1}...", level="WARNING")
             cleanup_tasks = []
             if l_rem > 0 and self.long_ex in self.orders:
                 p = l_check.get("price", 0.0)
-                usd = l_rem * (p if p > 0 else 1.0)
+                if p <= 0: p = self.engine_res.get("long_avg_price", 1.0)
+                usd = l_rem * p
                 cleanup_tasks.append(self.orders[self.long_ex].place_order(
                     self.native_long, "SELL", usd, p, order_type="MARKET", position_side="LONG"
                 ))
             if s_rem > 0 and self.short_ex in self.orders:
                 p = s_check.get("price", 0.0)
-                usd = s_rem * (p if p > 0 else 1.0)
+                if p <= 0: p = self.engine_res.get("short_avg_price", 1.0)
+                usd = s_rem * p
                 cleanup_tasks.append(self.orders[self.short_ex].place_order(
                     self.native_short, "BUY", usd, p, order_type="MARKET", position_side="SHORT"
                 ))
             if cleanup_tasks:
                 await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
-        # Подчистка ордеров
-        if self.long_ex in self.orders:
-            await self.orders[self.long_ex].cancel_all_orders(self.native_long)
-        if self.short_ex in self.orders:
-            await self.orders[self.short_ex].cancel_all_orders(self.native_short)
 
-        self._set_state(PositionState.SETTLED)
-        if self.pm:
-            self.pm.confirm_exit(self.route, self.sym)
-
-        if self.writer:
-            asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {
-                "route": self.route,
-                "sym": self.sym,
-                "reason": reason
-            }))
-
-        if self.on_settle_cb:
-            asyncio.create_task(self.on_settle_cb(
-                self.sym, self.native_long, self.native_short, self.long_ex, self.short_ex, self.open_time_ms
-            ))
-        return True
