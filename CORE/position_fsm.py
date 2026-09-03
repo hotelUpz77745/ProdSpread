@@ -140,7 +140,7 @@ class PositionFSM:
             self._set_state(PositionState.RESTING_BOOK)
             await asyncio.sleep(self.execution_pause)
 
-            # 4. Фаза отмены остатков (CANCELLING) - неблокирующая
+            # 4. Фаза отмены остатков (CANCELLING) - ТЕПЕРЬ БЛОКИРУЮЩАЯ
             self._set_state(PositionState.CANCELLING)
             cancel_tasks = []
             if self.long_ex in self.orders:
@@ -148,35 +148,21 @@ class PositionFSM:
             if self.short_ex in self.orders:
                 cancel_tasks.append(self.orders[self.short_ex].cancel_all_orders(self.native_short))
             if cancel_tasks:
-                async def _do_cancel():
-                    await asyncio.gather(*cancel_tasks, return_exceptions=True)
-                asyncio.create_task(_do_cancel())
+                await asyncio.gather(*cancel_tasks, return_exceptions=True)
 
-        # 5. Фаза верификации налива (VERIFYING_FILL)
+        # 5. Фаза верификации налива (VERIFYING_FILL) - ЛОКАЛЬНОЕ ЧТЕНИЕ (СМАРТ)
         self._set_state(PositionState.VERIFYING_FILL)
         req_long_qty = self.engine_res.get("long_qty", 0.0)
         req_short_qty = self.engine_res.get("short_qty", 0.0)
-        poll_interval = 0.002
-        max_iterations = max(5, int(self.execution_pause / poll_interval))
 
-        for _ in range(max_iterations):
-            if self.long_ex in self.orders:
-                self.long_pos = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
-            if self.short_ex in self.orders:
-                self.short_pos = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
+        # Опрашиваем локальную память (обновляемую бухгалтером WS) мгновенно!
+        if self.long_ex in self.orders:
+            self.long_pos = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
+        if self.short_ex in self.orders:
+            self.short_pos = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
 
-            l_filled = (self.long_pos.get("size", 0.0) / req_long_qty >= self.min_fill_rate) if req_long_qty > 0 else True
-            s_filled = (self.short_pos.get("size", 0.0) / req_short_qty >= self.min_fill_rate) if req_short_qty > 0 else True
-
-            if l_filled and s_filled:
-                break
-            await asyncio.sleep(poll_interval)
-
-        # Fail-Safe Guard: если нога показывает 0.0, контрольный опрос с защитой от моргания
-        if self.long_ex in self.orders and self.long_pos.get("size", 0.0) == 0.0:
-            self.long_pos = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG")
-        if self.short_ex in self.orders and self.short_pos.get("size", 0.0) == 0.0:
-            self.short_pos = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT")
+        l_filled = (self.long_pos.get("size", 0.0) / req_long_qty >= self.min_fill_rate) if req_long_qty > 0 else True
+        s_filled = (self.short_pos.get("size", 0.0) / req_short_qty >= self.min_fill_rate) if req_short_qty > 0 else True
 
         self.open_time = time.time()
         self.open_time_ms = int(self.open_time * 1000)

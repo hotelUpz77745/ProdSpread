@@ -122,6 +122,7 @@ class BinanceOrder:
 
 
     async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None, time_in_force: str = "IOC"):
+        self.last_activity_ts = __import__("time").time()
         if not price or price <= 0:
             raise ValueError(f"[{symbol}] Reference price is required to calculate quantity")
             
@@ -174,6 +175,7 @@ class BinanceOrder:
             return data
 
     async def cancel_all_orders(self, symbol: str):
+        self.last_activity_ts = __import__("time").time()
         timestamp = int(time.time() * 1000)
         query_string = f"symbol={symbol}&timestamp={timestamp}"
         signature = self._generate_signature(query_string)
@@ -241,6 +243,8 @@ class BinanceOrder:
         return False
 
     async def warmup(self):
+        if __import__("time").time() - getattr(self, "last_activity_ts", 0.0) < 30.0:
+            return
         """Отправляет фейковый POST запрос для прогрева WAF/Gateway и TLS туннеля"""
         try:
             timestamp = int(time.time() * 1000)
@@ -293,6 +297,7 @@ class BinanceOrder:
         return await self.get_exact_position_guarded(symbol, side)
 
     async def get_exact_position_guarded(self, symbol: str, side: str, max_retries: int = 3, retry_delay: float = 0.015) -> dict:
+        self.last_activity_ts = __import__("time").time()
         for attempt in range(max_retries):
             pos = await self.get_position_rest(symbol, side)
             if pos.get("status") == "ok":
@@ -421,6 +426,7 @@ class KucoinOrder:
 
 
     async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None, time_in_force: str = "IOC"):
+        self.last_activity_ts = __import__("time").time()
         if not price or price <= 0:
             raise ValueError(f"[{symbol}] Reference price is required to calculate quantity")
             
@@ -501,6 +507,7 @@ class KucoinOrder:
             return data
 
     async def cancel_all_orders(self, symbol: str):
+        self.last_activity_ts = __import__("time").time()
         endpoint = f"/api/v1/orders?symbol={symbol}"
         now = str(int(time.time() * 1000))
         str_to_sign = now + "DELETE" + endpoint
@@ -527,6 +534,8 @@ class KucoinOrder:
             log(f"[KucoinOrder] Ошибка отмены ордеров {symbol}: {e}", level="ERROR")
 
     async def warmup(self):
+        if __import__("time").time() - getattr(self, "last_activity_ts", 0.0) < 30.0:
+            return
         """Отправляет фейковый POST запрос для прогрева WAF/Gateway и TLS туннеля"""
         try:
             endpoint = "/api/v1/orders"
@@ -750,6 +759,7 @@ class KucoinOrder:
         return await self.get_exact_position_guarded(symbol, side)
 
     async def get_exact_position_guarded(self, symbol: str, side: str, max_retries: int = 3, retry_delay: float = 0.015) -> dict:
+        self.last_activity_ts = __import__("time").time()
         for attempt in range(max_retries):
             pos = await self.get_position_rest(symbol, side)
             if pos.get("status") == "ok":
@@ -771,10 +781,12 @@ class OkxOrder:
         pass
 
     async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None):
+        self.last_activity_ts = __import__("time").time()
         log(f"[OkxOrder] Виртуальный ордер {side} создан для {symbol}, объем {size_usd} USD", level="DEBUG")
         await asyncio.sleep(0.005)
         
     async def cancel_all_orders(self, symbol: str):
+        self.last_activity_ts = __import__("time").time()
         pass
         
     async def set_margin_type(self, symbol: str, margin_type: str, **kwargs) -> bool:
@@ -801,7 +813,9 @@ class BitgetOrder:
 
     def start(self):
         self._bg_task = asyncio.create_task(self.update_symbol_info())
+        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         return self._bg_task
+        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
     def _generate_signature(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
         message = timestamp + method.upper() + request_path + body
@@ -842,6 +856,7 @@ class BitgetOrder:
             raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_qty={raw_qty}).")
 
     async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None, time_in_force: str = "IOC"):
+        self.last_activity_ts = __import__("time").time()
         if not price or price <= 0:
             raise ValueError(f"[{symbol}] Reference price is required")
         if not self.symbol_info:
@@ -956,6 +971,7 @@ class BitgetOrder:
             return data
 
     async def cancel_all_orders(self, symbol: str):
+        self.last_activity_ts = __import__("time").time()
         if not self.api_key:
             return
         try:
@@ -1165,6 +1181,7 @@ class BitgetOrder:
         return await self.get_exact_position_guarded(symbol, side)
 
     async def get_exact_position_guarded(self, symbol: str, side: str, max_retries: int = 3, retry_delay: float = 0.015) -> dict:
+        self.last_activity_ts = __import__("time").time()
         for attempt in range(max_retries):
             pos = await self.get_position_rest(symbol, side)
             if pos.get("status") == "ok":
