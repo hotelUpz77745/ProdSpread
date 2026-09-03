@@ -108,15 +108,17 @@ class PositionFSM:
                 }))
             return False
 
+        order_type = "MARKET" if self.order_policy == "MARKET" else "LIMIT"
+
         # 2. Отправка ордеров
         tasks = []
         if self.long_ex in self.orders:
             tasks.append(self.orders[self.long_ex].place_order(
-                self.native_long, "BUY", size_long_usd, price_long_limit, position_side="LONG", time_in_force=tif
+                self.native_long, "BUY", size_long_usd, price_long_limit, order_type=order_type, position_side="LONG", time_in_force=tif
             ))
         if self.short_ex in self.orders:
             tasks.append(self.orders[self.short_ex].place_order(
-                self.native_short, "SELL", size_short_usd, price_short_limit, position_side="SHORT", time_in_force=tif
+                self.native_short, "SELL", size_short_usd, price_short_limit, order_type=order_type, position_side="SHORT", time_in_force=tif
             ))
 
         has_submit_error = False
