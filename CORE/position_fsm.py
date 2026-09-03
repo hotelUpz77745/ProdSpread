@@ -62,6 +62,15 @@ class PositionFSM:
         self.min_fill_rate = float(self.cfg["trading_rules"]["entry"]["min_fill_rate"])
         self.execution_pause = float(self.cfg["EXECUTION_PAUSE"])
 
+        # Параметры подтверждения налива (из конфига, без магии)
+        self.fill_confirm_timeout = float(self.cfg["trading_rules"]["entry"].get("fill_confirm_timeout_sec", 0.5))
+        self.fill_confirm_poll_interval = float(self.cfg["trading_rules"]["entry"].get("fill_confirm_poll_interval_sec", 0.02))
+
+        # Параметры аварийного сброса (из конфига)
+        unwind_cfg = self.cfg["trading_rules"].get("emergency_unwind", {})
+        self.unwind_max_attempts = int(unwind_cfg.get("max_attempts", 5))
+        self.unwind_retry_pause = float(unwind_cfg.get("retry_pause_sec", 0.5))
+
         self.exec_res: Dict[str, Any] = {}
         self.long_pos: Dict[str, float] = {"size": 0.0, "price": 0.0}
         self.short_pos: Dict[str, float] = {"size": 0.0, "price": 0.0}
@@ -164,13 +173,12 @@ class PositionFSM:
             if cancel_tasks:
                 await asyncio.gather(*cancel_tasks, return_exceptions=True)
 
-        # 5. Фаза верификации налива (VERIFYING_FILL) - ПАРСИМ ИСКЛЮЧИТЕЛЬНО ИЗ СТАТЫ ВЕБСОКЕТА
-        # На горячем пути — НИКАКИХ медленных REST-запросов, только локальный кэш стримов!
+        # 5. Фаза верификации налива (VERIFYING_FILL) — ТОЛЬКО из стримов WS, без REST!
         self._set_state(PositionState.VERIFYING_FILL)
         req_long_qty = self.engine_res.get("long_qty", 0.0)
         req_short_qty = self.engine_res.get("short_qty", 0.0)
 
-        # Быстрое чтение из локального кэша WS (нулевая сетевая задержка в горячем цикле)
+        # Первичное чтение из локального кэша WS (нулевая сетевая задержка)
         if self.long_ex in self.orders:
             self.long_pos = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
         if self.short_ex in self.orders:
@@ -178,6 +186,28 @@ class PositionFSM:
 
         l_size = self.long_pos.get("size", 0.0)
         s_size = self.short_pos.get("size", 0.0)
+
+        # Для MARKET ордеров: если WS ещё не подтвердил обе ноги — дополлинг кэша WS
+        # (zero-cost: чтение локального dict, без сетевых запросов)
+        if self.order_policy == "MARKET" and (l_size == 0 or s_size == 0):
+            deadline = time.time() + self.fill_confirm_timeout
+            while time.time() < deadline:
+                await asyncio.sleep(self.fill_confirm_poll_interval)
+                if l_size == 0 and self.long_ex in self.orders:
+                    p = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
+                    if p.get("size", 0.0) > 0:
+                        self.long_pos = p
+                        l_size = p["size"]
+                if s_size == 0 and self.short_ex in self.orders:
+                    p = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
+                    if p.get("size", 0.0) > 0:
+                        self.short_pos = p
+                        s_size = p["size"]
+                if l_size > 0 and s_size > 0:
+                    break
+            if l_size > 0 and s_size > 0:
+                log(f"[{self.sym}] WS подтвердил обе ноги после дополлинга (L:{l_size}, S:{s_size})", level="INFO")
+
         l_rate = min(1.0, l_size / req_long_qty) if req_long_qty > 0 else 1.0
         s_rate = min(1.0, s_size / req_short_qty) if req_short_qty > 0 else 1.0
 
@@ -229,7 +259,7 @@ class PositionFSM:
         self._set_state(PositionState.EMERGENCY_UNWIND)
         log(f"[{self.sym}] Запуск зачистки (Emergency Unwind) перед завершением итерации...", level="WARNING")
 
-        for attempt in range(3):
+        for attempt in range(self.unwind_max_attempts):
             # Точечный GET-запрос посимвольно по обеим участвовавшим биржам
             verify_tasks = []
             long_idx = -1
@@ -278,10 +308,10 @@ class PositionFSM:
 
             if close_tasks:
                 await asyncio.gather(*close_tasks, return_exceptions=True)
-            await asyncio.sleep(self.execution_pause)
+            await asyncio.sleep(self.unwind_retry_pause)
 
-            if attempt == 2:
-                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позиции после 3 попыток Unwind! Остаток L:{l_rem} S:{s_rem}.", level="ERROR")
+            if attempt == self.unwind_max_attempts - 1:
+                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позиции после {self.unwind_max_attempts} попыток Unwind! Остаток L:{l_rem} S:{s_rem}.", level="ERROR")
                 self._set_state(PositionState.CLOSING)
                 return
 
