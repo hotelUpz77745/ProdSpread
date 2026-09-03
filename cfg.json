@@ -23,7 +23,7 @@
     "trading_risks": {
         "binance": {
             "paper_start_balance": 19.07,
-            "trade_size_usd": 50.0,
+            "trade_size_usd": 30.0,
             "taker_fee": 0.0005,
             "volatility_discount_entry": 0.45,
             "volatility_discount_exit": 1.0,
@@ -32,7 +32,7 @@
         },
         "kucoin": {
             "paper_start_balance": 10.07,
-            "trade_size_usd": 50.0,
+            "trade_size_usd": 30.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.45,
             "volatility_discount_exit": 1.0,
@@ -50,7 +50,7 @@
         },
         "bitget": {
             "paper_start_balance": 12.45,
-            "trade_size_usd": 50.0,
+            "trade_size_usd": 30.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.45,
             "volatility_discount_exit": 1.0,
