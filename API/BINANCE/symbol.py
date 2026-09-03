@@ -10,9 +10,12 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Dict, Optional, Set
 
 import aiohttp
+
+_SYMBOL_REGEX = re.compile(r"^[A-Z0-9]+$")
 
 
 class BinanceSymbols:
@@ -74,7 +77,7 @@ class BinanceSymbols:
             if (s.get("quoteAsset") or "").upper() != q:
                 continue
             coin = s.get("baseAsset", "")
-            if coin:
+            if coin and _SYMBOL_REGEX.match(coin.upper()):
                 active.add(coin.upper())
         return active
 

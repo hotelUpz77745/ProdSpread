@@ -118,7 +118,6 @@ class BinancePositionStream:
                 headers={
                     "User-Agent": "Mozilla/5.0",
                     "Origin": "https://fapi.binance.com",
-                    "Host": "fstream.binance.com",
                     "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits"
                 },
                 heartbeat=30.0

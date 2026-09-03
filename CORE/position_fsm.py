@@ -257,7 +257,10 @@ class PositionFSM:
                 ))
 
             if close_tasks:
-                await asyncio.gather(*close_tasks, return_exceptions=True)
+                results = await asyncio.gather(*close_tasks, return_exceptions=True)
+                for res in results:
+                    if isinstance(res, Exception):
+                        log(f"[{self.sym}] Emergency Unwind task error: {res}", level="ERROR")
 
             await asyncio.sleep(0.050)
 

@@ -934,6 +934,7 @@ class BitgetOrder:
         body = {
             "symbol": symbol,
             "productType": "USDT-FUTURES",
+            "marginCoin": "USDT",
             "holdSide": hold_side
         }
         body_str = json.dumps(body)
