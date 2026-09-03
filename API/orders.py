@@ -706,7 +706,9 @@ class KucoinOrder:
         if not self.api_key:
             return {"size": 0.0, "price": 0.0, "status": "ok"}
         try:
-            endpoint = "/api/v1/positions"
+            endpoint = f"/api/v1/position?symbol={symbol}"
+            if side:
+                endpoint += f"&positionSide={side.upper()}"
             now = str(int(time.time() * 1000))
             str_to_sign = now + "GET" + endpoint
             sig = self._generate_signature(str_to_sign)
@@ -724,19 +726,18 @@ class KucoinOrder:
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("code") == "200000" and data.get("data"):
+                        pos_data = data["data"]
                         multiplier = self.get_multiplier(symbol)
-                        for p in data["data"]:
-                            if p.get("symbol") == symbol:
-                                raw_lots = float(p.get("currentQty", 0))
-                                amt = raw_lots * multiplier
-                                price = float(p.get("avgEntryPrice", 0))
-                                pos_side = (p.get("positionSide") or ("LONG" if raw_lots > 0 else "SHORT")).upper()
-                                if amt != 0:
-                                    res_pos = {"size": abs(amt), "price": price, "status": "ok"}
-                                    if self.position_stream:
-                                        self.position_stream.positions.setdefault(symbol, {})[pos_side] = {"size": abs(raw_lots), "price": price}
-                                    if not side or side.upper() == pos_side:
-                                        return res_pos
+                        raw_lots = float(pos_data.get("currentQty", 0))
+                        amt = raw_lots * multiplier
+                        price = float(pos_data.get("avgEntryPrice", 0))
+                        pos_side = (pos_data.get("positionSide") or ("LONG" if raw_lots > 0 else "SHORT")).upper()
+                        if amt != 0:
+                            res_pos = {"size": abs(amt), "price": price, "status": "ok"}
+                            if self.position_stream:
+                                self.position_stream.positions.setdefault(symbol, {})[pos_side] = {"size": abs(raw_lots), "price": price}
+                            if not side or side.upper() == pos_side:
+                                return res_pos
                     return {"size": 0.0, "price": 0.0, "status": "ok"}
                 else:
                     log(f"[KucoinOrder] get_position_rest HTTP {resp.status}", level="WARNING")

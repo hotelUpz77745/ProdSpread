@@ -90,11 +90,11 @@ class KucoinPositionStream:
             self.is_connected = True
             log(f"[KUCOIN WS_PRIVATE] Connected successfully.", level="INFO")
             
-            # Subscribe to position topic (Kucoin uses :all for all contracts)
+            # Subscribe to tradeOrders (global private fills stream)
             sub_msg = {
                 "id": int(time.time() * 1000),
                 "type": "subscribe",
-                "topic": "/contract/position:all",
+                "topic": "/contractMarket/tradeOrders",
                 "privateChannel": True,
                 "response": True
             }
@@ -158,7 +158,26 @@ class KucoinPositionStream:
                 continue
 
             topic = data.get("topic", "")
-            if topic.startswith("/contract/position:"):
+            if topic == "/contractMarket/tradeOrders":
+                pdata = data.get("data", {})
+                symbol = pdata.get("symbol")
+                status = pdata.get("status")
+                filled_size = float(pdata.get("filledSize", 0))
+                match_price = float(pdata.get("matchPrice", 0)) or float(pdata.get("price", 0))
+                pos_side = (pdata.get("positionSide") or ("LONG" if pdata.get("side") == "buy" else "SHORT")).upper()
+                
+                if symbol:
+                    if symbol not in self.positions:
+                        self.positions[symbol] = {"LONG": {"size": 0.0, "price": 0.0}, "SHORT": {"size": 0.0, "price": 0.0}}
+                    if status in ("match", "done", "filled") and filled_size > 0:
+                        curr_price = self.positions[symbol][pos_side].get("price", 0.0)
+                        final_price = match_price if match_price > 0 else curr_price
+                        self.positions[symbol][pos_side] = {
+                            "size": filled_size,
+                            "price": final_price
+                        }
+
+            elif topic.startswith("/contract/position:"):
                 subj = data.get("subject")
                 if subj == "position.change":
                     pdata = data.get("data", {})

@@ -152,21 +152,26 @@ class BinancePositionStream:
             return
 
         pos_side_raw = (o.get("ps") or "").upper()
-        if not pos_side_raw:
-            return
+        order_side = str(o.get("S", "")).upper()
+        if pos_side_raw == "BOTH" or not pos_side_raw:
+            pos_side_raw = "LONG" if order_side == "BUY" else "SHORT"
 
         order_status = o.get("X", "")
         cum_qty = float(o.get("z", 0.0))
-        avg_price = float(o.get("ap", 0.0))
+        avg_price = float(o.get("ap", 0.0)) or float(o.get("L", 0.0)) or float(o.get("p", 0.0))
+        is_reduce = o.get("R") is True
 
         if symbol not in self.positions:
             self.positions[symbol] = {"LONG": {"size": 0.0, "price": 0.0}, "SHORT": {"size": 0.0, "price": 0.0}}
 
-        if order_status in ("FILLED", "PARTIALLY_FILLED") and cum_qty > 0:
-            self.positions[symbol][pos_side_raw] = {
-                "size": cum_qty,
-                "price": avg_price
-            }
+        if order_status in ("FILLED", "PARTIALLY_FILLED"):
+            if order_status == "FILLED" and is_reduce:
+                self.positions[symbol][pos_side_raw] = {"size": 0.0, "price": 0.0}
+            elif cum_qty > 0:
+                self.positions[symbol][pos_side_raw] = {
+                    "size": cum_qty,
+                    "price": avg_price
+                }
 
     async def _handle_account_update(self, data: dict):
         acc = data.get("a", {})
@@ -179,19 +184,25 @@ class BinancePositionStream:
                 continue
 
             pos_side_raw = (p.get("ps") or "").upper()
-            pos_amt = p.get("pa")
-            ep_raw = p.get("ep") or p.get("bep") or "0"
-
-            if not pos_side_raw or pos_amt is None:
-                continue
+            pos_amt = float(p.get("pa", 0.0))
+            ep_raw = float(p.get("ep") or p.get("bep") or 0.0)
 
             if symbol not in self.positions:
                 self.positions[symbol] = {"LONG": {"size": 0.0, "price": 0.0}, "SHORT": {"size": 0.0, "price": 0.0}}
-                
-            self.positions[symbol][pos_side_raw] = {
-                "size": abs(float(pos_amt)),
-                "price": float(ep_raw)
-            }
+
+            if pos_side_raw == "BOTH":
+                if pos_amt > 0:
+                    self.positions[symbol]["LONG"] = {"size": abs(pos_amt), "price": ep_raw}
+                elif pos_amt < 0:
+                    self.positions[symbol]["SHORT"] = {"size": abs(pos_amt), "price": ep_raw}
+                else:
+                    self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
+                    self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
+            else:
+                self.positions[symbol][pos_side_raw] = {
+                    "size": abs(pos_amt),
+                    "price": ep_raw
+                }
 
     async def _handle_messages(self):
         while not self._external_stop and not self.stop_flag():

@@ -135,12 +135,27 @@ class PositionFSM:
                         self.ban_coin_cb(self.sym, reason=str(res), duration_sec=3600)
                     break
 
+        if has_submit_error:
+            # Немедленно отменяем открытые ордера по успевшей ноге
+            cancel_tasks = []
+            if self.long_ex in self.orders:
+                cancel_tasks.append(self.orders[self.long_ex].cancel_all_orders(self.native_long))
+            if self.short_ex in self.orders:
+                cancel_tasks.append(self.orders[self.short_ex].cancel_all_orders(self.native_short))
+            if cancel_tasks:
+                await asyncio.gather(*cancel_tasks, return_exceptions=True)
+
+            # Контрольный REST GET и дозакрытие остатков перед выходом
+            await self._emergency_unwind()
+            return False
+
         # 3. Фаза ожидания в стакане (RESTING_BOOK)
+        # СТРОГО ПОСЛЕ завершения await отправки ордеров ожидаем паузу EXECUTION_PAUSE
         if self.order_policy == "LIMIT_GTC":
             self._set_state(PositionState.RESTING_BOOK)
             await asyncio.sleep(self.execution_pause)
 
-            # 4. Фаза отмены остатков (CANCELLING) - ТЕПЕРЬ БЛОКИРУЮЩАЯ
+            # 4. Фаза отмены остатков (CANCELLING) - БЛОКИРУЮЩАЯ
             self._set_state(PositionState.CANCELLING)
             cancel_tasks = []
             if self.long_ex in self.orders:
@@ -150,12 +165,12 @@ class PositionFSM:
             if cancel_tasks:
                 await asyncio.gather(*cancel_tasks, return_exceptions=True)
 
-        # 5. Фаза верификации налива (VERIFYING_FILL)
+        # 5. Фаза верификации налива (VERIFYING_FILL) - ПАРСИМ ИЗ СТАТЫ ВЕБСОКЕТА
         self._set_state(PositionState.VERIFYING_FILL)
         req_long_qty = self.engine_res.get("long_qty", 0.0)
         req_short_qty = self.engine_res.get("short_qty", 0.0)
 
-        # 1. Быстрое чтение из локального кэша WS (нулевая задержка сети)
+        # Быстрое чтение из локального кэша WS (нулевая сетевая задержка в горячем цикле)
         if self.long_ex in self.orders:
             self.long_pos = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
         if self.short_ex in self.orders:
@@ -165,44 +180,6 @@ class PositionFSM:
         s_size = self.short_pos.get("size", 0.0)
         l_rate = min(1.0, l_size / req_long_qty) if req_long_qty > 0 else 1.0
         s_rate = min(1.0, s_size / req_short_qty) if req_short_qty > 0 else 1.0
-
-        # 2. ПОСЛЕДНЯЯ ЛИНИЯ ОБОРОНЫ (Fail-Safe REST Guard):
-        # Если локальный сокет показал неполный налив или 0.0, либо была ошибка отправки,
-        # категорически ЗАПРЕЩЕНО принимать решение об ABORTED или сбросе без прямого REST GET-запроса!
-        need_rest_check = (
-            has_submit_error or
-            (l_size == 0.0 and s_size == 0.0) or
-            (l_rate < self.min_fill_rate) or
-            (s_rate < self.min_fill_rate)
-        )
-
-        if need_rest_check:
-            verify_tasks = []
-            long_idx = -1
-            short_idx = -1
-            if self.long_ex in self.orders:
-                verify_tasks.append(self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG"))
-                long_idx = len(verify_tasks) - 1
-            if self.short_ex in self.orders:
-                verify_tasks.append(self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT"))
-                short_idx = len(verify_tasks) - 1
-
-            if verify_tasks:
-                results = await asyncio.gather(*verify_tasks, return_exceptions=True)
-                if long_idx >= 0 and not isinstance(results[long_idx], Exception):
-                    rest_pos = results[long_idx]
-                    if rest_pos.get("size", 0.0) > 0 or self.long_pos.get("size", 0.0) == 0.0:
-                        self.long_pos = rest_pos
-                if short_idx >= 0 and not isinstance(results[short_idx], Exception):
-                    rest_pos = results[short_idx]
-                    if rest_pos.get("size", 0.0) > 0 or self.short_pos.get("size", 0.0) == 0.0:
-                        self.short_pos = rest_pos
-
-            # Пересчитываем реальные объемы и коэффициенты заливки по данным REST
-            l_size = self.long_pos.get("size", 0.0)
-            s_size = self.short_pos.get("size", 0.0)
-            l_rate = min(1.0, l_size / req_long_qty) if req_long_qty > 0 else 1.0
-            s_rate = min(1.0, s_size / req_short_qty) if req_short_qty > 0 else 1.0
 
         self.open_time = time.time()
         self.open_time_ms = int(self.open_time * 1000)
@@ -221,89 +198,91 @@ class PositionFSM:
             "open_time_ms": self.open_time_ms
         }
 
-        # 6. Ветвление результатов верификации
-        if l_size == 0.0 and s_size == 0.0:
-            self._set_state(PositionState.ABORTED)
-            log(f"[{self.sym}] ⚠️ Подтверждено через REST: ни одна нога не залита (0.0). Сброс входа.", level="WARNING")
-            if self.writer:
-                asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
-                    "route": self.route, "sym": self.sym, "long_ex": self.long_ex, "short_ex": self.short_ex
-                }))
-            return False
-
-        if has_submit_error or l_rate < self.min_fill_rate or s_rate < self.min_fill_rate:
-            self._set_state(PositionState.EMERGENCY_UNWIND)
-            log(f"[{self.sym}] 🚨 Низкий fill_rate / рассинхрон! L:{l_rate*100:.1f}% S:{s_rate*100:.1f}%. Экстренный сброс!", level="ERROR")
+        # Если налило обе ноги в пределах min_fill_rate -> УСПЕШНЫЙ ВХОД
+        if l_rate >= self.min_fill_rate and s_rate >= self.min_fill_rate and l_size > 0 and s_size > 0:
+            self._set_state(PositionState.ACTIVE_HEDGED)
             if self.pm:
                 self.pm.confirm_entry(self.long_ex, self.short_ex, self.sym, self.exec_res, self.open_time)
-                self.pm.lock_for_exit(self.route, self.sym)
-            await self._emergency_unwind()
-            return False
+            log(f"[{self.sym}] 🟢 Позиция успешно открыта! Fill rate -> L: {l_rate*100:.1f}% | S: {s_rate*100:.1f}%", level="INFO")
 
-        # Успешный вход в обе ноги
-        self._set_state(PositionState.ACTIVE_HEDGED)
-        if self.pm:
-            self.pm.confirm_entry(self.long_ex, self.short_ex, self.sym, self.exec_res, self.open_time)
-        log(f"[{self.sym}] 🟢 Позиция успешно открыта! Fill rate -> L: {l_rate*100:.1f}% | S: {s_rate*100:.1f}%", level="INFO")
+            if self.writer:
+                asyncio.create_task(async_write_msg(self.writer, "POS_OPENED", {
+                    "route": self.route,
+                    "sym": self.sym,
+                    "exec_res": self.exec_res,
+                    "open_time": self.open_time
+                }))
+            return True
 
-        if self.writer:
-            asyncio.create_task(async_write_msg(self.writer, "POS_OPENED", {
-                "route": self.route,
-                "sym": self.sym,
-                "exec_res": self.exec_res,
-                "open_time": self.open_time
-            }))
-        return True
+        # Если не налило или налило несимметрично: сворачиваем удочки!
+        # ПЕРЕД ФИНАЛЬНЫМ СБРОСОМ ТОРГОВОЙ ИТЕРАЦИИ:
+        # ОБЯЗАТЕЛЬНЫЙ ТОЧЕЧНЫЙ REST GET-ЗАПРОС ПОСИМВОЛЬНО ПО ОБЕИМ НОГАМ И ДОЗАКРЫТИЕ!
+        log(f"[{self.sym}] Сворачиваем удочки (WS fill rate L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%). Запуск обязательной зачистки через REST...", level="WARNING")
+        await self._emergency_unwind()
+        return False
 
     async def _emergency_unwind(self):
         """
-        Гарантированный аварийный сброс залитой ноги до подтвержденного 0.0.
+        Гарантированный сброс и зачистка до подтвержденного 0.0 на обеих биржах.
+        ОБЯЗАТЕЛЬНЫЙ точечный REST GET-запрос посимвольно для каждой биржи в конце итерации!
         """
-        log(f"[{self.sym}] Запуск Emergency Unwind для незахеджированных объемов...", level="WARNING")
+        self._set_state(PositionState.EMERGENCY_UNWIND)
+        log(f"[{self.sym}] Запуск зачистки (Emergency Unwind) перед завершением итерации...", level="WARNING")
+
         for attempt in range(3):
-            close_tasks = []
-            if self.long_pos.get("size", 0.0) > 0 and self.long_ex in self.orders:
-                qty = self.long_pos["size"]
-                price = self.long_pos.get("price", 0.0)
-                if price <= 0: price = self.engine_res.get("long_avg_price", 1.0)
-                size_usd = qty * price
-                close_tasks.append(self.orders[self.long_ex].place_order(
-                    self.native_long, "SELL", size_usd, price, order_type="MARKET", position_side="LONG"
-                ))
-            if self.short_pos.get("size", 0.0) > 0 and self.short_ex in self.orders:
-                qty = self.short_pos["size"]
-                price = self.short_pos.get("price", 0.0)
-                if price <= 0: price = self.engine_res.get("short_avg_price", 1.0)
-                size_usd = qty * price
-                close_tasks.append(self.orders[self.short_ex].place_order(
-                    self.native_short, "BUY", size_usd, price, order_type="MARKET", position_side="SHORT"
-                ))
+            # Точечный GET-запрос посимвольно по обеим участвовавшим биржам
+            verify_tasks = []
+            long_idx = -1
+            short_idx = -1
+            if self.long_ex in self.orders:
+                verify_tasks.append(self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG"))
+                long_idx = len(verify_tasks) - 1
+            if self.short_ex in self.orders:
+                verify_tasks.append(self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT"))
+                short_idx = len(verify_tasks) - 1
 
-            if close_tasks:
-                results = await asyncio.gather(*close_tasks, return_exceptions=True)
-                for res in results:
-                    if isinstance(res, Exception):
-                        log(f"[{self.sym}] Emergency Unwind task error: {res}", level="ERROR")
+            l_check = {"size": 0.0, "price": 0.0}
+            s_check = {"size": 0.0, "price": 0.0}
+            if verify_tasks:
+                results = await asyncio.gather(*verify_tasks, return_exceptions=True)
+                if long_idx >= 0 and not isinstance(results[long_idx], Exception):
+                    l_check = results[long_idx]
+                if short_idx >= 0 and not isinstance(results[short_idx], Exception):
+                    s_check = results[short_idx]
 
-            await asyncio.sleep(0.050)
+            l_rem = l_check.get("size", 0.0)
+            s_rem = s_check.get("size", 0.0)
 
-            # Проверяем фактическое обнуление
-            l_check = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0}
-            s_check = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT") if self.short_ex in self.orders else {"size": 0.0}
-
-            if l_check.get("size", 0.0) == 0.0 and s_check.get("size", 0.0) == 0.0:
-                log(f"[{self.sym}] Emergency Unwind успешно завершен: обе ноги обнулены.", level="INFO")
+            # Если на обеих биржах строго 0.0 -> позиции полностью ликвидированы
+            if l_rem == 0.0 and s_rem == 0.0:
+                log(f"[{self.sym}] Контрольный REST подтвердил: обе ноги обнулены (0.0). Итерация завершена.", level="INFO")
                 self._set_state(PositionState.SETTLED)
                 if self.pm:
                     self.pm.confirm_exit(self.route, self.sym)
                 break
-            else:
-                self.long_pos = l_check
-                self.short_pos = s_check
-            
+
+            log(f"[{self.sym}] ⚠️ Обнаружен остаток на бирже через REST: L:{l_rem}, S:{s_rem}. Дозакрываем маркетом (попытка #{attempt+1})...", level="WARNING")
+            close_tasks = []
+            if l_rem > 0 and self.long_ex in self.orders:
+                p = l_check.get("price", 0.0) or self.engine_res.get("long_avg_price", 1.0)
+                usd = l_rem * p
+                close_tasks.append(self.orders[self.long_ex].place_order(
+                    self.native_long, "SELL", usd, p, order_type="MARKET", position_side="LONG"
+                ))
+            if s_rem > 0 and self.short_ex in self.orders:
+                p = s_check.get("price", 0.0) or self.engine_res.get("short_avg_price", 1.0)
+                usd = s_rem * p
+                close_tasks.append(self.orders[self.short_ex].place_order(
+                    self.native_short, "BUY", usd, p, order_type="MARKET", position_side="SHORT"
+                ))
+
+            if close_tasks:
+                await asyncio.gather(*close_tasks, return_exceptions=True)
+            await asyncio.sleep(0.050)
+
             if attempt == 2:
-                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позиции после 3 попыток Unwind! Остаток L:{l_check.get('size')} S:{s_check.get('size')}. Позиция остается в памяти!", level="ERROR")
-                self._set_state(PositionState.CLOSING) # Оставляем в процессе закрытия, чтобы watchdog мог подобрать
+                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позиции после 3 попыток Unwind! Остаток L:{l_rem} S:{s_rem}.", level="ERROR")
+                self._set_state(PositionState.CLOSING)
                 return
 
         if self.writer:
