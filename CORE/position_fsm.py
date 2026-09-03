@@ -255,10 +255,10 @@ class PositionFSM:
 
             # Если на обеих биржах строго 0.0 -> позиции полностью ликвидированы
             if l_rem == 0.0 and s_rem == 0.0:
-                log(f"[{self.sym}] Контрольный REST подтвердил: обе ноги обнулены (0.0). Итерация завершена.", level="INFO")
-                self._set_state(PositionState.SETTLED)
+                log(f"[{self.sym}] Контрольный REST подтвердил: обе ноги обнулены (0.0). Итерация аварийно завершена.", level="INFO")
+                self._set_state(PositionState.ABORTED)
                 if self.pm:
-                    self.pm.confirm_exit(self.route, self.sym)
+                    self.pm.rollback_entry(self.long_ex, self.short_ex, self.sym)
                 break
 
             log(f"[{self.sym}] ⚠️ Обнаружен остаток на бирже через REST: L:{l_rem}, S:{s_rem}. Дозакрываем маркетом (попытка #{attempt+1})...", level="WARNING")
@@ -278,24 +278,25 @@ class PositionFSM:
 
             if close_tasks:
                 await asyncio.gather(*close_tasks, return_exceptions=True)
-            await asyncio.sleep(0.050)
+            await asyncio.sleep(0.300) # Даем 300мс на исполнение и обновление БД биржи
 
             if attempt == 2:
                 log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позиции после 3 попыток Unwind! Остаток L:{l_rem} S:{s_rem}.", level="ERROR")
                 self._set_state(PositionState.CLOSING)
                 return
 
+        # Уведомляем main-процесс об отмене входа, чтобы освободить слот
         if self.writer:
-            asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {
+            asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
                 "route": self.route,
                 "sym": self.sym,
-                "reason": "LOW_FILL_RATE"
+                "long_ex": self.long_ex,
+                "short_ex": self.short_ex,
+                "reason": "ASYMMETRIC_FILL_UNWOUND"
             }))
 
-        if self.on_settle_cb:
-            asyncio.create_task(self.on_settle_cb(
-                self.sym, self.native_long, self.native_short, self.long_ex, self.short_ex, self.open_time_ms
-            ))
+        # Отправляем монету во временный бан, чтобы бот не входил снова в асимметричный стакан
+        self.ban_coin_cb(self.sym, reason="Асимметрия налива (сброс входа)", duration_sec=1800)
 
     async def run_close(self, exit_res: Dict[str, Any], reason: str = "PROFIT_DECAY") -> bool:
         """
@@ -344,7 +345,7 @@ class PositionFSM:
 
         # Контрольный опрос и подчистка остатков (до 3 попыток до подтверждения строго 0.0)
         for attempt in range(3):
-            await asyncio.sleep(0.050)
+            await asyncio.sleep(0.200)
             l_check = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0}
             s_check = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT") if self.short_ex in self.orders else {"size": 0.0}
 
