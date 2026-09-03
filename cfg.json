@@ -8,7 +8,7 @@
     "QUOTE": "USDT",
     "MAIN_LOOP_DELAY": 0.0,
     "measure_loop_speed": false,
-    "EXECUTION_PAUSE": 0.050,
+    "EXECUTION_PAUSE": 0.025,
     "topology_rebuild_interval_sec": null,
     "logging": {
         "debug": false,
