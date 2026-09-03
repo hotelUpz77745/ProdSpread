@@ -67,6 +67,9 @@ class Main:
         self.route_names = []
         self.active_routes_array = None
         
+        # Троттлинг диагностических логов выхода (раз в 5 секунд на символ)
+        self._exit_log_ts = {}
+        
         # IPC to Executor Process
         self.executor_writer = None
         self.server = None
@@ -236,7 +239,7 @@ class Main:
                         
                         if long_rate < min_fill or short_rate < min_fill:
                             is_exit = True
-                            exit_res = {"exit_level_index": 99, "target_val": -999.0}
+                            exit_res = {"exit_level_index": 99, "target_val": -999.0, "reason": "LOW_FILL_RATE"}
                         else:
                             is_exit, exit_res = self.engine.evaluate_exit(
                                 long_book, short_book, long_ex, short_ex,
@@ -250,6 +253,39 @@ class Main:
                                 short_executed_volume_rate=short_rate
                             )
                         
+                        # --- ДИАГНОСТИЧЕСКОЕ ЛОГИРОВАНИЕ ВЫХОДА (каждые 5 секунд на символ) ---
+                        _now_log = time.time()
+                        _last_log = self._exit_log_ts.get(sym, 0.0)
+                        if _now_log - _last_log >= 5.0:
+                            self._exit_log_ts[sym] = _now_log
+                            _net = exit_res.get("net_yield")
+                            _tgt = exit_res.get("target_val")
+                            _spr = exit_res.get("vwap_spread_out")
+                            _reason = exit_res.get("reason", "?")
+                            _lcp = exit_res.get("long_close_price")
+                            _scp = exit_res.get("short_close_price")
+                            _elp = state["details"].get("entry_long_price", 0.0)
+                            _esp = state["details"].get("entry_short_price", 0.0)
+                            _lvl = exit_res.get("exit_level_index", "?")
+                            
+                            _net_s = f"{_net*100:+.4f}%" if _net is not None else "N/A"
+                            _tgt_s = f"{_tgt*100:+.4f}%" if _tgt is not None else "TTL"
+                            _spr_s = f"{_spr*100:+.4f}%" if _spr is not None else "N/A"
+                            _lcp_s = f"{_lcp:.6f}" if _lcp else "N/A"
+                            _scp_s = f"{_scp:.6f}" if _scp else "N/A"
+                            
+                            if is_exit:
+                                log(f"[{sym}] 🔍 EXIT_SIGNAL: net={_net_s} tgt={_tgt_s} spread_out={_spr_s} | "
+                                    f"L_close={_lcp_s} S_close={_scp_s} (entry L={_elp:.6f} S={_esp:.6f}) | "
+                                    f"dur={duration_sec:.0f}s lvl={_lvl} fill=L:{long_rate*100:.0f}%/S:{short_rate*100:.0f}% | {_reason}", level="INFO")
+                            else:
+                                _gap = ""
+                                if _net is not None and _tgt is not None:
+                                    _gap = f" gap={(_net - _tgt)*100:+.4f}%"
+                                log(f"[{sym}] 🔍 EXIT_HOLD: net={_net_s} tgt={_tgt_s}{_gap} spread_out={_spr_s} | "
+                                    f"L_close={_lcp_s} S_close={_scp_s} (entry L={_elp:.6f} S={_esp:.6f}) | "
+                                    f"dur={duration_sec:.0f}s lvl={_lvl} fill=L:{long_rate*100:.0f}%/S:{short_rate*100:.0f}% | SKIP: {_reason}", level="INFO")
+                        
                         current_level = state["details"].get("exit_level_index", 0)
                         new_level = exit_res.get("exit_level_index", current_level)
                         
@@ -262,6 +298,8 @@ class Main:
                                 log(f"[{sym}] 📉 Деградация профита: Уровень {new_level}, новый таргет: {target_val * 100:.3f}%", level="INFO")
                         
                         if is_exit:
+                            # Чистим троттл-лог при выходе
+                            self._exit_log_ts.pop(sym, None)
                             self.pm.lock_for_exit(route, sym)
                             # Отправляем команду закрытия в Executor Process
                             if self.executor_writer:
