@@ -305,25 +305,61 @@ class PositionFSM:
         order_type = "MARKET" if is_panic else "LIMIT"
         tif = "IOC"
 
+        long_dist = float(self.cfg["trading_risks"].get(self.long_ex.lower(), {}).get("limit_allow_distance", 1.002))
+        short_dist = float(self.cfg["trading_risks"].get(self.short_ex.lower(), {}).get("limit_allow_distance", 1.002))
+
         tasks = []
         if long_qty > 0 and self.long_ex in self.orders:
             price_long = exit_res.get("long_close_price") or l_pos.get("price", 0.0)
-            size_usd = long_qty * (price_long if price_long > 0 else 1.0)
+            # При продаже агрессивная лимитка ставится чуть ниже рынка для гарантированного забора бидов
+            price_long_limit = (price_long / long_dist) if order_type == "LIMIT" else price_long
+            size_usd = long_qty * (price_long_limit if price_long_limit > 0 else 1.0)
             tasks.append(self.orders[self.long_ex].place_order(
-                self.native_long, "SELL", size_usd, price_long, order_type=order_type, position_side="LONG", time_in_force=tif
+                self.native_long, "SELL", size_usd, price_long_limit, order_type=order_type, position_side="LONG", time_in_force=tif
             ))
         if short_qty > 0 and self.short_ex in self.orders:
             price_short = exit_res.get("short_close_price") or s_pos.get("price", 0.0)
-            size_usd = short_qty * (price_short if price_short > 0 else 1.0)
+            # При покупке агрессивная лимитка ставится чуть выше рынка для гарантированного забора асков
+            price_short_limit = (price_short * short_dist) if order_type == "LIMIT" else price_short
+            size_usd = short_qty * (price_short_limit if price_short_limit > 0 else 1.0)
             tasks.append(self.orders[self.short_ex].place_order(
-                self.native_short, "BUY", size_usd, price_short, order_type=order_type, position_side="SHORT", time_in_force=tif
+                self.native_short, "BUY", size_usd, price_short_limit, order_type=order_type, position_side="SHORT", time_in_force=tif
             ))
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Контрольный опрос и подчистка
-        await asyncio.sleep(0.050)
+        # Контрольный опрос и подчистка остатков (до 3 попыток до подтверждения строго 0.0)
+        for attempt in range(3):
+            await asyncio.sleep(0.050)
+            l_check = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0}
+            s_check = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT") if self.short_ex in self.orders else {"size": 0.0}
+
+            l_rem = l_check.get("size", 0.0)
+            s_rem = s_check.get("size", 0.0)
+
+            if l_rem == 0.0 and s_rem == 0.0:
+                log(f"[{self.sym}] Позиция полностью ликвидирована на обеих биржах (0.0).", level="INFO")
+                break
+
+            log(f"[{self.sym}] ⚠️ После закрытия обнаружен остаток: L:{l_rem} S:{s_rem}. Попытка аварийного сброса #{attempt+1}...", level="WARNING")
+            cleanup_tasks = []
+            if l_rem > 0 and self.long_ex in self.orders:
+                p = l_check.get("price", 0.0)
+                usd = l_rem * (p if p > 0 else 1.0)
+                cleanup_tasks.append(self.orders[self.long_ex].place_order(
+                    self.native_long, "SELL", usd, p, order_type="MARKET", position_side="LONG"
+                ))
+            if s_rem > 0 and self.short_ex in self.orders:
+                p = s_check.get("price", 0.0)
+                usd = s_rem * (p if p > 0 else 1.0)
+                cleanup_tasks.append(self.orders[self.short_ex].place_order(
+                    self.native_short, "BUY", usd, p, order_type="MARKET", position_side="SHORT"
+                ))
+            if cleanup_tasks:
+                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+
+        # Подчистка ордеров
         if self.long_ex in self.orders:
             await self.orders[self.long_ex].cancel_all_orders(self.native_long)
         if self.short_ex in self.orders:
