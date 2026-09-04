@@ -181,8 +181,7 @@ async def main():
     while not (b_stream.ready and k_stream.ready and bg_stream.ready):
         await asyncio.sleep(0.1)
         
-    await k_order.update_symbol_info()
-    await bg_order.update_symbol_info()
+    
     
     price = await get_xrp_price(session)
     size_usd = 6.0
