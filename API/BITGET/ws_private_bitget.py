@@ -117,12 +117,15 @@ class BitgetPositionStream:
                         if data.get("action") in ("snapshot", "update"):
                             channel = data.get("arg", {}).get("channel")
                             if channel == "positions":
+                                incoming_syms = set()
                                 for p in data.get("data", []):
                                     sym = p.get("instId", "").replace("_UMCBL", "").strip().upper()
                                     if not sym:
                                         continue
-                                    size = float(p.get("total", 0.0))
                                     raw_side = (p.get("holdSide") or p.get("posSide") or "").upper()
+                                    incoming_syms.add((sym, raw_side))
+                                    
+                                    size = float(p.get("total", 0.0))
                                     price = float(p.get("openPriceAvg") or p.get("averageOpenPrice") or p.get("breakEvenPrice") or 0.0)
                                     
                                     if sym not in self.positions:
@@ -132,6 +135,12 @@ class BitgetPositionStream:
                                         }
                                     if raw_side in ("LONG", "SHORT"):
                                         self.positions[sym][raw_side] = {"size": size, "price": price}
+                                        
+                                if data.get("action") == "snapshot":
+                                    for sym in list(self.positions.keys()):
+                                        for side in ("LONG", "SHORT"):
+                                            if (sym, side) not in incoming_syms:
+                                                self.positions[sym][side] = {"size": 0.0, "price": 0.0}
                                         
             except Exception as e:
                 log(f"[BITGET WS_PRIVATE] Error: {e}", level="ERROR")
