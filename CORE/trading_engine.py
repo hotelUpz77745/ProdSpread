@@ -184,17 +184,14 @@ class TradingEngine:
         expected_long = expected_res["long_avg_price"]
         expected_short = expected_res["short_avg_price"]
         
-        long_limit_dist = float(self.trading_risks[long_ex.lower()]["limit_allow_distance"])
-        short_limit_dist = float(self.trading_risks[short_ex.lower()]["limit_allow_distance"])
-        
-        long_limit_price = expected_long * long_limit_dist
-        short_limit_price = expected_short / short_limit_dist
-        
-        actual_long_price, actual_long_qty = OrderbookUtils.calculate_execution_by_qty_and_limit(
-            long_book.get("asks", []), long_qty, long_limit_price, is_buy=True, volatility_discount=long_vol)
+        actual_long_price = OrderbookUtils.calculate_vwap_by_qty(
+            long_book.get("asks", []), long_qty, volatility_discount=long_vol)
             
-        actual_short_price, actual_short_qty = OrderbookUtils.calculate_execution_by_qty_and_limit(
-            short_book.get("bids", []), short_qty, short_limit_price, is_buy=False, volatility_discount=short_vol)
+        actual_short_price = OrderbookUtils.calculate_vwap_by_qty(
+            short_book.get("bids", []), short_qty, volatility_discount=short_vol)
+        
+        actual_long_qty = long_qty if actual_long_price > 0 else 0.0
+        actual_short_qty = short_qty if actual_short_price > 0 else 0.0
         
         long_executed_volume_rate = actual_long_qty / long_qty if long_qty > 0 else 0.0
         short_executed_volume_rate = actual_short_qty / short_qty if short_qty > 0 else 0.0

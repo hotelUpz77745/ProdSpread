@@ -78,6 +78,7 @@ class PositionFSM:
             self.fill_confirm_timeout = float(timeout_cfg)
             
         self.fill_confirm_poll_interval = float(self.cfg["trading_rules"]["entry"]["fill_confirm_poll_interval_sec"])
+        self.fill_confirm_min_wait = float(self.cfg["trading_rules"]["entry"]["fill_confirm_min_wait_sec"])
 
         # Параметры аварийного сброса (из конфига строго через [''])
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
@@ -95,6 +96,61 @@ class PositionFSM:
         self.state = new_state
         log(f"[{self.sym}][FSM] {prev} -> {new_state}", level="DEBUG")
 
+    async def _wait_for_fill_confirmation(
+        self, req_long_qty: float, req_short_qty: float
+    ) -> Tuple[Dict[str, float], Dict[str, float], float, float]:
+        """
+        Реактивный опрос локального WS-кэша позиций с контролем минимального и максимального ожидания.
+        
+        1. Идеальный налив (обе ноги >= 99%, допуск +-1%): 
+           -> Мгновенный выход (0 мс ожидания), даже если минимальный таймаут еще не истек.
+        2. Частичный налив (обе ноги >= min_fill_rate, например >= 95%):
+           -> Выход только ПОСЛЕ истечения fill_confirm_min_wait_sec (10 мс), чтобы дать шанс долить до 100%.
+        3. Истечение предельного таймаута fill_confirm_timeout_sec (до 200 мс):
+           -> Принудительное завершение ожидания и фиксация фактически налитого объема.
+        """
+        start_time = time.perf_counter()
+        deadline = start_time + self.fill_confirm_timeout
+
+        while True:
+            # Чтение из локального WS-кэша (0 сетевых задержек, чтение dict в памяти)
+            if self.long_ex in self.orders:
+                p_long = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
+                if p_long.get("size", 0.0) > 0:
+                    self.long_pos = p_long
+            if self.short_ex in self.orders:
+                p_short = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
+                if p_short.get("size", 0.0) > 0:
+                    self.short_pos = p_short
+
+            l_size = self.long_pos.get("size", 0.0)
+            s_size = self.short_pos.get("size", 0.0)
+
+            l_rate = min(1.0, l_size / req_long_qty) if req_long_qty > 0 else 1.0
+            s_rate = min(1.0, s_size / req_short_qty) if req_short_qty > 0 else 1.0
+            now = time.perf_counter()
+            elapsed = now - start_time
+
+            # Триггер 1: Обе ноги залиты на 100% (+-1% погрешность, т.е. >= 99%) -> Мгновенный выход!
+            if l_rate >= 0.99 and s_rate >= 0.99:
+                log(f"[{self.sym}] 🚀 Обе ноги залиты на 100% за {elapsed*1000:.1f} мс (досрочный выход)!", level="INFO")
+                break
+
+            # Триггер 2: Истек максимальный таймаут (например, 150-200 мс)
+            if now >= deadline:
+                log(f"[{self.sym}] ⏱ Таймаут подтверждения налива истек ({elapsed*1000:.1f} мс). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
+                break
+
+            # Триггер 3: Налив удовлетворяет min_fill_rate (>=95%), но мы выдерживаем обязательный минимум (10 мс)
+            if l_rate >= self.min_fill_rate and s_rate >= self.min_fill_rate:
+                if elapsed >= self.fill_confirm_min_wait:
+                    log(f"[{self.sym}] ✅ Минимальное окно ожидания {self.fill_confirm_min_wait*1000:.1f} мс пройдено, налив подтвержден (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
+                    break
+
+            await asyncio.sleep(self.fill_confirm_poll_interval)
+
+        return self.long_pos, self.short_pos, l_rate, s_rate
+
     async def run_open(self) -> bool:
         """
         Запуск пайплайна открытия позиции (Market-Only):
@@ -105,27 +161,11 @@ class PositionFSM:
         gross_val = self.engine_res.get("vwap_spread", 0.0)
         log(f"[{self.sym}] Открываем: LONG {self.long_ex} | SHORT {self.short_ex} | Net Spread: {spread_val * 100:.2f}% (Gross: {gross_val * 100:.2f}%, Режим: MARKET)", level="INFO")
 
+        # 1. Расчет цен и объемов
+        size_long_usd = float(self.cfg["trading_risks"][self.long_ex.lower()]["trade_size_usd"])
+        size_short_usd = float(self.cfg["trading_risks"][self.short_ex.lower()]["trade_size_usd"])
         price_long = self.engine_res.get("long_avg_price", 0.0)
-        size_long_usd = self.engine_res.get("long_qty", 0.0) * price_long
-
         price_short = self.engine_res.get("short_avg_price", 0.0)
-        size_short_usd = self.engine_res.get("short_qty", 0.0) * price_short
-
-        # 1. Pre-flight проверка размеров ордеров
-        try:
-            if self.long_ex in self.orders:
-                self.orders[self.long_ex].check_order_size(self.native_long, size_long_usd, price_long)
-            if self.short_ex in self.orders:
-                self.orders[self.short_ex].check_order_size(self.native_short, size_short_usd, price_short)
-        except Exception as e:
-            log(f"[{self.sym}] 🚨 Ошибка валидации размера ордеров до входа: {e}", level="ERROR")
-            self.ban_coin_cb(self.sym, reason=f"Order Size Validation Error: {e}", duration_sec=3600)
-            self._set_state(PositionState.FAILED)
-            if self.writer:
-                asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
-                    "route": self.route, "sym": self.sym, "long_ex": self.long_ex, "short_ex": self.short_ex
-                }))
-            return False
 
         # 2. Отправка ордеров (MARKET через реактивные WS стримы)
         tasks = []
@@ -170,40 +210,11 @@ class PositionFSM:
         req_long_qty = self.engine_res.get("long_qty", 0.0)
         req_short_qty = self.engine_res.get("short_qty", 0.0)
 
-        # Первичное чтение из локального кэша WS (нулевая сетевая задержка)
-        if self.long_ex in self.orders:
-            self.long_pos = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
-        if self.short_ex in self.orders:
-            self.short_pos = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
-
+        self.long_pos, self.short_pos, l_rate, s_rate = await self._wait_for_fill_confirmation(
+            req_long_qty, req_short_qty
+        )
         l_size = self.long_pos.get("size", 0.0)
         s_size = self.short_pos.get("size", 0.0)
-
-        # Для MARKET ордеров: поллинг кэша WS с кастомным таймаутом
-        # (zero-cost: чтение локального dict, без сетевых запросов)
-        if l_size < req_long_qty or s_size < req_short_qty:
-            deadline = time.time() + self.fill_confirm_timeout
-            while time.time() < deadline:
-                await asyncio.sleep(self.fill_confirm_poll_interval)
-                if self.long_ex in self.orders:
-                    p = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
-                    if p.get("size", 0.0) > 0:
-                        self.long_pos = p
-                        l_size = p["size"]
-                if self.short_ex in self.orders:
-                    p = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
-                    if p.get("size", 0.0) > 0:
-                        self.short_pos = p
-                        s_size = p["size"]
-                # Ранний выход, если обе ноги налили 100% сайза
-                if l_size >= req_long_qty and s_size >= req_short_qty:
-                    log(f"[{self.sym}] 🚀 Обе ноги залиты на 100% досрочно!", level="INFO")
-                    break
-            if l_size > 0 and s_size > 0:
-                log(f"[{self.sym}] WS подтвердил обе ноги после дополлинга (L:{l_size}, S:{s_size})", level="INFO")
-
-        l_rate = min(1.0, l_size / req_long_qty) if req_long_qty > 0 else 1.0
-        s_rate = min(1.0, s_size / req_short_qty) if req_short_qty > 0 else 1.0
 
         self.open_time = time.time()
         self.open_time_ms = int(self.open_time * 1000)

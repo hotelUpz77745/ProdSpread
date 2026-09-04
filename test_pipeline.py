@@ -65,7 +65,7 @@ async def test_adapters():
     import json
     with open("cfg.json", "r", encoding="utf-8") as f:
         cfg = json.load(f)
-    execution_pause = float(cfg["EXECUTION_PAUSE"])
+    execution_pause = float(cfg.get("EXECUTION_PAUSE", 0.025))
 
     price_long_limit = test_price * 0.50 # Deep limit below market (safe, will not fill)
     price_short_limit = test_price * 1.50 # Deep limit above market (safe, will not fill)

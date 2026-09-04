@@ -95,7 +95,6 @@ class ExecutorProcess:
         
         self.order_execution_type = self.cfg["trading_rules"]["entry"]["order_execution_type"].upper()
         self.min_fill_rate = float(self.cfg["trading_rules"]["entry"]["min_fill_rate"])
-        self.execution_pause = float(self.cfg["EXECUTION_PAUSE"])
         
         self.pm = None
         self.analytics_map = {}
