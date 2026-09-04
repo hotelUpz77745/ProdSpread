@@ -60,10 +60,16 @@ class PositionFSM:
         self.state = PositionState.IDLE
         self.order_policy = self.cfg["trading_rules"]["entry"]["order_execution_type"].upper()
         self.min_fill_rate = float(self.cfg["trading_rules"]["entry"]["min_fill_rate"])
-        self.execution_pause = float(self.cfg["EXECUTION_PAUSE"])
 
         # Параметры подтверждения налива (из конфига, без магии)
-        self.fill_confirm_timeout = float(self.cfg["trading_rules"]["entry"].get("fill_confirm_timeout_sec", 0.5))
+        timeout_cfg = self.cfg["trading_rules"]["entry"].get("fill_confirm_timeout_sec", 0.05)
+        if isinstance(timeout_cfg, dict):
+            pair_key1 = f"{long_ex}_{short_ex}".upper()
+            pair_key2 = f"{short_ex}_{long_ex}".upper()
+            self.fill_confirm_timeout = float(timeout_cfg.get(pair_key1, timeout_cfg.get(pair_key2, timeout_cfg.get("default", 0.05))))
+        else:
+            self.fill_confirm_timeout = float(timeout_cfg)
+            
         self.fill_confirm_poll_interval = float(self.cfg["trading_rules"]["entry"].get("fill_confirm_poll_interval_sec", 0.02))
 
         # Параметры аварийного сброса (из конфига)
@@ -158,10 +164,7 @@ class PositionFSM:
             return False
 
         # 3. Фаза ожидания налива (RESTING_BOOK)
-        # Пауза EXECUTION_PAUSE выдерживается ОБЯЗАТЕЛЬНО как для LIMIT_GTC, так и для IOC!
         self._set_state(PositionState.RESTING_BOOK)
-        await asyncio.sleep(self.execution_pause)
-
         # 4. Фаза отмены остатков (CANCELLING) - только для LIMIT_GTC (в IOC неналитое сжигает сама биржа)
         if self.order_policy == "LIMIT_GTC":
             self._set_state(PositionState.CANCELLING)
@@ -187,23 +190,25 @@ class PositionFSM:
         l_size = self.long_pos.get("size", 0.0)
         s_size = self.short_pos.get("size", 0.0)
 
-        # Для MARKET ордеров: если WS ещё не подтвердил обе ноги — дополлинг кэша WS
+        # Для MARKET и IOC ордеров: поллинг кэша WS с кастомным таймаутом
         # (zero-cost: чтение локального dict, без сетевых запросов)
-        if self.order_policy == "MARKET" and (l_size == 0 or s_size == 0):
+        if self.order_policy in ["MARKET", "IOC"] and (l_size < req_long_qty or s_size < req_short_qty):
             deadline = time.time() + self.fill_confirm_timeout
             while time.time() < deadline:
                 await asyncio.sleep(self.fill_confirm_poll_interval)
-                if l_size == 0 and self.long_ex in self.orders:
+                if self.long_ex in self.orders:
                     p = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
                     if p.get("size", 0.0) > 0:
                         self.long_pos = p
                         l_size = p["size"]
-                if s_size == 0 and self.short_ex in self.orders:
+                if self.short_ex in self.orders:
                     p = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
                     if p.get("size", 0.0) > 0:
                         self.short_pos = p
                         s_size = p["size"]
-                if l_size > 0 and s_size > 0:
+                # Ранний выход, если обе ноги налили 100% сайза
+                if l_size >= req_long_qty and s_size >= req_short_qty:
+                    log(f"[{self.sym}] 🚀 Обе ноги залиты на 100% досрочно!", level="INFO")
                     break
             if l_size > 0 and s_size > 0:
                 log(f"[{self.sym}] WS подтвердил обе ноги после дополлинга (L:{l_size}, S:{s_size})", level="INFO")
@@ -375,7 +380,7 @@ class PositionFSM:
 
         # Контрольный опрос и подчистка остатков (до 3 попыток до подтверждения строго 0.0)
         for attempt in range(3):
-            await asyncio.sleep(self.execution_pause)
+            await asyncio.sleep(self.unwind_retry_pause)
             l_check = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0}
             s_check = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT") if self.short_ex in self.orders else {"size": 0.0}
 
@@ -398,8 +403,13 @@ class PositionFSM:
                         "route": self.route, "sym": self.sym, "reason": reason
                     }))
                 if self.on_settle_cb:
+                    entry_l = self.long_pos.get("price", 0.0)
+                    entry_s = self.short_pos.get("price", 0.0)
+                    exit_l = exit_res.get("long_close_price", self.engine_res.get("long_avg_price", 1.0))
+                    exit_s = exit_res.get("short_close_price", self.engine_res.get("short_avg_price", 1.0))
+                    
                     asyncio.create_task(self.on_settle_cb(
-                        self.sym, self.native_long, self.native_short, self.long_ex, self.short_ex, self.open_time_ms
+                        self.sym, self.long_ex, self.short_ex, entry_l, entry_s, exit_l, exit_s
                     ))
                 return True
                 

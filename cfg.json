@@ -8,7 +8,6 @@
     "QUOTE": "USDT",
     "MAIN_LOOP_DELAY": 0.0,
     "measure_loop_speed": false,
-    "EXECUTION_PAUSE": 0.025,
     "topology_rebuild_interval_sec": null,
     "logging": {
         "debug": false,
@@ -97,7 +96,7 @@
     },
     "trading_rules": {
         "entry": {
-            "order_execution_type": "MARKET",
+            "order_execution_type": "IOC",
             "order_execution_type_desc": "Allowed values: IOC | LIMIT_GTC | MARKET",
             "max_desync_ms": null,
             "spread_entry": 0.007,
@@ -107,8 +106,13 @@
             "check_synthetic_slippage": true,
             "max_slippage_ratio": 0.5,
             "hard_max_slippage": 0.015,
-            "fill_confirm_timeout_sec": 0.025,
-            "fill_confirm_timeout_sec_desc": "Max seconds to poll WS cache for fill confirmation in MARKET mode",
+            "fill_confirm_timeout_sec": {
+                "default": 0.03,
+                "BINANCE_KUCOIN": 0.025,
+                "BINANCE_BITGET": 0.08,
+                "KUCOIN_BITGET": 0.08
+            },
+            "fill_confirm_timeout_sec_desc": "Max seconds to poll WS cache for fill confirmation in MARKET/IOC mode. Configured per exchange pair.",
             "fill_confirm_poll_interval_sec": 0.005,
             "fill_confirm_poll_interval_sec_desc": "Interval (sec) between WS cache reads during fill confirmation polling"
         },

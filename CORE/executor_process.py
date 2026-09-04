@@ -225,17 +225,29 @@ class ExecutorProcess:
         self.active_fsm.pop(sym, None)
 
 
-    async def _post_close_settlement(self, sym: str, native_long: str, native_short: str, long_ex: str, short_ex: str, open_time_ms: int):
-        """Фоновый расчет реального PnL и клиринг сделки через 1.8 секунды."""
-        total_inv = self.cfg["trading_risks"][long_ex.lower()].get("trade_size_usd", 7.0) + \
-                    self.cfg["trading_risks"][short_ex.lower()].get("trade_size_usd", 7.0)
-                    
-        res = await self.settlement.settle_trade(
-            sym, native_long, native_short, long_ex, short_ex, open_time_ms, total_inv, delay_sec=1.8
-        )
+    async def _post_close_settlement(self, sym: str, long_ex: str, short_ex: str, entry_l: float, entry_s: float, exit_l: float, exit_s: float):
+        """Фоновый математический расчет PnL (Paper Settlement) без ожидания и запросов к биржам."""
+        long_trade_size = self.cfg["trading_risks"][long_ex.lower()].get("trade_size_usd", 7.0)
+        short_trade_size = self.cfg["trading_risks"][short_ex.lower()].get("trade_size_usd", 7.0)
+        long_taker_fee = self.cfg["trading_risks"][long_ex.lower()].get("taker_fee", 0.0006)
+        short_taker_fee = self.cfg["trading_risks"][short_ex.lower()].get("taker_fee", 0.0006)
+        total_inv = long_trade_size + short_trade_size
         
-        net_usd = res["total_net_pnl_usd"]
-        net_yield = res["net_yield_pct"]
+        long_pnl_pct = (exit_l - entry_l) / entry_l if entry_l > 0 else 0.0
+        short_pnl_pct = (entry_s - exit_s) / entry_s if entry_s > 0 else 0.0
+        
+        l_fee_usd = long_trade_size * long_taker_fee * 2.0  # open + close
+        s_fee_usd = short_trade_size * short_taker_fee * 2.0
+        
+        long_net_usd = (long_trade_size * long_pnl_pct) - l_fee_usd
+        short_net_usd = (short_trade_size * short_pnl_pct) - s_fee_usd
+        
+        net_usd = long_net_usd + short_net_usd
+        total_comm_usd = l_fee_usd + s_fee_usd
+        net_yield = net_usd / total_inv if total_inv > 0 else 0.0
+        
+        from c_log import log
+        log(f"[{sym}] 🧮 Paper клиринг: {long_ex} Net: {long_net_usd:+.4f}$ | {short_ex} Net: {short_net_usd:+.4f}$ | Total: {net_usd:+.4f}$ ({net_yield*100:+.3f}%) | Fees: {total_comm_usd:.4f}$", level="INFO")
         
         if sym in self.analytics_map:
             # Записываем фактический PnL в лог аналитики
