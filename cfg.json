@@ -107,9 +107,9 @@
             "check_synthetic_slippage": true,
             "max_slippage_ratio": 0.5,
             "hard_max_slippage": 0.015,
-            "fill_confirm_timeout_sec": 0.5,
+            "fill_confirm_timeout_sec": 0.025,
             "fill_confirm_timeout_sec_desc": "Max seconds to poll WS cache for fill confirmation in MARKET mode",
-            "fill_confirm_poll_interval_sec": 0.02,
+            "fill_confirm_poll_interval_sec": 0.005,
             "fill_confirm_poll_interval_sec_desc": "Interval (sec) between WS cache reads during fill confirmation polling"
         },
         "exit": {
@@ -165,7 +165,7 @@
         "emergency_unwind": {
             "max_attempts": 5,
             "max_attempts_desc": "Maximum REST check + close cycles in emergency unwind",
-            "retry_pause_sec": 0.5,
+            "retry_pause_sec": 0.05,
             "retry_pause_sec_desc": "Pause (sec) between emergency unwind attempts"
         }
     }
