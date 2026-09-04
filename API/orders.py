@@ -46,7 +46,7 @@ class BinanceOrder:
     async def _keepalive_loop(self):
         while True:
             try:
-                await asyncio.sleep(120)
+                await asyncio.sleep(45)
                 await self.warmup()
             except asyncio.CancelledError:
                 break
@@ -353,7 +353,7 @@ class KucoinOrder:
     async def _keepalive_loop(self):
         while True:
             try:
-                await asyncio.sleep(120)
+                await asyncio.sleep(45)
                 await self.warmup()
             except asyncio.CancelledError:
                 break
@@ -785,7 +785,7 @@ class OkxOrder:
         while True:
             try:
                 import asyncio
-                await asyncio.sleep(120)
+                await asyncio.sleep(45)
                 await self.warmup()
             except asyncio.CancelledError:
                 break
@@ -856,7 +856,7 @@ class BitgetOrder:
         while True:
             try:
                 import asyncio
-                await asyncio.sleep(120)
+                await asyncio.sleep(45)
                 await self.warmup()
             except asyncio.CancelledError:
                 break
