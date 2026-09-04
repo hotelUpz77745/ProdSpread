@@ -38,6 +38,11 @@ class KucoinPositionStream:
         
         # Track positions by symbol
         self.positions: Dict[str, Dict[str, Any]] = {}
+        self.last_close_prices: Dict[str, float] = {}
+
+    def get_last_close_price(self, symbol: str) -> float:
+        sym = symbol.strip().upper()
+        return self.last_close_prices.get(sym, 0.0)
 
     async def stop(self):
         self._external_stop = True
@@ -90,7 +95,7 @@ class KucoinPositionStream:
             self.is_connected = True
             log(f"[KUCOIN WS_PRIVATE] Connected successfully.", level="INFO")
             
-            # Subscribe to tradeOrders (global private fills stream)
+            # 1. Subscribe to tradeOrders (global private fills stream)
             sub_msg = {
                 "id": int(time.time() * 1000),
                 "type": "subscribe",
@@ -99,6 +104,16 @@ class KucoinPositionStream:
                 "response": True
             }
             await self.websocket.send_json(sub_msg)
+
+            # 2. Subscribe to positionAll (real-time position state and zero-balance events)
+            sub_pos = {
+                "id": int(time.time() * 1000) + 1,
+                "type": "subscribe",
+                "topic": "/contract/positionAll",
+                "privateChannel": True,
+                "response": True
+            }
+            await self.websocket.send_json(sub_pos)
             
             return True
         except Exception as e:
@@ -167,43 +182,48 @@ class KucoinPositionStream:
                 pos_side = (pdata.get("positionSide") or ("LONG" if pdata.get("side") == "buy" else "SHORT")).upper()
                 
                 if symbol:
+                    if match_price > 0:
+                        self.last_close_prices[symbol] = match_price
                     if symbol not in self.positions:
                         self.positions[symbol] = {"LONG": {"size": 0.0, "price": 0.0}, "SHORT": {"size": 0.0, "price": 0.0}}
                     if status in ("match", "done", "filled") and filled_size > 0:
-                        curr_price = self.positions[symbol][pos_side].get("price", 0.0)
-                        final_price = match_price if match_price > 0 else curr_price
-                        self.positions[symbol][pos_side] = {
-                            "size": filled_size,
-                            "price": final_price
-                        }
+                        curr_p = self.positions[symbol][pos_side]
+                        if curr_p.get("size", 0.0) == 0.0:
+                            self.positions[symbol][pos_side] = {
+                                "size": filled_size,
+                                "price": match_price if match_price > 0 else curr_p.get("price", 0.0)
+                            }
 
-            elif topic.startswith("/contract/position:"):
-                subj = data.get("subject")
-                if subj == "position.change":
-                    pdata = data.get("data", {})
-                    symbol = pdata.get("symbol")
-                    pos_amt = float(pdata.get("currentQty", 0))
-                    ep_raw = float(pdata.get("avgEntryPrice", 0))
-                    pos_side = (pdata.get("positionSide") or "").upper()
+            elif topic.startswith("/contract/position"):
+                pdata = data.get("data", {})
+                symbol = pdata.get("symbol")
+                pos_amt = float(pdata.get("currentQty", 0))
+                ep_raw = float(pdata.get("avgEntryPrice", 0))
+                pos_side = (pdata.get("positionSide") or pdata.get("posSide") or "").upper()
+                
+                if symbol:
+                    if symbol not in self.positions:
+                        self.positions[symbol] = {"LONG": {"size": 0.0, "price": 0.0}, "SHORT": {"size": 0.0, "price": 0.0}}
                     
-                    if symbol:
-                        if symbol not in self.positions:
-                            self.positions[symbol] = {"LONG": {"size": 0.0, "price": 0.0}, "SHORT": {"size": 0.0, "price": 0.0}}
-                        
-                        if pos_side == "LONG":
-                            self.positions[symbol]["LONG"] = {"size": abs(float(pos_amt)), "price": ep_raw if pos_amt != 0 else 0.0}
-                        elif pos_side == "SHORT":
-                            self.positions[symbol]["SHORT"] = {"size": abs(float(pos_amt)), "price": ep_raw if pos_amt != 0 else 0.0}
+                    if pos_amt == 0.0:
+                        self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
+                        self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
+                    elif pos_side == "LONG":
+                        self.positions[symbol]["LONG"] = {"size": abs(float(pos_amt)), "price": ep_raw}
+                        self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
+                    elif pos_side == "SHORT":
+                        self.positions[symbol]["SHORT"] = {"size": abs(float(pos_amt)), "price": ep_raw}
+                        self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
+                    else:
+                        if pos_amt > 0:
+                            self.positions[symbol]["LONG"] = {"size": float(pos_amt), "price": ep_raw}
+                            self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
+                        elif pos_amt < 0:
+                            self.positions[symbol]["SHORT"] = {"size": abs(float(pos_amt)), "price": ep_raw}
+                            self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
                         else:
-                            if pos_amt > 0:
-                                self.positions[symbol]["LONG"] = {"size": float(pos_amt), "price": ep_raw}
-                                self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
-                            elif pos_amt < 0:
-                                self.positions[symbol]["SHORT"] = {"size": abs(float(pos_amt)), "price": ep_raw}
-                                self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
-                            else:
-                                self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
-                                self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
+                            self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
+                            self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
 
     async def start(self):
         self._external_stop = False
