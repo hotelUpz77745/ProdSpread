@@ -5,6 +5,8 @@
 import os
 import time
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from datetime import datetime, timezone
 import pytz
@@ -175,6 +177,154 @@ class TradeAnalytics:
             
         self.active_trade = {}
         return trade_obj 
+
+    def record_settlement(self, settle_res: Dict[str, Any], exit_res: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Фиксация фактического биржевого клиринга (реальные доллары, комиссии и цены исполнения).
+        """
+        t_in = self.active_trade
+        close_time = time.time()
+        open_time = t_in.get("open_time", close_time)
+        
+        duration_sec = int(close_time - open_time)
+        mins, secs = divmod(duration_sec, 60)
+        duration_str = f"{mins} min {secs} sec"
+        
+        dt_open = datetime.fromtimestamp(open_time, self.tz).strftime('%Y-%m-%d %H:%M:%S')
+        dt_close = datetime.fromtimestamp(close_time, self.tz).strftime('%Y-%m-%d %H:%M:%S')
+        
+        long_ex = settle_res.get("long_ex") or t_in.get("long_ex", "UNKNOWN")
+        short_ex = settle_res.get("short_ex") or t_in.get("short_ex", "UNKNOWN")
+        route = t_in.get("route", f"{long_ex}_{short_ex}")
+        
+        long_open_p = float(settle_res.get("long_open_price") or t_in.get("long_price_in", 0.0))
+        long_close_p = float(settle_res.get("long_close_price", 0.0))
+        short_open_p = float(settle_res.get("short_open_price") or t_in.get("short_price_in", 0.0))
+        short_close_p = float(settle_res.get("short_close_price", 0.0))
+        
+        long_net_usd = float(settle_res.get("long_net_pnl_usd", 0.0))
+        short_net_usd = float(settle_res.get("short_net_pnl_usd", 0.0))
+        total_comm_usd = float(settle_res.get("total_commission_usd", 0.0))
+        net_pnl_usd = float(settle_res.get("total_net_pnl_usd", 0.0))
+        net_yield_pct = float(settle_res.get("net_yield_pct", 0.0))
+        
+        self.cumulative_pnl_usd += net_pnl_usd
+        self.trade_counter += 1
+        
+        spread_in = float(t_in.get("spread_in", 0.0))
+        spread_out = float(exit_res.get("vwap_spread_out", 0.0)) if exit_res else 0.0
+        
+        trade_obj = {
+            "Trade_ID": self.trade_counter,
+            "Route": route,
+            "Direction": t_in.get("direction", "LONG_SHORT"),
+            "Long_Ex": long_ex,
+            "Short_Ex": short_ex,
+            "Open_Time": dt_open,
+            "Close_Time": dt_close,
+            "Duration": duration_str,
+            "Long_Price_In": round(long_open_p, 6),
+            "Short_Price_In": round(short_open_p, 6),
+            "Long_Price_Out": round(long_close_p, 6),
+            "Short_Price_Out": round(short_close_p, 6),
+            "Long_PnL_USD": round(long_net_usd, 4),
+            "Short_PnL_USD": round(short_net_usd, 4),
+            "Total_Fee_USD": round(total_comm_usd, 4),
+            "Net_PnL": round(net_yield_pct, 5),
+            "Net_PnL_USD": round(net_pnl_usd, 4),
+            "Win": 1 if net_pnl_usd >= 0 else -1,
+            "Spread_In": round(spread_in, 4),
+            "Spread_Out": round(spread_out, 4),
+            "Cumulative_PnL_USD": round(self.cumulative_pnl_usd, 4)
+        }
+        
+        readable = (
+            f"=========================================\n"
+            f"Сделка #{self.trade_counter} (РЕАЛЬНЫЙ БИРЖЕВОЙ КЛИРИНГ)\n"
+            f"Связка: {route}\n"
+            f"Время: {dt_open} -> {dt_close} ({duration_str})\n"
+            f"Вход | {long_ex}: {long_open_p:.6f} | {short_ex}: {short_open_p:.6f} | Спред: {spread_in:.4f}\n"
+            f"Выход| {long_ex}: {long_close_p:.6f} | {short_ex}: {short_close_p:.6f} | Спред: {spread_out:.4f}\n"
+            f"PnL USD: {long_ex} {long_net_usd:+.4f}$ | {short_ex} {short_net_usd:+.4f}$\n"
+            f"Комиссии: {total_comm_usd:.4f} USD\n"
+            f"P&L: {net_pnl_usd:+.4f} USD ({net_yield_pct*100:+.3f}%)\n"
+            f"Cumulative PnL: {self.cumulative_pnl_usd:+.4f}$\n"
+            f"=========================================\n\n"
+        )
+        
+        try:
+            def _io_tasks():
+                try:
+                    with open(self.filepath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    data = []
+                    
+                data.append(trade_obj)
+                with open(self.filepath, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=4, ensure_ascii=False)
+                    
+                with open(self.readable_path, "a", encoding="utf-8") as f:
+                    f.write(readable)
+                    
+                log(f"[ANALYTICS] [{self.symbol}] Сделка #{self.trade_counter} ({route}) сохранена. Net PnL: {net_pnl_usd:+.4f} USD.", level="INFO")
+
+            _analytics_executor.submit(_io_tasks)
+        except Exception as e:
+            log(f"Error submitting IO tasks in analytics: {e}", level="ERROR")
+            
+        self.active_trade = {}
+        return trade_obj
+
+
+def update_total_balance(cfg: dict, is_startup: bool = False, extra_pnl: float = 0.0) -> float:
+    """
+    Записывает текущий прогресс баланса в total_balance.json и логирует его.
+    Формат полностью совпадает с PapperSpread, отображая базовый баланс и накопленный PnL.
+    """
+    try:
+        risks = cfg.get("trading_risks", {})
+        base_total = sum(float(risk.get("paper_start_balance", 0.0)) for risk in risks.values())
+        
+        log_dir = os.path.join("logs", "analytics")
+        history_pnl = 0.0
+        if os.path.exists(log_dir):
+            for fname in os.listdir(log_dir):
+                if fname.endswith(".json") and fname != "global_report.json":
+                    fpath = os.path.join(log_dir, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            trades = json.load(f)
+                            if trades and isinstance(trades, list):
+                                history_pnl += sum(float(t.get("Net_PnL_USD", 0.0)) for t in trades)
+                    except Exception:
+                        pass
+                        
+        total_pnl = history_pnl + extra_pnl
+        total = base_total + total_pnl
+        now = time.time()
+        
+        payload = {
+            "timestamp": now,
+            "total_balance_usd": round(total, 4),
+            "base_total_usd": round(base_total, 4),
+            "total_pnl_usd": round(total_pnl, 4)
+        }
+        with open("total_balance.json", "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=4)
+            
+        prefix = "Initial Total balance" if is_startup else "Total balance updated"
+        log(f"{prefix}: {total:.2f} USD (Base: {base_total:.2f}, PnL: {total_pnl:.2f})", level="INFO")
+        
+        try:
+            generate_global_report()
+        except Exception as e:
+            log(f"Error generating global report: {e}", level="WARNING")
+            
+        return total
+    except Exception as e:
+        log(f"Error updating total balance: {e}", level="ERROR")
+        return 0.0
 
 
 def generate_global_report(log_dir: str = "logs/analytics"):

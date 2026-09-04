@@ -24,7 +24,7 @@ from API.settlement import ExchangeSettlement
 from CORE.position_manager import PositionManager
 from CORE.position_fsm import PositionFSM
 from CORE.leverage_setter import LeverageSetter
-from analytics import TradeAnalytics, generate_global_report
+from analytics import TradeAnalytics, generate_global_report, update_total_balance
 from CORE.ipc_socket import async_write_msg, async_read_msg
 
 
@@ -137,6 +137,7 @@ class ExecutorProcess:
 
     async def init_runtime(self):
         self._load_banned()
+        update_total_balance(self.cfg, is_startup=True)
         self.session = await SessionManager().get_session()
         self.orders["BINANCE"].session = self.session
         self.orders["KUCOIN"].session = self.session
@@ -244,10 +245,11 @@ class ExecutorProcess:
             net_usd = settle_res["total_net_pnl_usd"]
             net_yield = settle_res["net_yield_pct"]
 
-            if sym in self.analytics_map:
-                self.analytics_map[sym].cumulative_pnl_usd += net_usd
+            if sym not in self.analytics_map:
+                self.analytics_map[sym] = TradeAnalytics(sym, self.cfg["trading_risks"])
 
-            generate_global_report()
+            self.analytics_map[sym].record_settlement(settle_res)
+            update_total_balance(self.cfg)
 
             if net_usd < 0:
                 self.ban_coin(sym, reason=f"Убыточная сделка, Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)")

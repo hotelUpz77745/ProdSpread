@@ -29,6 +29,7 @@ from API.OKX.stakan import OkxStakanStream
 from API.BITGET.stakan import BitgetStakanStream
 from API.discovery import DiscoveryManager
 from utils import SessionManager
+from analytics import update_total_balance
 
 EXCHANGES = ["BINANCE", "KUCOIN", "OKX", "BITGET"]
 EX_TO_IDX = {ex: i for i, ex in enumerate(EXCHANGES)}
@@ -210,6 +211,9 @@ class Main:
                     handler = self._make_depth_handler(ex)
                     asyncio.create_task(self.streams[ex].run(handler))
                     log(f"Started {ex} Public Orderbook WS stream ({len(syms)} symbols)", level="INFO")
+
+        # Initial balance write
+        update_total_balance(self.cfg, is_startup=True)
 
         # 5. Главный вычислительный цикл (Numba JIT)
         prices_array = np.full((7, 2), [np.inf, 0.0], dtype=np.float64)

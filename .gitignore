@@ -7,3 +7,4 @@ CACHE/
 banned_symbols.json
 active_positions.json
 scratch/
+total_balance.json
