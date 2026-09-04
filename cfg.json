@@ -25,7 +25,7 @@
             "trade_size_usd": 20.0,
             "taker_fee": 0.0005,
             "volatility_discount_entry": 0.30,
-            "volatility_discount_exit": 0.8,
+            "volatility_discount_exit": 0.35,
             "max_positions": 1
         },
         "kucoin": {
@@ -33,7 +33,7 @@
             "trade_size_usd": 20.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.30,
-            "volatility_discount_exit": 0.8,
+            "volatility_discount_exit": 0.35,
             "max_positions": 1
         },
         "okx": {
@@ -41,7 +41,7 @@
             "trade_size_usd": 100.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.30,
-            "volatility_discount_exit": 1.0,
+            "volatility_discount_exit": 0.35,
             "max_positions": 1
         },
         "bitget": {
@@ -49,7 +49,7 @@
             "trade_size_usd": 20.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.30,
-            "volatility_discount_exit": 0.8,
+            "volatility_discount_exit": 0.35,
             "max_positions": 1
         }
     },
@@ -94,7 +94,7 @@
         "entry": {
             "order_execution_type": "MARKET",
             "order_execution_type_desc": "Allowed values: MARKET (IOC and LIMIT_GTC removed)",
-            "max_desync_ms": null,
+            "max_desync_ms": 150,
             "spread_entry": 0.007,
             "min_fill_rate": 0.99,
             "top_n_candidates": 4,

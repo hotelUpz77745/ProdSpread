@@ -384,13 +384,14 @@ class PositionFSM:
                         "route": self.route, "sym": self.sym, "reason": reason
                     }))
                 if self.on_settle_cb:
-                    entry_l = self.long_pos.get("price", 0.0)
-                    entry_s = self.short_pos.get("price", 0.0)
-                    exit_l = exit_res.get("long_close_price", self.engine_res.get("long_avg_price", 1.0))
-                    exit_s = exit_res.get("short_close_price", self.engine_res.get("short_avg_price", 1.0))
-                    
+                    open_time_ms = getattr(self, "open_time_ms", 0)
+                    if not open_time_ms and getattr(self, "open_time", 0):
+                        open_time_ms = int(self.open_time * 1000)
+                    if not open_time_ms:
+                        open_time_ms = int((time.time() - 60) * 1000)
+
                     asyncio.create_task(self.on_settle_cb(
-                        self.sym, self.long_ex, self.short_ex, entry_l, entry_s, exit_l, exit_s
+                        self.sym, self.native_long, self.native_short, self.long_ex, self.short_ex, open_time_ms
                     ))
                 return True
                 

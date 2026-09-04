@@ -80,6 +80,11 @@ class ExchangeSettlement:
                         total_commission_usd = 0.0
                         bnb_price = await self.get_bnb_price()
 
+                        buy_qty = 0.0
+                        buy_cost = 0.0
+                        sell_qty = 0.0
+                        sell_cost = 0.0
+
                         for t in trades:
                             if position_side and t.get("positionSide", "").upper() != position_side.upper():
                                 continue
@@ -93,11 +98,33 @@ class ExchangeSettlement:
                             else:
                                 total_commission_usd += comm
 
+                            p = float(t.get("price", 0.0))
+                            q = float(t.get("qty", 0.0))
+                            side = str(t.get("side", "")).upper()
+                            if side == "BUY":
+                                buy_qty += q
+                                buy_cost += p * q
+                            elif side == "SELL":
+                                sell_qty += q
+                                sell_cost += p * q
+
+                        if position_side and position_side.upper() == "LONG":
+                            open_p = (buy_cost / buy_qty) if buy_qty > 0 else 0.0
+                            close_p = (sell_cost / sell_qty) if sell_qty > 0 else 0.0
+                        elif position_side and position_side.upper() == "SHORT":
+                            open_p = (sell_cost / sell_qty) if sell_qty > 0 else 0.0
+                            close_p = (buy_cost / buy_qty) if buy_qty > 0 else 0.0
+                        else:
+                            open_p = (buy_cost / buy_qty) if buy_qty > 0 else 0.0
+                            close_p = (sell_cost / sell_qty) if sell_qty > 0 else 0.0
+
                         net_pnl = realized_pnl - total_commission_usd
                         return {
                             "realized_pnl": realized_pnl,
                             "commission": total_commission_usd,
                             "net_pnl": net_pnl,
+                            "open_price": open_p,
+                            "close_price": close_p,
                             "trades_count": len(trades)
                         }
                 else:
@@ -204,18 +231,20 @@ class ExchangeSettlement:
                         items = data["data"].get("list", [])
                         for item in items:
                             if item.get("symbol") == clean_symbol:
-                                u_time = int(item.get("uTime") or item.get("cTime") or 0)
-                                if u_time >= (start_time_ms - 3000):
+                                u_time = int(item.get("utime") or item.get("uTime") or item.get("ctime") or item.get("cTime") or 0)
+                                if u_time >= (start_time_ms - 5000):
                                     net_pnl = float(item.get("netProfit", 0.0))
-                                    open_fee = float(item.get("openFeeTotal", 0.0))
-                                    close_fee = float(item.get("closeFeeTotal", 0.0))
-                                    gross_pnl = float(item.get("cumRealisedPnl", 0.0))
+                                    open_fee = abs(float(item.get("openFee") or item.get("openFeeTotal") or 0.0))
+                                    close_fee = abs(float(item.get("closeFee") or item.get("closeFeeTotal") or 0.0))
+                                    gross_pnl = float(item.get("pnl") or item.get("cumRealisedPnl") or 0.0)
+                                    open_p = float(item.get("openAvgPrice") or item.get("openPriceAvg") or 0.0)
+                                    close_p = float(item.get("closeAvgPrice") or item.get("closePriceAvg") or 0.0)
                                     return {
                                         "realized_pnl": gross_pnl,
                                         "commission": open_fee + close_fee,
                                         "net_pnl": net_pnl,
-                                        "close_price": float(item.get("closePriceAvg", 0.0)),
-                                        "open_price": float(item.get("openPriceAvg", 0.0))
+                                        "close_price": close_p,
+                                        "open_price": open_p
                                     }
                 else:
                     err = await resp.text()
@@ -269,10 +298,19 @@ class ExchangeSettlement:
 
         net_yield_pct = (total_net_pnl_usd / total_investment_usd) if total_investment_usd > 0 else 0.0
 
+        long_open_p = float(long_res.get("open_price", 0.0))
+        long_close_p = float(long_res.get("close_price", 0.0))
+        short_open_p = float(short_res.get("open_price", 0.0))
+        short_close_p = float(short_res.get("close_price", 0.0))
+
         res = {
             "symbol": sym,
             "long_ex": long_ex,
             "short_ex": short_ex,
+            "long_open_price": long_open_p,
+            "long_close_price": long_close_p,
+            "short_open_price": short_open_p,
+            "short_close_price": short_close_p,
             "long_net_pnl_usd": long_net_usd,
             "short_net_pnl_usd": short_net_usd,
             "total_commission_usd": total_comm_usd,
@@ -281,5 +319,5 @@ class ExchangeSettlement:
             "is_profit": total_net_pnl_usd >= 0.0
         }
 
-        log(f"[{sym}] 🏛️ Биржевой клиринг: {long_ex} Net: {long_net_usd:+.4f}$ | {short_ex} Net: {short_net_usd:+.4f}$ | Total: {total_net_pnl_usd:+.4f}$ ({net_yield_pct*100:+.3f}%) | Fees: {total_comm_usd:.4f}$", level="INFO")
+        log(f"[{sym}] 🏛️ Биржевой клиринг: LONG {long_ex} (In: {long_open_p:.6f}, Out: {long_close_p:.6f}, Net: {long_net_usd:+.4f}$) | SHORT {short_ex} (In: {short_open_p:.6f}, Out: {short_close_p:.6f}, Net: {short_net_usd:+.4f}$) | Total Net: {total_net_pnl_usd:+.4f}$ ({net_yield_pct*100:+.3f}%) | Fees: {total_comm_usd:.4f}$", level="INFO")
         return res

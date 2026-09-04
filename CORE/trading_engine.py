@@ -150,9 +150,9 @@ class TradingEngine:
             
         long_fee = self._get_fee(long_ex) * long_executed_volume_rate
         short_fee = self._get_fee(short_ex) * short_executed_volume_rate
-        exit_comm = long_fee + short_fee  # Учитываем только собственную комиссию выхода (1 комиссия на ногу)
+        total_comm = (long_fee * 2.0) + (short_fee * 2.0)  # Полный цикл комиссий: вход + выход обеих ног
         
-        net_yield = (long_realized_pnl * long_executed_volume_rate) + (short_realized_pnl * short_executed_volume_rate) - exit_comm
+        net_yield = (long_realized_pnl * long_executed_volume_rate) + (short_realized_pnl * short_executed_volume_rate) - total_comm
         
         vwap_spread_out = (short_vwap_ask - long_vwap_bid) / long_vwap_bid
         is_exit = net_yield >= target_val

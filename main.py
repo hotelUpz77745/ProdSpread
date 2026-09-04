@@ -106,7 +106,7 @@ class Main:
                         asks = [(p, q * mult) for p, q in asks]
 
                 self.books[exchange_name][base_coin] = {"bids": bids, "asks": asks}
-                self.ts[exchange_name][base_coin] = time.time()
+                self.ts[exchange_name][base_coin] = time.monotonic()
                 self.event_ts[exchange_name][base_coin] = getattr(d, 'event_time_ms', time.time()*1000)
         return on_depth
 
@@ -218,6 +218,7 @@ class Main:
                 iter_start = time.perf_counter()
                 try:
                     now = time.time()
+                    now_mono = time.monotonic()
                     funding_skip = self._is_funding_skip()
                     
                     # --- EXIT / DECAY MONITORING ---
@@ -325,9 +326,9 @@ class Main:
                             
                             for ex_name, ex_idx in EX_TO_IDX.items():
                                 book = self.books[ex_name].get(sym)
-                                ts_val = self.ts[ex_name].get(sym, 0)
+                                ts_val = self.ts[ex_name].get(sym, 0.0)
                                 if book and book.get("bids") and book.get("asks"):
-                                    if (now - ts_val) <= 5.0:  # is stale check
+                                    if (now_mono - ts_val) <= 5.0:  # is stale check
                                         prices_array[ex_idx, 0] = book["asks"][0][0]
                                         prices_array[ex_idx, 1] = book["bids"][0][0]
                             
