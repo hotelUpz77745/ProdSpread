@@ -246,22 +246,18 @@ class Main:
                         use_extreme = state["details"].get("use_extreme_decay", False)
                         active_decay_map = self.engine.extreme_decay_map if use_extreme else self.engine.decay_map
 
-                        if long_rate < min_fill or short_rate < min_fill:
-                            is_exit = True
-                            exit_res = {"exit_level_index": 99, "target_val": -999.0, "reason": "LOW_FILL_RATE"}
-                        else:
-                            is_exit, exit_res = self.engine.evaluate_exit(
-                                long_book, short_book, long_ex, short_ex,
-                                state["details"]["engine_res"].get("long_qty", 0.0) * long_rate,
-                                state["details"]["engine_res"].get("short_qty", 0.0) * short_rate,
-                                state["details"].get("entry_long_price", 0.0),
-                                state["details"].get("entry_short_price", 0.0),
-                                duration_sec,
-                                is_stakan_valid=is_stakan_valid,
-                                long_executed_volume_rate=long_rate,
-                                short_executed_volume_rate=short_rate,
-                                decay_map=active_decay_map
-                            )
+                        is_exit, exit_res = self.engine.evaluate_exit(
+                            long_book, short_book, long_ex, short_ex,
+                            state["details"]["engine_res"].get("long_qty", 0.0) * long_rate,
+                            state["details"]["engine_res"].get("short_qty", 0.0) * short_rate,
+                            state["details"].get("entry_long_price", 0.0),
+                            state["details"].get("entry_short_price", 0.0),
+                            duration_sec,
+                            is_stakan_valid=is_stakan_valid,
+                            long_executed_volume_rate=long_rate,
+                            short_executed_volume_rate=short_rate,
+                            decay_map=active_decay_map
+                        )
                         
                         # Защита от фантомных импульсов на выходе (только для PROFIT_DECAY)
                         # Экстренные выходы (TTL, LOW_FILL_RATE) никогда не блокируются!
