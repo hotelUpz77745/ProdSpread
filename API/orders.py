@@ -44,6 +44,8 @@ class BinanceOrder:
 
     def start(self):
         """Запускает фоновые таски. Вызывать ПОСЛЕ старта event loop."""
+        if self.session and (self.ws_trader.session is None or self.ws_trader.session.closed):
+            self.ws_trader.session = self.session
         self._bg_task = asyncio.create_task(self._fetch_exchange_info_loop())
         asyncio.create_task(self.ws_trader.start())
 
@@ -332,6 +334,8 @@ class KucoinOrder:
 
     def start(self):
         """Запускает фоновые таски. Вызывать ПОСЛЕ старта event loop."""
+        if self.session and (self.ws_trader.session is None or self.ws_trader.session.closed):
+            self.ws_trader.session = self.session
         self._bg_task = asyncio.create_task(self._fetch_exchange_info_loop())
         asyncio.create_task(self.ws_trader.start())
 
@@ -762,6 +766,8 @@ class BitgetOrder:
         self.ws_trader = BitgetWsTrader(self.api_key, self.api_secret, self.api_passphrase, margin_settings=self.margin_settings, session=self.session)
 
     def start(self):
+        if self.session and (self.ws_trader.session is None or self.ws_trader.session.closed):
+            self.ws_trader.session = self.session
         self._bg_task = asyncio.create_task(self.update_symbol_info())
         asyncio.create_task(self.ws_trader.start())
         return self._bg_task
