@@ -21,11 +21,8 @@ class TradingEngine:
         self.check_synthetic_slippage = bool(self.cfg["trading_rules"]["entry"]["check_synthetic_slippage"])
         self.max_slippage_ratio = float(self.cfg["trading_rules"]["entry"]["max_slippage_ratio"])
         self.hard_max_slippage = float(self.cfg["trading_rules"]["entry"]["hard_max_slippage"])
-        self.check_book_decay = bool(self.cfg["trading_rules"]["entry"].get("check_book_decay", False))
-        self.max_book_decay_velocity = float(self.cfg["trading_rules"]["entry"].get("max_book_decay_velocity", -5.0))
         self.decay_map = self.cfg["trading_rules"]["exit"]["profit_decay_map"]
         self.trading_risks = self.cfg["trading_risks"]
-        self._book_history = {}
 
     def _get_vol_discount_entry(self, exchange_name: str) -> float:
         return float(self.trading_risks[exchange_name.lower()]["volatility_discount_entry"])
@@ -40,47 +37,12 @@ class TradingEngine:
                        long_book: Dict[str, Any], 
                        short_book: Dict[str, Any], 
                        cand: list,
-                       size_usd: float,
-                       sym: str = None,
-                       now_mono: float = 0.0) -> Tuple[bool, Dict[str, Any]]:
+                       size_usd: float) -> Tuple[bool, Dict[str, Any]]:
         
         long_idx = int(cand[0])
         short_idx = int(cand[1])
         long_ex = self.exchanges[long_idx]
         short_ex = self.exchanges[short_idx]
-
-        # Защита от токсичного потока: расчет Book Decay Velocity (OFI)
-        if self.check_book_decay and sym and now_mono > 0.0:
-            hist_long = self._book_history.get((long_ex, sym))
-            if hist_long:
-                dt_l = now_mono - hist_long["ts"]
-                if 0.005 <= dt_l <= 1.0:
-                    v_decay_l = OrderbookUtils.calculate_book_decay_velocity(
-                        long_book.get("asks", []), hist_long.get("asks", []), dt_l, top_k=3
-                    )
-                    if v_decay_l < self.max_book_decay_velocity:
-                        return False, {"reason": f"BOOK_DECAY_TOXIC (Long Asks draining {v_decay_l:.1f}/s)"}
-
-            hist_short = self._book_history.get((short_ex, sym))
-            if hist_short:
-                dt_s = now_mono - hist_short["ts"]
-                if 0.005 <= dt_s <= 1.0:
-                    v_decay_s = OrderbookUtils.calculate_book_decay_velocity(
-                        short_book.get("bids", []), hist_short.get("bids", []), dt_s, top_k=3
-                    )
-                    if v_decay_s < self.max_book_decay_velocity:
-                        return False, {"reason": f"BOOK_DECAY_TOXIC (Short Bids draining {v_decay_s:.1f}/s)"}
-
-            self._book_history[(long_ex, sym)] = {
-                "asks": long_book.get("asks", [])[:3],
-                "bids": long_book.get("bids", [])[:3],
-                "ts": now_mono
-            }
-            self._book_history[(short_ex, sym)] = {
-                "asks": short_book.get("asks", [])[:3],
-                "bids": short_book.get("bids", [])[:3],
-                "ts": now_mono
-            }
         
         long_vol = self._get_vol_discount_entry(long_ex)
         short_vol = self._get_vol_discount_entry(short_ex)

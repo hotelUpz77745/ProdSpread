@@ -49,6 +49,8 @@ class Main:
         self.entry_desync_limit = self.cfg["trading_rules"]["entry"]["max_desync_ms"]
         self.exit_desync_limit  = self.cfg["trading_rules"]["exit"].get("max_desync_ms")
         self.top_n_candidates   = self.cfg["trading_rules"]["entry"]["top_n_candidates"]
+        self.min_signal_dwell_ms = float(self.cfg["trading_rules"]["entry"].get("min_signal_dwell_ms", 0.0))
+        self._signal_first_seen = {}
         self.topology_rebuild_interval = self.cfg["topology_rebuild_interval_sec"]
         
         self.funding_is_active = self.cfg["trading_rules"]["funding_filter"]["is_active"]
@@ -369,14 +371,26 @@ class Main:
                                         self.books[long_ex][sym],
                                         self.books[short_ex][sym],
                                         cand,
-                                        size_usd,
-                                        sym=sym,
-                                        now_mono=now_mono
+                                        size_usd
                                     )
                                     
+                                    route = f"{long_ex}_{short_ex}"
+                                    sig_key = (route, sym)
+                                    
                                     if is_valid_entry:
+                                        # Проверка выдержки сигнала (Signal Dwell Time)
+                                        if self.min_signal_dwell_ms > 0:
+                                            first_seen = self._signal_first_seen.get(sig_key)
+                                            if first_seen is None:
+                                                self._signal_first_seen[sig_key] = now_mono
+                                                continue
+                                            dwell_ms = (now_mono - first_seen) * 1000.0
+                                            if dwell_ms < self.min_signal_dwell_ms:
+                                                continue
+                                            # Выдержка подтверждена - сбрасываем ключ
+                                            self._signal_first_seen.pop(sig_key, None)
+                                            
                                         self.pm.lock_for_entry(long_ex, short_ex, sym, engine_res)
-                                        route = f"{long_ex}_{short_ex}"
                                         # Отправляем команду на открытие в Executor Process
                                         if self.executor_writer:
                                             asyncio.create_task(async_write_msg(self.executor_writer, "CMD_OPEN", {
@@ -387,6 +401,15 @@ class Main:
                                                 "engine_res": engine_res
                                             }))
                                         break
+                                    else:
+                                        # Сигнал не подтвержден/пропал - сбрасываем таймер
+                                        self._signal_first_seen.pop(sig_key, None)
+
+                            if len(self._signal_first_seen) > 100:
+                                self._signal_first_seen = {
+                                    k: v for k, v in self._signal_first_seen.items()
+                                    if (now_mono - v) <= 1.0
+                                }
 
                 except asyncio.CancelledError:
                     raise

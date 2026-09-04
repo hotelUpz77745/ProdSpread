@@ -95,32 +95,6 @@ def calc_execution_qty_limit_jit(book_array: np.ndarray, target_qty: float, limi
         
     return total_usd / filled_qty, filled_qty
 
-@njit(fastmath=True, cache=True)
-def calc_book_decay_velocity_jit(current_book: np.ndarray, prev_book: np.ndarray, dt: float, top_k: int = 3) -> float:
-    """
-    Рассчитывает скорость таяния ликвидности стакана (Book Decay Velocity / OFI):
-    Отрицательное значение означает, что ликвидность на верхних уровнях тает (съедается или снимается).
-    Возвращает относительную скорость изменения объема (% / сек).
-    """
-    if dt <= 0.0 or current_book.shape[0] == 0 or prev_book.shape[0] == 0:
-        return 0.0
-    
-    k_curr = min(top_k, current_book.shape[0])
-    k_prev = min(top_k, prev_book.shape[0])
-    
-    vol_curr = 0.0
-    for i in range(k_curr):
-        vol_curr += current_book[i, 1]
-        
-    vol_prev = 0.0
-    for i in range(k_prev):
-        vol_prev += prev_book[i, 1]
-        
-    if vol_prev <= 0.0:
-        return 0.0
-        
-    return (vol_curr - vol_prev) / vol_prev / dt
-
 class OrderbookUtils:
     """
     Utilities for orderbook processing. Wrappers over JIT functions to safely pass
@@ -147,14 +121,6 @@ class OrderbookUtils:
         if arr.shape[0] == 0:
             return 0.0, 0.0
         return calc_execution_qty_limit_jit(arr, target_qty, limit_price, is_buy, volatility_discount)
-
-    @staticmethod
-    def calculate_book_decay_velocity(current_side: List[Any], prev_side: List[Any], dt: float, top_k: int = 3) -> float:
-        if not current_side or not prev_side or dt <= 0.0:
-            return 0.0
-        arr_curr = np.array(current_side, dtype=np.float64)
-        arr_prev = np.array(prev_side, dtype=np.float64)
-        return calc_book_decay_velocity_jit(arr_curr, arr_prev, dt, top_k)
 
 
 @njit(fastmath=True, cache=True)

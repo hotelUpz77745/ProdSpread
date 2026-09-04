@@ -100,7 +100,6 @@ class PositionFSM:
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
         self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
         self.unwind_retry_pause = float(unwind_cfg["retry_pause_sec"])
-        self.lead_lag_sequencing = bool(self.cfg["trading_rules"]["entry"].get("lead_lag_sequencing", True))
 
         self.exec_res: Dict[str, Any] = {}
         self.long_pos: Dict[str, float] = {"size": 0.0, "price": 0.0}
@@ -238,7 +237,7 @@ class PositionFSM:
             self._set_state(PositionState.IDLE)
             return False
 
-        # 3. Lead-Lag Sequencing (компенсация времени ответа: более медленная биржа выстреливает первой)
+        # 3. Отправка рыночных ордеров в параллель
         self._set_state(PositionState.VERIFYING_FILL)
         req_long_qty = self.engine_res.get("long_qty", 0.0)
         req_short_qty = self.engine_res.get("short_qty", 0.0)
@@ -246,23 +245,15 @@ class PositionFSM:
         # Запускаем ожидание налива СРАЗУ в момент отправки ордеров
         wait_task = asyncio.create_task(self._wait_for_fill_confirmation(req_long_qty, req_short_qty))
 
-        def _get_ex_priority(ex_name: str) -> int:
-            # Bitget и Kucoin имеют больший matching RTT, поэтому отправляются первыми (0), Binance (1)
-            return 0 if ex_name in ("BITGET", "KUCOIN", "OKX") else 1
-
-        legs = [
-            (_get_ex_priority(self.long_ex), self.long_ex, self.native_long, "BUY", size_long_usd, price_long, "LONG"),
-            (_get_ex_priority(self.short_ex), self.short_ex, self.native_short, "SELL", size_short_usd, price_short, "SHORT")
-        ]
-        if self.lead_lag_sequencing:
-            legs.sort(key=lambda x: x[0])
-
         tasks = []
-        for _, ex, native_sym, side, size_usd, price, pos_side in legs:
-            if ex in self.orders:
-                tasks.append(self.orders[ex].place_order(
-                    native_sym, side, size_usd, price, order_type="MARKET", position_side=pos_side
-                ))
+        if self.long_ex in self.orders:
+            tasks.append(self.orders[self.long_ex].place_order(
+                self.native_long, "BUY", size_long_usd, price_long, order_type="MARKET", position_side="LONG"
+            ))
+        if self.short_ex in self.orders:
+            tasks.append(self.orders[self.short_ex].place_order(
+                self.native_short, "SELL", size_short_usd, price_short, order_type="MARKET", position_side="SHORT"
+            ))
 
         has_submit_error = False
         if tasks:
