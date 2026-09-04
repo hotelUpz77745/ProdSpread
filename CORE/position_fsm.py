@@ -4,7 +4,7 @@
 import asyncio
 import time
 from enum import Enum
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 
 from c_log import log
 from CORE.ipc_socket import async_write_msg
@@ -78,7 +78,6 @@ class PositionFSM:
             self.fill_confirm_timeout = float(timeout_cfg)
             
         self.fill_confirm_poll_interval = float(self.cfg["trading_rules"]["entry"]["fill_confirm_poll_interval_sec"])
-        self.fill_confirm_min_wait = float(self.cfg["trading_rules"]["entry"]["fill_confirm_min_wait_sec"])
 
         # Параметры аварийного сброса (из конфига строго через [''])
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
@@ -100,14 +99,8 @@ class PositionFSM:
         self, req_long_qty: float, req_short_qty: float
     ) -> Tuple[Dict[str, float], Dict[str, float], float, float]:
         """
-        Реактивный опрос локального WS-кэша позиций с контролем минимального и максимального ожидания.
-        
-        1. Идеальный налив (обе ноги >= 99%, допуск +-1%): 
-           -> Мгновенный выход (0 мс ожидания), даже если минимальный таймаут еще не истек.
-        2. Частичный налив (обе ноги >= min_fill_rate, например >= 95%):
-           -> Выход только ПОСЛЕ истечения fill_confirm_min_wait_sec (10 мс), чтобы дать шанс долить до 100%.
-        3. Истечение предельного таймаута fill_confirm_timeout_sec (до 200 мс):
-           -> Принудительное завершение ожидания и фиксация фактически налитого объема.
+        Реактивный опрос локального WS-кэша позиций до подтверждения налива обеих ног (min_fill_rate)
+        или истечения предельного таймаута fill_confirm_timeout_sec.
         """
         start_time = time.perf_counter()
         deadline = start_time + self.fill_confirm_timeout
@@ -123,29 +116,18 @@ class PositionFSM:
                 if p_short.get("size", 0.0) > 0:
                     self.short_pos = p_short
 
-            l_size = self.long_pos.get("size", 0.0)
-            s_size = self.short_pos.get("size", 0.0)
+            l_rate = self.long_pos.get("size", 0.0) / req_long_qty
+            s_rate = self.short_pos.get("size", 0.0) / req_short_qty
 
-            l_rate = min(1.0, l_size / req_long_qty) if req_long_qty > 0 else 1.0
-            s_rate = min(1.0, s_size / req_short_qty) if req_short_qty > 0 else 1.0
-            now = time.perf_counter()
-            elapsed = now - start_time
-
-            # Триггер 1: Обе ноги залиты на 100% (+-1% погрешность, т.е. >= 99%) -> Мгновенный выход!
-            if l_rate >= 0.99 and s_rate >= 0.99:
-                log(f"[{self.sym}] 🚀 Обе ноги залиты на 100% за {elapsed*1000:.1f} мс (досрочный выход)!", level="INFO")
-                break
-
-            # Триггер 2: Истек максимальный таймаут (например, 150-200 мс)
-            if now >= deadline:
-                log(f"[{self.sym}] ⏱ Таймаут подтверждения налива истек ({elapsed*1000:.1f} мс). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
-                break
-
-            # Триггер 3: Налив удовлетворяет min_fill_rate (>=95%), но мы выдерживаем обязательный минимум (10 мс)
             if l_rate >= self.min_fill_rate and s_rate >= self.min_fill_rate:
-                if elapsed >= self.fill_confirm_min_wait:
-                    log(f"[{self.sym}] ✅ Минимальное окно ожидания {self.fill_confirm_min_wait*1000:.1f} мс пройдено, налив подтвержден (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
-                    break
+                elapsed = time.perf_counter() - start_time
+                log(f"[{self.sym}] 🚀 Обе ноги подтверждены за {elapsed*1000:.1f} мс (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
+                break
+
+            if time.perf_counter() >= deadline:
+                elapsed = time.perf_counter() - start_time
+                log(f"[{self.sym}] ⏱ Таймаут подтверждения налива ({elapsed*1000:.1f} мс). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
+                break
 
             await asyncio.sleep(self.fill_confirm_poll_interval)
 
