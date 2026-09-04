@@ -79,6 +79,23 @@ class PositionFSM:
             
         self.fill_confirm_poll_interval = float(self.cfg["trading_rules"]["entry"]["fill_confirm_poll_interval_sec"])
 
+        # Параметры подтверждения закрытия позиции (из секции exit с fallback на entry * 2)
+        exit_timeout_cfg = self.cfg["trading_rules"].get("exit", {}).get("close_confirm_timeout_sec")
+        if exit_timeout_cfg:
+            if isinstance(exit_timeout_cfg, dict):
+                pair_key1 = f"{long_ex}_{short_ex}".upper()
+                pair_key2 = f"{short_ex}_{long_ex}".upper()
+                if pair_key1 in exit_timeout_cfg:
+                    self.close_confirm_timeout = float(exit_timeout_cfg[pair_key1])
+                elif pair_key2 in exit_timeout_cfg:
+                    self.close_confirm_timeout = float(exit_timeout_cfg[pair_key2])
+                else:
+                    self.close_confirm_timeout = self.fill_confirm_timeout * 2.0
+            else:
+                self.close_confirm_timeout = float(exit_timeout_cfg)
+        else:
+            self.close_confirm_timeout = self.fill_confirm_timeout * 2.0
+
         # Параметры аварийного сброса (из конфига строго через [''])
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
         self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
@@ -146,11 +163,11 @@ class PositionFSM:
     async def _wait_for_close_confirmation(self) -> Tuple[bool, float, float]:
         """
         Реактивный опрос локального WS-кэша позиций до подтверждения обнуления обеих ног (size == 0.0)
-        или истечения предельного таймаута fill_confirm_timeout_sec.
+        или истечения предельного таймаута close_confirm_timeout_sec.
         Возвращает (is_closed, close_price_long, close_price_short).
         """
         start_time = time.perf_counter()
-        deadline = start_time + self.fill_confirm_timeout
+        deadline = start_time + self.close_confirm_timeout
         close_p_long = 0.0
         close_p_short = 0.0
 

@@ -116,6 +116,15 @@
         },
         "exit": {
             "max_desync_ms": 400,
+            "close_confirm_timeout_sec": {
+                "BINANCE_KUCOIN": 1.200,
+                "BINANCE_BITGET": 1.200,
+                "KUCOIN_BITGET": 1.200,
+                "BINANCE_OKX": 1.200,
+                "KUCOIN_OKX": 1.200,
+                "OKX_BITGET": 1.200
+            },
+            "close_confirm_timeout_sec_desc": "Max seconds to poll WS cache for zero-size position confirmation on exit. Configured per exchange pair.",
             "profit_decay_map": [
                 {
                     "index": 0,
