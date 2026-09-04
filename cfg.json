@@ -24,40 +24,40 @@
             "paper_start_balance": 20.89,
             "trade_size_usd": 20.0,
             "taker_fee": 0.0005,
-            "volatility_discount_entry": 0.30,
-            "volatility_discount_exit": 0.35,
+            "volatility_discount_entry": 0.50,
+            "volatility_discount_exit": 0.55,
             "max_positions": 1
         },
         "kucoin": {
             "paper_start_balance": 6.34,
             "trade_size_usd": 20.0,
             "taker_fee": 0.0006,
-            "volatility_discount_entry": 0.30,
-            "volatility_discount_exit": 0.35,
+            "volatility_discount_entry": 0.50,
+            "volatility_discount_exit": 0.55,
             "max_positions": 1
         },
         "okx": {
             "paper_start_balance": 30.0,
             "trade_size_usd": 100.0,
             "taker_fee": 0.0006,
-            "volatility_discount_entry": 0.30,
-            "volatility_discount_exit": 0.35,
+            "volatility_discount_entry": 0.50,
+            "volatility_discount_exit": 0.55,
             "max_positions": 1
         },
         "bitget": {
             "paper_start_balance": 12.26,
             "trade_size_usd": 20.0,
             "taker_fee": 0.0006,
-            "volatility_discount_entry": 0.30,
-            "volatility_discount_exit": 0.35,
+            "volatility_discount_entry": 0.50,
+            "volatility_discount_exit": 0.55,
             "max_positions": 1
         }
     },
     "volume_filters": {
         "BINANCE": 5000000.0,
-        "KUCOIN": 1000000.0,
+        "KUCOIN": 2000000.0,
         "OKX": 2000000.0,
-        "BITGET": 1000000.0
+        "BITGET": 2000000.0
     },
     "active_routes": {
         "BINANCE_KUCOIN": true,
@@ -100,7 +100,7 @@
             "top_n_candidates": 4,
             "check_synthetic_exit": true,
             "check_synthetic_slippage": true,
-            "check_book_decay": false,
+            "check_book_decay": true,
             "check_book_decay_desc": "Enable/disable Order Flow Imbalance / Book Decay Velocity filter (true/false)",
             "max_book_decay_velocity": -5.0,
             "max_book_decay_velocity_desc": "Threshold in %/sec of book depth drain (e.g. -5.0 means volume drops faster than 500%/s)",
