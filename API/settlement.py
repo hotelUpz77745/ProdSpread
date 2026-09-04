@@ -119,45 +119,51 @@ class ExchangeSettlement:
         try:
             session = await self._get_session()
             endpoint = "/api/v1/history-positions"
-            query_str = "?pageSize=10"
-            now = str(int(time.time() * 1000))
-            str_to_sign = now + "GET" + endpoint + query_str
-            sig = base64.b64encode(hmac.new(self.kucoin_secret.encode('utf-8'), str_to_sign.encode('utf-8'), hashlib.sha256).digest()).decode('utf-8')
-            passphrase_hmac = hmac.new(self.kucoin_secret.encode('utf-8'), self.kucoin_passphrase.encode('utf-8'), hashlib.sha256)
-            encrypted_passphrase = base64.b64encode(passphrase_hmac.digest()).decode('utf-8')
+            query_str = f"?symbol={symbol}&pageSize=10"
+            
+            for attempt in range(3):
+                now = str(int(time.time() * 1000))
+                str_to_sign = now + "GET" + endpoint + query_str
+                sig = base64.b64encode(hmac.new(self.kucoin_secret.encode('utf-8'), str_to_sign.encode('utf-8'), hashlib.sha256).digest()).decode('utf-8')
+                passphrase_hmac = hmac.new(self.kucoin_secret.encode('utf-8'), self.kucoin_passphrase.encode('utf-8'), hashlib.sha256)
+                encrypted_passphrase = base64.b64encode(passphrase_hmac.digest()).decode('utf-8')
 
-            headers = {
-                'KC-API-KEY': self.kucoin_key,
-                'KC-API-SIGN': sig,
-                'KC-API-TIMESTAMP': now,
-                'KC-API-PASSPHRASE': encrypted_passphrase,
-                'KC-API-KEY-VERSION': '2'
-            }
-            url = f"https://api-futures.kucoin.com{endpoint}{query_str}"
-            async with session.get(url, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data.get("code") == "200000" and data.get("data"):
-                        items = data["data"].get("items", [])
-                        for item in items:
-                            if item.get("symbol") == symbol:
-                                close_time = int(item.get("closeTime", 0))
-                                open_time = int(item.get("openTime", 0))
-                                # Проверяем, что позиция относится к нашей сделке
-                                if close_time >= (start_time_ms - 2000) or open_time >= (start_time_ms - 2000):
-                                    net_pnl = float(item.get("pnl", 0.0))
-                                    trade_fee = float(item.get("tradeFee", 0.0))
-                                    gross_pnl = float(item.get("realisedGrossCost", 0.0))
-                                    return {
-                                        "realized_pnl": gross_pnl,
-                                        "commission": trade_fee,
-                                        "net_pnl": net_pnl,
-                                        "close_price": float(item.get("closePrice", 0.0)),
-                                        "open_price": float(item.get("openPrice", 0.0))
-                                    }
-                else:
-                    err = await resp.text()
-                    log(f"[Settlement] Kucoin history-positions error ({resp.status}): {err}", level="WARNING")
+                headers = {
+                    'KC-API-KEY': self.kucoin_key,
+                    'KC-API-SIGN': sig,
+                    'KC-API-TIMESTAMP': now,
+                    'KC-API-PASSPHRASE': encrypted_passphrase,
+                    'KC-API-KEY-VERSION': '2'
+                }
+                url = f"https://api-futures.kucoin.com{endpoint}{query_str}"
+                
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get("code") == "200000" and data.get("data"):
+                            items = data["data"].get("items", [])
+                            for item in items:
+                                if item.get("symbol") == symbol:
+                                    close_time = int(item.get("closeTime", 0))
+                                    open_time = int(item.get("openTime", 0))
+                                    if close_time >= (start_time_ms - 5000) or open_time >= (start_time_ms - 5000):
+                                        net_pnl = float(item.get("pnl", 0.0))
+                                        trade_fee = float(item.get("tradeFee", 0.0))
+                                        gross_pnl = float(item.get("realisedGrossCost", 0.0))
+                                        return {
+                                            "realized_pnl": gross_pnl,
+                                            "commission": trade_fee,
+                                            "net_pnl": net_pnl,
+                                            "close_price": float(item.get("closePrice", 0.0)),
+                                            "open_price": float(item.get("openPrice", 0.0))
+                                        }
+                    else:
+                        err = await resp.text()
+                        log(f"[Settlement] Kucoin history-positions error ({resp.status}): {err}", level="WARNING")
+                        
+                # Если позиция не найдена, ждем 2 сек и повторяем (история Kucoin часто запаздывает)
+                await asyncio.sleep(2.0)
+                
         except Exception as e:
             log(f"[Settlement] Kucoin history-positions exception: {e}", level="ERROR")
 
