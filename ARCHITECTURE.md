@@ -1,23 +1,25 @@
-# 🧠 Архитектура HFT Спредера (Mental Map v3.0)
+# 🧠 Архитектура HFT Спредера (Mental Map v5.0)
 
-Проект представляет собой промышленный высокочастотный арбитражный комплекс (Hedge/Spread), торгующий синтетический спред между криптобиржами в режиме **Hedge Mode**. Бот написан на асинхронном Python (`asyncio`) и использует `@njit` (`Numba`) для микросекундной обработки стаканов.
+Проект представляет собой промышленный высокочастотный арбитражный комплекс (Hedge/Spread), торгующий синтетический межбиржевой спред между криптобиржами в режиме **Hedge Mode**. Бот написан на асинхронном Python (`asyncio`), использует `@njit` (`Numba`) для микросекундной фильтрации стаканов и архитектуру изолированных процессов с приватными WebSocket-стримами исполнения.
 
-В версии **v3.0** система поддерживает **одновременную работу 3 связок бирж (`BINANCE_KUCOIN`, `BINANCE_BITGET`, `KUCOIN_BITGET`)**, гибкие режимы исполнения ордеров (`IOC` и `LIMIT_GTC`), межпроцессный транспорт по локальному сокету (IPC) и отказоустойчивые замки бирж.
+В версии **v5.0** архитектура сфокусирована на **ультранизкой задержке (Ultra-Low Latency HFT)**: прямой рыночный вход (`MARKET`), предварительно прогретые приватные торговые WebSocket-коннекторы, фильтр выдержки сигнала (`Signal Dwell Time`), реактивное отслеживание налива через локальный кэш сокетов и мгновенный 1-Shot Kill-Switch при рассинхроне.
 
 ---
 
-## 🏗 Топология двух процессов (2-Process Architecture)
+## 🏗 Топология двух процессов (2-Process IPC Architecture)
 
-Для полного обхода GIL и предотвращения сетевых лагов система разделена на два изолированных процесса, общающихся через неблокирующий локальный TCP-сокет (`CORE/ipc_socket.py`):
+Для обхода ограничений GIL (Global Interpreter Lock), изоляции вычислительного цикла котировок от сетевых задержек ордеров и предотвращения задержек цикла система разделена на два изолированных процесса, общающихся через неблокирующий локальный TCP-сокет (`CORE/ipc_socket.py`):
 
 ```
 ┌────────────────────────────────────────────────────────┐
 │      ПРОЦЕСС 1: Market Data & Decision Engine          │
 │                    (main.py)                           │
-│  • Public WS Streams (Binance, KuCoin, Bitget)         │
+│  • Public WS Streams (Binance, KuCoin, Bitget, OKX)    │
 │  • Numba JIT Orderbook Scan (pre_calculate_orderbook)   │
-│  • VWAP & Synthetic Slippage Check (trading_engine.py) │
-│  • Global Symbol & Exchange Semaphores (PositionMgr)   │
+│  • VWAP & Spread Analysis (trading_engine.py)          │
+│  • Signal Dwell Time Filter (25 ms persistence check)  │
+│  • Global Symbol & Exchange Locks (position_manager)   │
+│  • Profit Decay Monitoring (profit_decay_map)          │
 └─────────────────────────┬──────────────────────────────┘
                           │ Local Async TCP Socket (IPC)
                           │ [CMD_OPEN, CMD_CLOSE, INIT_TOPOLOGY]
@@ -25,11 +27,14 @@
 ┌─────────────────────────▼──────────────────────────────┐
 │       ПРОЦЕСС 2: Execution & Settlement Worker         │
 │               (CORE/executor_process.py)               │
-│  • Private WS Streams (Position Tracking)              │
-│  • Order Adapters (IOC / LIMIT_GTC + Cancel Remnants)  │
-│  • Fill Rate Verification & Emergency Dumps            │
-│  • Multi-Exchange Settlement & Actual PnL Clearing     │
-│  • Automated Leverage & Margin Setup (LeverageSetter)  │
+│  • Pre-warmed Fast WS Private Traders (Binance, Kucoin,│
+│    Bitget) с постоянным heartbeat/keepalive             │
+│  • Position FSM (Finite State Machine per Position)    │
+│  • Direct MARKET Order Dispatch (asyncio.gather)       │
+│  • Reactive Fill/Close Verification via WS Cache (15ms)│
+│  • 1-Shot HFT Market Kill-Switch (emergency unwind)    │
+│  • Instant 0ms PnL Calculation (analytics.py)          │
+│  • Automated Margin & Leverage Setup (leverage_setter) │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -38,84 +43,104 @@
 ## 🎛 Компоненты системы
 
 ### 1. Market Data & Decision Engine (`main.py`)
-- **Топология:** `DiscoveryManager` запрашивает 24ч объемы, фильтрует монеты, строит маппинг `coin_to_native` и логирует число общих пар конкретно по каждой активной связке (`BINANCE_KUCOIN`, `BINANCE_BITGET`, `KUCOIN_BITGET`).
-- **Сбор стаканов:** Поднимает 3 независимых пула публичных WebSocket-стримов.
-- **Микросекундный пре-фильтр:** В главном цикле (задержка `0.005` с) обновляет `prices_array` и прогоняет его через `pre_calculate_orderbook` (Numba `@njit`), моментально ранжируя пары по величине спреда.
-- **Оценка ликвидности:** Для топ-кандидатов вызывает `trading_engine.evaluate_entry`, рассчитывает VWAP с учетом дисконта глубины (`volatility_discount_entry`), проверяет обратное проскальзывание (`check_synthetic_exit`) и отправляет `CMD_OPEN` в экзекьютор.
-- **Мониторинг позиций:** Отслеживает деградацию профита по кривой `profit_decay_map` и при достижении таргета шлет `CMD_CLOSE`.
+- **Топология инструментов (`discovery.py`):** Запрашивает 24ч объемы торгов (фильтр от $2M–$5M), отсекает неликвид, строит нормализованный кросс-биржевой маппинг `coin_to_native` для активных связок (например, `BINANCE_KUCOIN`, `BINANCE_BITGET`).
+- **Сбор стаканов:** Поддерживает пулы WebSocket-стримов стаканов глубины (L2 Depth).
+- **Микросекундный пре-фильтр (`CORE/math_core.py`):** Каждую итерацию без задержки обновляет матрицу цен `prices_array` и прогоняет ее через `pre_calculate_orderbook` (`Numba @njit`), мгновенно сортируя связки по величине спреда без аллокаций памяти Python.
+- **Оценка входа (`CORE/trading_engine.py`):** Для топ-кандидатов рассчитывает взвешенные VWAP-цены входа с дисконтом глубины (`volatility_discount_entry: 0.50`), вычитает суммарные комиссии обеих бирж и проверяет синтетическое проскальзывание.
+- **Signal Dwell Time (Выдержка сигнала):** Перед отправкой ордера кандидат должен непрерывно удерживать спред $\ge \text{min\_signal\_dwell\_ms}$ (по умолчанию 25 мс). Это отсекает микросекундные фантомные шипы и алгоритмические ловушки отмен.
+- **Мониторинг позиций:** Отслеживает время удержания и деградацию спреда по таблице `profit_decay_map`, отправляя команду `CMD_CLOSE` при достижении таргета или сработке TTL.
 
-### 2. Execution & Settlement Engine (`CORE/executor_process.py`)
-- **Ордерные адаптеры (`API/orders.py`):** Унифицированные классы `BinanceOrder`, `KucoinOrder`, `BitgetOrder` с контролем шагов цены/лота (`round_by_step`), квантованием контрактов и множителей.
-- **Политики исполнения ордеров (`order_execution_type`):**
-  - **`IOC` (Immediate-Or-Cancel):** Ордер забирает только доступный объем в момент прихода, неналитый остаток аннулируется матчингом биржи.
-  - **`LIMIT_GTC`:** Ордер встает агрессивной лимиткой в стакан на время `EXECUTION_PAUSE`, после чего бот вызывает `cancel_all_orders` по обеим ногам для снятия висящего остатка перед замером fill rate.
-- **Защита от дедлоков (Deadlock-Free Locks):**
-  - При ошибке валидации ордера или полном сбое входа шлет `POS_FAILED`, разблокируя биржу через `rollback_entry()`.
-  - При аварийном выходе из-за частичного налива (`min_fill_rate`) автоматически производит откат незафиксированной позиции, исключая зависание замка `is_locked = True`.
-- **Клиринг PnL (`API/settlement.py`):** Запрашивает фактические данные исполненных сделок, учитывает комиссии обеих бирж (с конвертацией BNB/KCS) и логирует результат в `total_balance.json`.
-- **Настройка маржи и плечей (`CORE/leverage_setter.py`):** Автоматически устанавливает целевые плечи и режим кросс-маржи на всех трех биржах, кэшируя результаты в `CACHE/leverage_cache.json`.
+### 2. Execution & FSM Engine (`CORE/executor_process.py` + `CORE/position_fsm.py`)
+- **Прогретые торговые WebSocket-коннекторы (`API/orders.py`):** 
+  - `BinanceWsTrader`, `BitgetWsTrader`, `KucoinWsTrader` стартуют в фоновом режиме еще при инициализации исполнителя (`init_runtime`), поддерживая живые сокеты и готовые сессии до прихода первого сигнала.
+- **Политика исполнения ордеров:**
+  - Исключительно **`MARKET`**: мгновенный удар в стакан без зависания лимиток и без очередей отмен.
+  - Обе ноги запускаются одновременно через `asyncio.gather` в естественном параллельном порядке.
+- **Реактивная верификация налива (`_wait_for_fill_confirmation`):**
+  - Опрашивает локальный WS-кэш позиций с частотой `0 мс` (чистый перебор в цикле событий).
+  - Налив фиксируется за 15–30 мс по приходу сокетного события баланса без задержек REST.
+- **Реактивное подтверждение выхода (`_wait_for_close_confirmation`):**
+  - Подтверждает закрытие позиций (размер = 0.0) по приватному вебсокету за 20–50 мс, исключая задержку между выходом и фиксацией в аналитике.
+- **1-Shot HFT Market Kill-Switch (`_emergency_unwind`):**
+  - Если на входе одна нога налилась, а по второй произошел сбой сети или таймаут `fill_confirm_timeout_sec`, FSM моментально отправляет 1 встречный MARKET-ордер на ликвидацию открытой ноги.
+  - Позиция немедленно сбрасывается в 0 (flat), предотвращая направленный убыток, а символ уходит в карантин (`banned_symbols.json`).
 
 ### 3. Менеджер позиций (`CORE/position_manager.py`)
-- **Инвариант биржи:** Гарантирует, что число активных и ожидающих сделок биржи (`current + pending`) строго не превышает лимит `max_positions` из конфига. При занятости биржи блокируются все связанные с ней связки.
-- **Глобальный инвариант символа:** Одна и та же монета не может одновременно торговаться более чем на одной связке.
-- **Стейт-машина:** Хранит статус `OPEN` / `CLOSE` / `None`, синхронизирует состояние в `active_positions.json`.
+- **Инвариант биржи (`max_positions`):** Число активных и ожидающих (`pending`) позиций по каждой бирже строго ограничено конфигом. При занятости биржи блокируются все использующие ее маршруты.
+- **Инвариант символа:** Одна и та же монета не может одновременно торговаться более чем на одной связке.
+- **Deadlock-Free State Machine:** Гарантированный откат замков (`rollback_entry`) при ошибках валидации ордеров или частичном сбросе.
+
+### 4. Аналитика и клиринг PnL (`analytics.py`)
+- **Мгновенный 0ms расчет PnL:** Фиксация реальных цен исполнения обеих ног на входе и на выходе (`entry_long_price`, `entry_short_price`, `close_long_price`, `close_short_price`).
+- Учет полного цикла комиссий (Round-Trip Taker Fees: вход + выход по обеим ногам).
+- Синхронная запись сделок в `total_balance.json` и `active_positions.json`.
 
 ---
 
-## 🔄 Жизненный цикл сделки v3.0
+## 🔄 Жизненный цикл сделки v5.0
 
 ```
-[Стаканы WS] ──> [pre_calculate_orderbook (JIT)]
-                        │ (Top candidate spread > spread_entry)
-                        ▼
-             [trading_engine.evaluate_entry]
-                        │ (VWAP OK, Synthetic Slippage OK)
-                        ▼
-             [PositionManager.can_enter]
-              ├── Проверка лимита бирж (max_positions)
-              └── Глобальная проверка символа по всем 3 связкам
-                        │
-                        ▼ (lock_for_entry: pending += 1)
-             [main.py шлет CMD_OPEN через IPC]
-                        │
-                        ▼
-             [executor_process.execute_open]
-              ├── Pre-flight check_order_size
-              │     └─ При ошибке: шлет POS_FAILED -> rollback_entry (снятие замка)
-              ├── Параллельная отправка ордеров (IOC или LIMIT_GTC)
-              ├── Ожидание EXECUTION_PAUSE
-              ├── При LIMIT_GTC: отмена остатков через cancel_all_orders
-              ├── Замер фактических позиций через WS/REST
-              │
-              ├── Перекос fill_rate < min_fill_rate?
-              │     ├── 0.0 на обеих ногах -> шлет POS_FAILED -> rollback_entry
-              │     └── Частичный налив одной ноги -> аварийный execute_close -> POS_CLOSED
-              │
-              └── Успешный вход -> confirm_entry -> шлет POS_OPENED
-                        │
-                        ▼
-             [main.py ведет позицию по profit_decay_map]
-                        │ (Профит пробил таргет или сработал TTL)
-                        ▼
-             [main.py шлет CMD_CLOSE через IPC]
-                        │
-                        ▼
-             [executor_process.execute_close]
-              ├── Параллельное закрытие обеих ног
-              ├── Подтверждение закрытия -> шлет POS_CLOSED -> confirm_exit
-              └── Фоновый клиринг PnL через ExchangeSettlement -> total_balance.json
+[Стаканы L2 WS] ──> [pre_calculate_orderbook (Numba JIT)]
+                               │ (Топ-кандидат: спред > spread_entry)
+                               ▼
+                    [trading_engine.evaluate_entry]
+                               │ (VWAP OK, Synthetic Slippage OK)
+                               ▼
+                    [Signal Dwell Time Filter]
+                               │ Удержание сигнала >= 25 мс?
+                               │ ├── Нет ──> ждем подтверждения / сброс таймера при шуме
+                               ▼ Да
+                    [PositionManager.can_enter]
+                               │ Проверка лимитов бирж и монет
+                               ▼ lock_for_entry (pending += 1)
+                    [main.py шлет CMD_OPEN через IPC]
+                               │
+                               ▼
+                    [PositionFSM: run_open()]
+                     ├── Pre-flight check_order_size
+                     │     └─ Ошибка: шлет POS_FAILED -> rollback_entry
+                     │
+                     ├── Параллельная отправка MARKET-ордеров в прогретые WS
+                     │     (asyncio.gather: place_order Long & Short)
+                     │
+                     ├── Реактивный опрос WS-кэша (_wait_for_fill_confirmation)
+                     │     └─ Время подтверждения: 15–30 мс
+                     │
+                     ├── Проверка Fill Rate (min_fill_rate: 0.985):
+                     │     ├── Рассинхрон/сбой ноги? 
+                     │     │     └─> 1-Shot Market Kill-Switch (_emergency_unwind)
+                     │     │         └── Сброс ноги в 0 -> POS_FAILED -> Quarantined
+                     │     └── Обе ноги налиты (>=98.5%)
+                     │           └─> Фиксация цен -> confirm_entry -> POS_OPENED
+                               │
+                               ▼
+                    [main.py: мониторинг profit_decay_map]
+                               │ Достигнут таргет спреда / TTL
+                               ▼
+                    [main.py шлет CMD_CLOSE через IPC]
+                               │
+                               ▼
+                    [PositionFSM: run_close()]
+                     ├── Параллельная отправка MARKET-ордеров на закрытие
+                     ├── Реактивное подтверждение по WS (_wait_for_close_confirmation)
+                     ├── Мгновенный расчет PnL и Round-Trip комиссий (record_trade)
+                     └── Шлет POS_CLOSED -> confirm_exit -> разблокировка биржи
 ```
 
 ---
 
-## ⚙️ Сводка ключевых параметров [cfg.json]
+## ⚙️ Сводка ключевых параметров конфигурации (`cfg.json`)
 
 | Параметр | Значение | Описание |
 | :--- | :--- | :--- |
-| `order_execution_type` | `"LIMIT_GTC"` / `"IOC"` | Политика ордеров: лимитки с авто-снятием остатка или биржевой IOC |
-| `spread_entry` | `0.007` (0.70%) | Минимальный чистый спред для входа |
-| `volatility_discount_entry` | `0.60` (60%) | Эффективная плотность стакана при расчете VWAP |
-| `min_fill_rate` | `0.50` (50%) | Минимальный процент налива ноги до активации аварийного сброса |
-| `EXECUTION_PAUSE` | `0.020` (20 мс) | Окно жизни лимитки в стакане и синхронизации позиций |
-| `active_routes` | 3 активные | `BINANCE_KUCOIN`, `BINANCE_BITGET`, `KUCOIN_BITGET` |
-| `max_positions` | `1` | Максимум 1 одновременная сделка на биржу суммарно |
+| `order_execution_type` | `"MARKET"` | Строго рыночное высокоскоростное исполнение через WebSocket |
+| `min_signal_dwell_ms` | `25` (мс) | Минимальная выдержка сигнала перед входом (0 — отключено) |
+| `spread_entry` | `0.007` (0.70%) | Минимальный чистый спред входа после вычета комиссий |
+| `volatility_discount_entry` | `0.50` (50%) | Дисконт ликвидности стакана при расчете цен входа |
+| `volatility_discount_exit` | `0.55` (55%) | Дисконт ликвидности стакана при расчете цен выхода |
+| `min_fill_rate` | `0.985` (98.5%) | Минимальный процент налива для удержания позиции |
+| `fill_confirm_timeout_sec` | `0.600` (600 мс) | Таймаут ожидания налива по сокету до Kill-Switch |
+| `close_confirm_timeout_sec` | `1.800` (1.8 с) | Таймаут подтверждения закрытия позиции |
+| `volume_filters` | `$5M` (BN), `$2M` (Others) | Минимальный суточный объем торгов монеты |
+| `max_positions` | `1` | Максимум 1 одновременная позиция на биржу |
+| `active_routes` | Настраиваемые связки | Например, `BINANCE_KUCOIN`, `BINANCE_BITGET` |
