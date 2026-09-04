@@ -132,19 +132,14 @@ class PositionFSM:
             s_rate = (s_size / req_short_qty) if req_short_qty > 0 else 0.0
 
             if l_rate >= self.min_fill_rate and s_rate >= self.min_fill_rate:
-                elapsed = time.perf_counter() - start_time
-                elapsed_ms = elapsed * 1000.0
-                price_l = self.long_pos.get("price", self.engine_res.get("long_avg_price", 0.0))
-                price_s = self.short_pos.get("price", self.engine_res.get("short_avg_price", 0.0))
-                total_usd = (l_size * price_l) + (s_size * price_s)
-                speed_usd_s = total_usd / max(elapsed, 0.0001)
-                log(f"[{self.sym}] 🚀 Обе ноги подтверждены за {elapsed_ms:.1f} мс (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%) | Скорость: {speed_usd_s:.0f} USD/сек", level="INFO")
+                elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+                log(f"[{self.sym}] 🚀 Обе ноги подтверждены за {elapsed_ms:.1f} мс (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
                 break
 
             await asyncio.sleep(self.fill_confirm_poll_interval)
         else:
-            elapsed = time.perf_counter() - start_time
-            log(f"[{self.sym}] ⏱ Таймаут подтверждения налива ({elapsed*1000.0:.1f} мс). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+            log(f"[{self.sym}] ⏱ Таймаут подтверждения налива ({elapsed_ms:.1f} мс). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
 
         return self.long_pos, self.short_pos, l_rate, s_rate
 
