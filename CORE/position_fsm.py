@@ -226,23 +226,41 @@ class PositionFSM:
         price_long = self.engine_res.get("long_avg_price", 0.0)
         price_short = self.engine_res.get("short_avg_price", 0.0)
 
-        # 2. Параллельная отправка ордеров и мониторинг налива
+        # 2. Pre-flight Validation (проверка шага лота, спецификаций и цен ДО выстрела)
+        try:
+            if self.long_ex in self.orders and hasattr(self.orders[self.long_ex], "check_order_size"):
+                self.orders[self.long_ex].check_order_size(self.native_long, size_long_usd, price_long)
+            if self.short_ex in self.orders and hasattr(self.orders[self.short_ex], "check_order_size"):
+                self.orders[self.short_ex].check_order_size(self.native_short, size_short_usd, price_short)
+        except Exception as pre_err:
+            log(f"[{self.sym}] ⛔ Pre-flight Validation Rejected: {pre_err}", level="WARNING")
+            self._set_state(PositionState.IDLE)
+            return False
+
+        # 3. Lead-Lag Sequencing (компенсация времени ответа: более медленная биржа выстреливает первой)
         self._set_state(PositionState.VERIFYING_FILL)
         req_long_qty = self.engine_res.get("long_qty", 0.0)
         req_short_qty = self.engine_res.get("short_qty", 0.0)
 
-        tasks = []
-        if self.long_ex in self.orders:
-            tasks.append(self.orders[self.long_ex].place_order(
-                self.native_long, "BUY", size_long_usd, price_long, order_type="MARKET", position_side="LONG"
-            ))
-        if self.short_ex in self.orders:
-            tasks.append(self.orders[self.short_ex].place_order(
-                self.native_short, "SELL", size_short_usd, price_short, order_type="MARKET", position_side="SHORT"
-            ))
-
         # Запускаем ожидание налива СРАЗУ в момент отправки ордеров
         wait_task = asyncio.create_task(self._wait_for_fill_confirmation(req_long_qty, req_short_qty))
+
+        def _get_ex_priority(ex_name: str) -> int:
+            # Bitget и Kucoin имеют больший matching RTT, поэтому отправляются первыми (0), Binance (1)
+            return 0 if ex_name in ("BITGET", "KUCOIN", "OKX") else 1
+
+        legs = [
+            (_get_ex_priority(self.long_ex), self.long_ex, self.native_long, "BUY", size_long_usd, price_long, "LONG"),
+            (_get_ex_priority(self.short_ex), self.short_ex, self.native_short, "SELL", size_short_usd, price_short, "SHORT")
+        ]
+        legs.sort(key=lambda x: x[0])
+
+        tasks = []
+        for _, ex, native_sym, side, size_usd, price, pos_side in legs:
+            if ex in self.orders:
+                tasks.append(self.orders[ex].place_order(
+                    native_sym, side, size_usd, price, order_type="MARKET", position_side=pos_side
+                ))
 
         has_submit_error = False
         if tasks:
@@ -319,67 +337,85 @@ class PositionFSM:
 
     async def _emergency_unwind(self):
         """
-        Гарантированный сброс и зачистка до подтвержденного 0.0 на обеих биржах.
-        ОБЯЗАТЕЛЬНЫЙ точечный REST GET-запрос посимвольно для каждой биржи в конце итерации!
+        Мгновенный 1-Shot HFT Market Kill-Switch.
+        Поскольку ордера бьют строго MARKET, при сбое входа не крутятся медленные циклы:
+        1. Если одна нога успела налиться, мгновенно выстреливаем 1 встречный MARKET-ордер на ее ликвидацию.
+        2. Подтверждаем обнуление по WS за 15-30 мс (с аварийным REST только при таймауте).
         """
         self._set_state(PositionState.EMERGENCY_UNWIND)
-        log(f"[{self.sym}] Запуск зачистки (Emergency Unwind) перед завершением итерации...", level="WARNING")
+        log(f"[{self.sym}] 🚨 Запуск 1-Shot Market Kill-Switch (ликвидация асимметрии входа)...", level="WARNING")
 
-        for attempt in range(self.unwind_max_attempts):
-            # Точечный GET-запрос посимвольно по обеим участвовавшим биржам
-            verify_tasks = []
-            long_idx = -1
-            short_idx = -1
+        l_size = self.long_pos.get("size", 0.0)
+        s_size = self.short_pos.get("size", 0.0)
+
+        # Контрольное чтение локального WS-кэша
+        if l_size <= 0 and self.long_ex in self.orders:
+            p_long = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
+            if p_long and p_long.get("size", 0.0) > 0:
+                l_size = p_long["size"]
+                self.long_pos = p_long
+
+        if s_size <= 0 and self.short_ex in self.orders:
+            p_short = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
+            if p_short and p_short.get("size", 0.0) > 0:
+                s_size = p_short["size"]
+                self.short_pos = p_short
+
+        kill_tasks = []
+        if l_size > 0 and self.long_ex in self.orders:
+            p = self.long_pos.get("price", 0.0) or self.engine_res.get("long_avg_price", 1.0)
+            usd = l_size * p
+            log(f"[{self.sym}] ⚡ Мгновенный сброс зависшего лонга ({l_size} шт, {usd:.2f}$) на {self.long_ex}...", level="WARNING")
+            kill_tasks.append(self.orders[self.long_ex].place_order(
+                self.native_long, "SELL", usd, p, order_type="MARKET", position_side="LONG"
+            ))
+
+        if s_size > 0 and self.short_ex in self.orders:
+            p = self.short_pos.get("price", 0.0) or self.engine_res.get("short_avg_price", 1.0)
+            usd = s_size * p
+            log(f"[{self.sym}] ⚡ Мгновенный сброс зависшего шорта ({s_size} шт, {usd:.2f}$) на {self.short_ex}...", level="WARNING")
+            kill_tasks.append(self.orders[self.short_ex].place_order(
+                self.native_short, "BUY", usd, p, order_type="MARKET", position_side="SHORT"
+            ))
+
+        if kill_tasks:
+            await asyncio.gather(*kill_tasks, return_exceptions=True)
+
+        # Быстрая проверка обнуления по WS (до 300 мс)
+        is_flat = False
+        t_deadline = time.perf_counter() + 0.3
+        while time.perf_counter() < t_deadline:
+            l_flat = True
+            s_flat = True
             if self.long_ex in self.orders:
-                verify_tasks.append(self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG"))
-                long_idx = len(verify_tasks) - 1
+                p = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
+                if p and p.get("size", 0.0) > 0:
+                    l_flat = False
             if self.short_ex in self.orders:
-                verify_tasks.append(self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT"))
-                short_idx = len(verify_tasks) - 1
-
-            l_check = {"size": 0.0, "price": 0.0}
-            s_check = {"size": 0.0, "price": 0.0}
-            if verify_tasks:
-                results = await asyncio.gather(*verify_tasks, return_exceptions=True)
-                if long_idx >= 0 and not isinstance(results[long_idx], Exception):
-                    l_check = results[long_idx]
-                if short_idx >= 0 and not isinstance(results[short_idx], Exception):
-                    s_check = results[short_idx]
-
-            l_rem = l_check.get("size", 0.0)
-            s_rem = s_check.get("size", 0.0)
-
-            # Если на обеих биржах строго 0.0 -> позиции полностью ликвидированы
-            if l_rem == 0.0 and s_rem == 0.0:
-                log(f"[{self.sym}] Контрольный REST подтвердил: обе ноги обнулены (0.0). Итерация аварийно завершена.", level="INFO")
-                self._set_state(PositionState.ABORTED)
-                if self.pm:
-                    self.pm.rollback_entry(self.long_ex, self.short_ex, self.sym)
+                p = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
+                if p and p.get("size", 0.0) > 0:
+                    s_flat = False
+            if l_flat and s_flat:
+                is_flat = True
                 break
+            await asyncio.sleep(0.01)
 
-            log(f"[{self.sym}] ⚠️ Обнаружен остаток на бирже через REST: L:{l_rem}, S:{s_rem}. Дозакрываем маркетом (попытка #{attempt+1})...", level="WARNING")
-            close_tasks = []
-            if l_rem > 0 and self.long_ex in self.orders:
+        if not is_flat:
+            # Fallback контрольный REST только если сокет не подтвердил за 300 мс
+            log(f"[{self.sym}] WS не подтвердил 0.0 за 300 мс, контрольный запрос через REST...", level="WARNING")
+            l_check = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0}
+            s_check = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT") if self.short_ex in self.orders else {"size": 0.0}
+            if l_check.get("size", 0.0) > 0:
                 p = l_check.get("price", 0.0) or self.engine_res.get("long_avg_price", 1.0)
-                usd = l_rem * p
-                close_tasks.append(self.orders[self.long_ex].place_order(
-                    self.native_long, "SELL", usd, p, order_type="MARKET", position_side="LONG"
-                ))
-            if s_rem > 0 and self.short_ex in self.orders:
+                await self.orders[self.long_ex].place_order(self.native_long, "SELL", l_check["size"] * p, p, order_type="MARKET", position_side="LONG")
+            if s_check.get("size", 0.0) > 0:
                 p = s_check.get("price", 0.0) or self.engine_res.get("short_avg_price", 1.0)
-                usd = s_rem * p
-                close_tasks.append(self.orders[self.short_ex].place_order(
-                    self.native_short, "BUY", usd, p, order_type="MARKET", position_side="SHORT"
-                ))
+                await self.orders[self.short_ex].place_order(self.native_short, "BUY", s_check["size"] * p, p, order_type="MARKET", position_side="SHORT")
 
-            if close_tasks:
-                await asyncio.gather(*close_tasks, return_exceptions=True)
-            await asyncio.sleep(self.unwind_retry_pause)
-
-            if attempt == self.unwind_max_attempts - 1:
-                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позиции после {self.unwind_max_attempts} попыток Unwind! Остаток L:{l_rem} S:{s_rem}.", level="ERROR")
-                self._set_state(PositionState.CLOSING)
-                return
+        self._set_state(PositionState.ABORTED)
+        if self.pm:
+            self.pm.rollback_entry(self.long_ex, self.short_ex, self.sym)
+        log(f"[{self.sym}] ✅ Асимметрия полностью ликвидирована. Итерация завершена.", level="INFO")
 
         # Уведомляем main-процесс об отмене входа, чтобы освободить слот
         if self.writer:

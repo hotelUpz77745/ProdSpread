@@ -192,50 +192,68 @@ class TradeAnalytics:
         return trade_obj
 
 
+_cached_base_total = None
+_cached_cumulative_pnl = 0.0
+_balance_initialized = False
+
+def _recalc_total_pnl_from_disk() -> float:
+    log_dir = os.path.join("logs", "analytics")
+    history_pnl = 0.0
+    if os.path.exists(log_dir):
+        for fname in os.listdir(log_dir):
+            if fname.endswith(".json") and fname != "global_report.json":
+                fpath = os.path.join(log_dir, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        trades = json.load(f)
+                        if trades and isinstance(trades, list):
+                            history_pnl += sum(float(t.get("Net_PnL_USD", 0.0)) for t in trades)
+                except Exception:
+                    pass
+    return history_pnl
+
 def update_total_balance(cfg: dict, is_startup: bool = False, extra_pnl: float = 0.0) -> float:
     """
-    Записывает текущий прогресс баланса в total_balance.json и логирует его.
-    Формат полностью совпадает с PapperSpread, отображая базовый баланс и накопленный PnL.
+    Молниеносный расчет баланса O(1) из in-memory кэша.
+    Сброс total_balance.json и отчетов выполняется асинхронно в фоне без блокировки торгового цикла.
     """
+    global _cached_base_total, _cached_cumulative_pnl, _balance_initialized
     try:
         risks = cfg.get("trading_risks", {})
-        base_total = sum(float(risk.get("paper_start_balance", 0.0)) for risk in risks.values())
+        if _cached_base_total is None or is_startup:
+            _cached_base_total = sum(float(risk.get("paper_start_balance", 0.0)) for risk in risks.values())
+
+        if not _balance_initialized or is_startup:
+            _cached_cumulative_pnl = _recalc_total_pnl_from_disk()
+            _balance_initialized = True
         
-        log_dir = os.path.join("logs", "analytics")
-        history_pnl = 0.0
-        if os.path.exists(log_dir):
-            for fname in os.listdir(log_dir):
-                if fname.endswith(".json") and fname != "global_report.json":
-                    fpath = os.path.join(log_dir, fname)
-                    try:
-                        with open(fpath, "r", encoding="utf-8") as f:
-                            trades = json.load(f)
-                            if trades and isinstance(trades, list):
-                                history_pnl += sum(float(t.get("Net_PnL_USD", 0.0)) for t in trades)
-                    except Exception:
-                        pass
-                        
-        total_pnl = history_pnl + extra_pnl
+        if extra_pnl != 0.0:
+            _cached_cumulative_pnl += extra_pnl
+
+        base_total = _cached_base_total
+        total_pnl = _cached_cumulative_pnl
         total = base_total + total_pnl
         now = time.time()
-        
-        payload = {
-            "timestamp": now,
-            "total_balance_usd": round(total, 4),
-            "base_total_usd": round(base_total, 4),
-            "total_pnl_usd": round(total_pnl, 4)
-        }
-        with open("total_balance.json", "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=4)
-            
+
         prefix = "Initial Total balance" if is_startup else "Total balance updated"
         log(f"{prefix}: {total:.2f} USD (Base: {base_total:.2f}, PnL: {total_pnl:.2f})", level="INFO")
-        
-        try:
-            generate_global_report()
-        except Exception as e:
-            log(f"Error generating global report: {e}", level="WARNING")
-            
+
+        # Неблокирующий сброс на диск в фоновом пуле потоков
+        def _write_balance_task():
+            try:
+                payload = {
+                    "timestamp": now,
+                    "total_balance_usd": round(total, 4),
+                    "base_total_usd": round(base_total, 4),
+                    "total_pnl_usd": round(total_pnl, 4)
+                }
+                with open("total_balance.json", "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=4)
+                generate_global_report()
+            except Exception as io_err:
+                log(f"Error in background balance writing: {io_err}", level="WARNING")
+
+        _analytics_executor.submit(_write_balance_task)
         return total
     except Exception as e:
         log(f"Error updating total balance: {e}", level="ERROR")

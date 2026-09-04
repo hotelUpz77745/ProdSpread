@@ -369,7 +369,9 @@ class Main:
                                         self.books[long_ex][sym],
                                         self.books[short_ex][sym],
                                         cand,
-                                        size_usd
+                                        size_usd,
+                                        sym=sym,
+                                        now_mono=now_mono
                                     )
                                     
                                     if is_valid_entry:

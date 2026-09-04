@@ -259,11 +259,11 @@ class ExecutorProcess:
                 short_executed_usd=actual_short_usd
             )
 
-            # Моментальное обновление total_balance.json
-            update_total_balance(self.cfg)
-
             net_usd = trade_obj.get("Net_PnL_USD", 0.0) if trade_obj else 0.0
             net_yield = trade_obj.get("Net_PnL", 0.0) if trade_obj else 0.0
+
+            # Моментальное обновление total_balance.json в памяти (O(1))
+            update_total_balance(self.cfg, extra_pnl=net_usd)
 
             if net_usd < 0:
                 self.ban_coin(sym, reason=f"Убыточная сделка ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)")
