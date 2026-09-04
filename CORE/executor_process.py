@@ -220,6 +220,12 @@ class ExecutorProcess:
             )
             fsm.open_time = details.get("open_time", time.time())
             fsm.open_time_ms = details.get("open_time_ms", int(fsm.open_time * 1000))
+            fsm.exec_res = {
+                "entry_long_price": details.get("entry_long_price", 0.0),
+                "entry_short_price": details.get("entry_short_price", 0.0),
+                "long_executed_volume_rate": details.get("long_executed_volume_rate", 1.0),
+                "short_executed_volume_rate": details.get("short_executed_volume_rate", 1.0),
+            }
 
         await fsm.run_close(exit_res, reason=reason)
         self.active_fsm.pop(sym, None)
@@ -234,6 +240,14 @@ class ExecutorProcess:
         try:
             if sym not in self.analytics_map:
                 self.analytics_map[sym] = TradeAnalytics(sym, self.cfg["trading_risks"])
+
+            if not self.analytics_map[sym].active_trade:
+                self.analytics_map[sym].record_open(
+                    route=route, direction="LONG_SHORT",
+                    long_ex=long_ex, short_ex=short_ex,
+                    long_price=entry_long_price, short_price=entry_short_price,
+                    spread=0.0, slippage=0.0
+                )
 
             spread_out = exit_res.get("vwap_spread_out", 0.0) if exit_res else 0.0
             trade_obj = self.analytics_map[sym].record_close(

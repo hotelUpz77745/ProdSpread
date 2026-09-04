@@ -95,27 +95,27 @@
             "order_execution_type": "MARKET",
             "order_execution_type_desc": "Allowed values: MARKET (IOC and LIMIT_GTC removed)",
             "max_desync_ms": 150,
-            "spread_entry": 0.007,
-            "min_fill_rate": 0.99,
+            "spread_entry": 0.008,
+            "min_fill_rate": 0.985,
             "top_n_candidates": 4,
             "check_synthetic_exit": true,
             "check_synthetic_slippage": true,
             "max_slippage_ratio": 0.5,
             "hard_max_slippage": 0.015,
             "fill_confirm_timeout_sec": {
-                "BINANCE_KUCOIN": 0.500,
-                "BINANCE_BITGET": 0.500,
-                "KUCOIN_BITGET": 0.500,
-                "BINANCE_OKX": 0.500,
-                "KUCOIN_OKX": 0.500,
-                "OKX_BITGET": 0.500
+                "BINANCE_KUCOIN": 0.600,
+                "BINANCE_BITGET": 0.600,
+                "KUCOIN_BITGET": 0.600,
+                "BINANCE_OKX": 0.600,
+                "KUCOIN_OKX": 0.600,
+                "OKX_BITGET": 0.600
             },
             "fill_confirm_timeout_sec_desc": "Max seconds to poll WS cache for fill confirmation in MARKET mode. Configured per exchange pair.",
             "fill_confirm_poll_interval_sec": 0.0,
             "fill_confirm_poll_interval_sec_desc": "Interval (sec) between WS cache reads during fill confirmation polling"
         },
         "exit": {
-            "max_desync_ms": 500,
+            "max_desync_ms": 400,
             "profit_decay_map": [
                 {
                     "index": 0,
