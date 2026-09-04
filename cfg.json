@@ -8,6 +8,7 @@
     "QUOTE": "USDT",
     "MAIN_LOOP_DELAY": 0.0,
     "measure_loop_speed": false,
+    "EXECUTION_PAUSE": 0.025,
     "topology_rebuild_interval_sec": null,
     "logging": {
         "debug": false,
@@ -21,20 +22,20 @@
     },
     "trading_risks": {
         "binance": {
-            "paper_start_balance": 19.07,
-            "trade_size_usd": 30.0,
+            "paper_start_balance": 22.17,
+            "trade_size_usd": 20.0,
             "taker_fee": 0.0005,
             "volatility_discount_entry": 0.45,
-            "volatility_discount_exit": 1.0,
+            "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0025,
             "max_positions": 1
         },
         "kucoin": {
-            "paper_start_balance": 10.07,
-            "trade_size_usd": 30.0,
+            "paper_start_balance": 6.43,
+            "trade_size_usd": 20.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.45,
-            "volatility_discount_exit": 1.0,
+            "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0025,
             "max_positions": 1
         },
@@ -48,11 +49,11 @@
             "max_positions": 1
         },
         "bitget": {
-            "paper_start_balance": 12.45,
-            "trade_size_usd": 30.0,
+            "paper_start_balance": 11.99,
+            "trade_size_usd": 20.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.45,
-            "volatility_discount_exit": 1.0,
+            "volatility_discount_exit": 0.9,
             "limit_allow_distance": 1.0025,
             "max_positions": 1
         }
@@ -101,19 +102,21 @@
             "max_desync_ms": null,
             "spread_entry": 0.007,
             "min_fill_rate": 0.5,
-            "top_n_candidates": 6,
+            "top_n_candidates": 4,
             "check_synthetic_exit": true,
             "check_synthetic_slippage": true,
             "max_slippage_ratio": 0.5,
             "hard_max_slippage": 0.015,
             "fill_confirm_timeout_sec": {
-                "default": 0.03,
-                "BINANCE_KUCOIN": 0.025,
-                "BINANCE_BITGET": 0.08,
-                "KUCOIN_BITGET": 0.08
+                "BINANCE_KUCOIN": 0.035,
+                "BINANCE_BITGET": 0.075,
+                "KUCOIN_BITGET": 0.050,
+                "BINANCE_OKX": 0.040,
+                "KUCOIN_OKX": 0.050,
+                "OKX_BITGET": 0.060
             },
             "fill_confirm_timeout_sec_desc": "Max seconds to poll WS cache for fill confirmation in MARKET/IOC mode. Configured per exchange pair.",
-            "fill_confirm_poll_interval_sec": 0.005,
+            "fill_confirm_poll_interval_sec": 0.001,
             "fill_confirm_poll_interval_sec_desc": "Interval (sec) between WS cache reads during fill confirmation polling"
         },
         "exit": {
@@ -167,7 +170,7 @@
             "skip_if_after_while_sec": 300
         },
         "emergency_unwind": {
-            "max_attempts": 5,
+            "max_attempts": 2,
             "max_attempts_desc": "Maximum REST check + close cycles in emergency unwind",
             "retry_pause_sec": 0.05,
             "retry_pause_sec_desc": "Pause (sec) between emergency unwind attempts"

@@ -1,6 +1,6 @@
 # ==============================================================================
-# Path: API/KUCOIN/ws_private_kucoin.py
-# Role: Connection to User Data Stream for Kucoin Futures and Position parsing
+# FILE: API/KUCOIN/ws_private_kucoin.py
+# ROLE: Connection to User Data Stream for Kucoin Futures and Position parsing
 # ==============================================================================
 
 import asyncio

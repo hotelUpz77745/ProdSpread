@@ -61,21 +61,28 @@ class PositionFSM:
         self.order_policy = self.cfg["trading_rules"]["entry"]["order_execution_type"].upper()
         self.min_fill_rate = float(self.cfg["trading_rules"]["entry"]["min_fill_rate"])
 
-        # Параметры подтверждения налива (из конфига, без магии)
-        timeout_cfg = self.cfg["trading_rules"]["entry"].get("fill_confirm_timeout_sec", 0.05)
+        # Параметры подтверждения налива (из конфига строго через [''], без дефолтов и магии)
+        timeout_cfg = self.cfg["trading_rules"]["entry"]["fill_confirm_timeout_sec"]
         if isinstance(timeout_cfg, dict):
             pair_key1 = f"{long_ex}_{short_ex}".upper()
             pair_key2 = f"{short_ex}_{long_ex}".upper()
-            self.fill_confirm_timeout = float(timeout_cfg.get(pair_key1, timeout_cfg.get(pair_key2, timeout_cfg.get("default", 0.05))))
+            if pair_key1 in timeout_cfg:
+                self.fill_confirm_timeout = float(timeout_cfg[pair_key1])
+            elif pair_key2 in timeout_cfg:
+                self.fill_confirm_timeout = float(timeout_cfg[pair_key2])
+            else:
+                raise KeyError(
+                    f"Параметры fill_confirm_timeout_sec не содержат пару {pair_key1} или {pair_key2} в cfg.json"
+                )
         else:
             self.fill_confirm_timeout = float(timeout_cfg)
             
-        self.fill_confirm_poll_interval = float(self.cfg["trading_rules"]["entry"].get("fill_confirm_poll_interval_sec", 0.02))
+        self.fill_confirm_poll_interval = float(self.cfg["trading_rules"]["entry"]["fill_confirm_poll_interval_sec"])
 
-        # Параметры аварийного сброса (из конфига)
-        unwind_cfg = self.cfg["trading_rules"].get("emergency_unwind", {})
-        self.unwind_max_attempts = int(unwind_cfg.get("max_attempts", 5))
-        self.unwind_retry_pause = float(unwind_cfg.get("retry_pause_sec", 0.5))
+        # Параметры аварийного сброса (из конфига строго через [''])
+        unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
+        self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
+        self.unwind_retry_pause = float(unwind_cfg["retry_pause_sec"])
 
         self.exec_res: Dict[str, Any] = {}
         self.long_pos: Dict[str, float] = {"size": 0.0, "price": 0.0}

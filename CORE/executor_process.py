@@ -227,10 +227,10 @@ class ExecutorProcess:
 
     async def _post_close_settlement(self, sym: str, long_ex: str, short_ex: str, entry_l: float, entry_s: float, exit_l: float, exit_s: float):
         """Фоновый математический расчет PnL (Paper Settlement) без ожидания и запросов к биржам."""
-        long_trade_size = self.cfg["trading_risks"][long_ex.lower()].get("trade_size_usd", 7.0)
-        short_trade_size = self.cfg["trading_risks"][short_ex.lower()].get("trade_size_usd", 7.0)
-        long_taker_fee = self.cfg["trading_risks"][long_ex.lower()].get("taker_fee", 0.0006)
-        short_taker_fee = self.cfg["trading_risks"][short_ex.lower()].get("taker_fee", 0.0006)
+        long_trade_size = float(self.cfg["trading_risks"][long_ex.lower()]["trade_size_usd"])
+        short_trade_size = float(self.cfg["trading_risks"][short_ex.lower()]["trade_size_usd"])
+        long_taker_fee = float(self.cfg["trading_risks"][long_ex.lower()]["taker_fee"])
+        short_taker_fee = float(self.cfg["trading_risks"][short_ex.lower()]["taker_fee"])
         total_inv = long_trade_size + short_trade_size
         
         long_pnl_pct = (exit_l - entry_l) / entry_l if entry_l > 0 else 0.0

@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+# ============================================================
+# FILE: live_tests/test_kucoin_settlement.py
+# ROLE: Тестирование клиринга и получения сделок Kucoin
+# ============================================================
 import asyncio
 import os
 import sys

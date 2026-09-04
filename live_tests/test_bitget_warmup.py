@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_bitget_warmup.py
+# ROLE: Тестирование прогрева (warmup) и keepalive сессий Bitget
+# ============================================================
 import asyncio
 import time
 import json

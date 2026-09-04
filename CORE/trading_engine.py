@@ -18,17 +18,17 @@ class TradingEngine:
         # Строго читаем через [''] без get(..., default)
         self.spread_entry = float(self.cfg["trading_rules"]["entry"]["spread_entry"])
         self.check_synthetic_exit = bool(self.cfg["trading_rules"]["entry"]["check_synthetic_exit"])
-        self.check_synthetic_slippage = bool(self.cfg["trading_rules"]["entry"].get("check_synthetic_slippage", False))
-        self.max_slippage_ratio = float(self.cfg["trading_rules"]["entry"].get("max_slippage_ratio", 0.5))
-        self.hard_max_slippage = float(self.cfg["trading_rules"]["entry"].get("hard_max_slippage", 0.015))
+        self.check_synthetic_slippage = bool(self.cfg["trading_rules"]["entry"]["check_synthetic_slippage"])
+        self.max_slippage_ratio = float(self.cfg["trading_rules"]["entry"]["max_slippage_ratio"])
+        self.hard_max_slippage = float(self.cfg["trading_rules"]["entry"]["hard_max_slippage"])
         self.decay_map = self.cfg["trading_rules"]["exit"]["profit_decay_map"]
         self.trading_risks = self.cfg["trading_risks"]
 
     def _get_vol_discount_entry(self, exchange_name: str) -> float:
-        return float(self.trading_risks[exchange_name.lower()].get("volatility_discount_entry", 0.6))
+        return float(self.trading_risks[exchange_name.lower()]["volatility_discount_entry"])
 
     def _get_vol_discount_exit(self, exchange_name: str) -> float:
-        return float(self.trading_risks[exchange_name.lower()].get("volatility_discount_exit", 1.0))
+        return float(self.trading_risks[exchange_name.lower()]["volatility_discount_exit"])
 
     def _get_fee(self, exchange_name: str) -> float:
         return float(self.trading_risks[exchange_name.lower()]["taker_fee"])

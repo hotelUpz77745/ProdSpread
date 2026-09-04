@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+# ============================================================
+# FILE: live_tests/test_bitget_ws_raw.py
+# ROLE: Тестирование приватных и публичных вебсокетов Bitget
+# ============================================================
 import asyncio
 import os
 import sys

@@ -235,7 +235,7 @@ class Main:
 
                         long_rate = state["details"].get("long_executed_volume_rate", 1.0)
                         short_rate = state["details"].get("short_executed_volume_rate", 1.0)
-                        min_fill = self.cfg["trading_rules"]["entry"].get("min_fill_rate", 0.85)
+                        min_fill = float(self.cfg["trading_rules"]["entry"]["min_fill_rate"])
                         
                         if long_rate < min_fill or short_rate < min_fill:
                             is_exit = True
