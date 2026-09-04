@@ -243,8 +243,9 @@ class Main:
 
                         long_rate = state["details"].get("long_executed_volume_rate", 1.0)
                         short_rate = state["details"].get("short_executed_volume_rate", 1.0)
-                        min_fill = float(self.cfg["trading_rules"]["entry"]["min_fill_rate"])
-                        
+                        use_extreme = state["details"].get("use_extreme_decay", False)
+                        active_decay_map = self.engine.extreme_decay_map if use_extreme else self.engine.decay_map
+
                         if long_rate < min_fill or short_rate < min_fill:
                             is_exit = True
                             exit_res = {"exit_level_index": 99, "target_val": -999.0, "reason": "LOW_FILL_RATE"}
@@ -258,7 +259,8 @@ class Main:
                                 duration_sec,
                                 is_stakan_valid=is_stakan_valid,
                                 long_executed_volume_rate=long_rate,
-                                short_executed_volume_rate=short_rate
+                                short_executed_volume_rate=short_rate,
+                                decay_map=active_decay_map
                             )
                         
                         # Защита от фантомных импульсов на выходе (только для PROFIT_DECAY)
@@ -487,3 +489,14 @@ if __name__ == "__main__":
 # taskkill /F /IM python.exe
 
 # # claude
+
+
+
+# {
+#     "TRUMP": null,
+#     "VET": null,
+#     "PROM": null,
+#     "GIGGLE": null,
+#     "ANTHROPIC": null,
+#     "ONG": null 
+# }

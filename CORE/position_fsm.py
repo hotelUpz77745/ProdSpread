@@ -291,14 +291,35 @@ class PositionFSM:
         self.open_time = time.time()
         self.open_time_ms = int(self.open_time * 1000)
 
+        # Расчет фактического спреда при входе на основании реальных цен исполнения
+        p_long = self.long_pos.get("price", 0.0) or self.engine_res.get("long_avg_price", 0.0)
+        p_short = self.short_pos.get("price", 0.0) or self.engine_res.get("short_avg_price", 0.0)
+        
+        entry_fee_l = float(self.cfg["trading_risks"][self.long_ex.lower()]["taker_fee"])
+        entry_fee_s = float(self.cfg["trading_risks"][self.short_ex.lower()]["taker_fee"])
+        entry_comm = entry_fee_l + entry_fee_s
+        
+        if p_long > 0 and p_short > 0:
+            actual_gross_spread = (p_short - p_long) / p_long
+            actual_net_spread = actual_gross_spread - entry_comm
+        else:
+            actual_gross_spread = self.engine_res.get("vwap_spread", 0.0)
+            actual_net_spread = self.engine_res.get("net_spread", 0.0)
+
+        min_spread_entry = float(self.cfg["trading_rules"]["entry"].get("min_spread_entry", 0.0015))
+        use_extreme_decay = actual_net_spread <= min_spread_entry
+
         self.exec_res = {
             "engine_res": self.engine_res,
             "long_ex": self.long_ex,
             "short_ex": self.short_ex,
-            "entry_long_price": self.long_pos.get("price", self.engine_res.get("long_avg_price", 0.0)),
-            "entry_short_price": self.short_pos.get("price", self.engine_res.get("short_avg_price", 0.0)),
+            "entry_long_price": p_long,
+            "entry_short_price": p_short,
             "actual_long_price": self.long_pos.get("price", 0.0),
             "actual_short_price": self.short_pos.get("price", 0.0),
+            "actual_gross_spread": actual_gross_spread,
+            "actual_net_spread": actual_net_spread,
+            "use_extreme_decay": use_extreme_decay,
             "long_executed_volume_rate": l_rate,
             "short_executed_volume_rate": s_rate,
             "open_time": self.open_time,
@@ -310,7 +331,9 @@ class PositionFSM:
             self._set_state(PositionState.ACTIVE_HEDGED)
             if self.pm:
                 self.pm.confirm_entry(self.long_ex, self.short_ex, self.sym, self.exec_res, self.open_time)
-            log(f"[{self.sym}] 🟢 Позиция успешно открыта! Fill rate -> L: {l_rate*100:.1f}% | S: {s_rate*100:.1f}%", level="INFO")
+            
+            decay_mode_str = "⚠️ EXTREME DECAY" if use_extreme_decay else "STANDARD DECAY"
+            log(f"[{self.sym}] 🟢 Позиция успешно открыта! Факт Net Spread: {actual_net_spread*100:.3f}% (Gross: {actual_gross_spread*100:.3f}%, Порог: {min_spread_entry*100:.3f}%) -> {decay_mode_str}", level="INFO")
 
             if self.writer:
                 asyncio.create_task(async_write_msg(self.writer, "POS_OPENED", {

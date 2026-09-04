@@ -133,6 +133,9 @@ class PositionManager:
             "entry_short_price": exec_res.get("actual_short_price", 0.0) or exec_res.get("entry_short_price", 0.0),
             "long_executed_volume_rate": exec_res.get("long_executed_volume_rate", 1.0),
             "short_executed_volume_rate": exec_res.get("short_executed_volume_rate", 1.0),
+            "actual_gross_spread": exec_res.get("actual_gross_spread"),
+            "actual_net_spread": exec_res.get("actual_net_spread"),
+            "use_extreme_decay": exec_res.get("use_extreme_decay", False),
             "open_time": open_time
         })
         
