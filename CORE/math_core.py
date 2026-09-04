@@ -7,7 +7,7 @@ from numba import njit
 from typing import List, Any
 
 @njit(fastmath=True, cache=True)
-def calc_vwap_usd_jit(book_array: np.ndarray, target_usd: float, volatility_discount: float = 1.0) -> float:
+def calc_vwap_usd_jit(book_array: np.ndarray, target_usd: float, volatility_discount: float) -> float:
     """
     Calculates the Volume-Weighted Average Price (VWAP) for entering a given USD volume.
     book_array: array of shape (N, 2), where [:, 0] are prices, [:, 1] are volumes.
@@ -35,7 +35,7 @@ def calc_vwap_usd_jit(book_array: np.ndarray, target_usd: float, volatility_disc
     return target_usd / total_coins
 
 @njit(fastmath=True, cache=True)
-def calc_vwap_qty_jit(book_array: np.ndarray, target_qty: float, volatility_discount: float = 1.0) -> float:
+def calc_vwap_qty_jit(book_array: np.ndarray, target_qty: float, volatility_discount: float) -> float:
     """
     Calculates the Volume-Weighted Average Price (VWAP) for exiting a given coin quantity.
     book_array: array of shape (N, 2), where [:, 0] are prices, [:, 1] are volumes.
@@ -61,7 +61,7 @@ def calc_vwap_qty_jit(book_array: np.ndarray, target_qty: float, volatility_disc
     return total_usd / target_qty
 
 @njit(fastmath=True, cache=True)
-def calc_execution_qty_limit_jit(book_array: np.ndarray, target_qty: float, limit_price: float, is_buy: bool, volatility_discount: float = 1.0):
+def calc_execution_qty_limit_jit(book_array: np.ndarray, target_qty: float, limit_price: float, is_buy: bool, volatility_discount: float):
     """
     Calculates the filled quantity and VWAP price constrained by a limit price.
     Returns (vwap_price, filled_qty)
@@ -102,21 +102,21 @@ class OrderbookUtils:
     """
     
     @staticmethod
-    def calculate_vwap_by_usd(book_side: List[Any], target_usd: float, volatility_discount: float = 1.0) -> float:
+    def calculate_vwap_by_usd(book_side: List[Any], target_usd: float, volatility_discount: float) -> float:
         arr = np.array(book_side, dtype=np.float64)
         if arr.shape[0] == 0:
             return 0.0
         return calc_vwap_usd_jit(arr, target_usd, volatility_discount)
 
     @staticmethod
-    def calculate_vwap_by_qty(book_side: List[Any], target_qty: float, volatility_discount: float = 1.0) -> float:
+    def calculate_vwap_by_qty(book_side: List[Any], target_qty: float, volatility_discount: float) -> float:
         arr = np.array(book_side, dtype=np.float64)
         if arr.shape[0] == 0:
             return 0.0
         return calc_vwap_qty_jit(arr, target_qty, volatility_discount)
 
     @staticmethod
-    def calculate_execution_by_qty_and_limit(book_side: List[Any], target_qty: float, limit_price: float, is_buy: bool, volatility_discount: float = 1.0) -> tuple:
+    def calculate_execution_by_qty_and_limit(book_side: List[Any], target_qty: float, limit_price: float, is_buy: bool, volatility_discount: float) -> tuple:
         arr = np.array(book_side, dtype=np.float64)
         if arr.shape[0] == 0:
             return 0.0, 0.0
