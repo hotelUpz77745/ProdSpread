@@ -138,10 +138,6 @@ async def main():
         position_stream=bitget_stream
     )
     
-    # Инициализируем symbol_info для адаптеров
-    await binance_order.update_symbol_info()
-    await kucoin_order.update_symbol_info()
-    await bitget_order.update_symbol_info()
     
     # ---- Запускаем WS стримы ----
     print("\n[1] Запуск WS стримов...")
