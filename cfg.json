@@ -115,6 +115,7 @@
             "fill_confirm_poll_interval_sec_desc": "Interval (sec) between WS cache reads during fill confirmation polling"
         },
         "exit": {
+            "max_desync_ms": 500,
             "profit_decay_map": [
                 {
                     "index": 0,

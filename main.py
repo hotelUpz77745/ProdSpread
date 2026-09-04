@@ -46,6 +46,7 @@ class Main:
         
         # Configs
         self.entry_desync_limit = self.cfg["trading_rules"]["entry"]["max_desync_ms"]
+        self.exit_desync_limit  = self.cfg["trading_rules"]["exit"].get("max_desync_ms")
         self.top_n_candidates   = self.cfg["trading_rules"]["entry"]["top_n_candidates"]
         self.topology_rebuild_interval = self.cfg["topology_rebuild_interval_sec"]
         
@@ -253,6 +254,17 @@ class Main:
                                 long_executed_volume_rate=long_rate,
                                 short_executed_volume_rate=short_rate
                             )
+                        
+                        # Защита от фантомных импульсов на выходе (только для PROFIT_DECAY)
+                        # Экстренные выходы (TTL, LOW_FILL_RATE) никогда не блокируются!
+                        if is_exit and exit_res.get("reason") == "PROFIT_DECAY":
+                            long_ts = self.ts[long_ex].get(sym, 0.0)
+                            short_ts = self.ts[short_ex].get(sym, 0.0)
+                            if long_ts > 0 and short_ts > 0:
+                                diff_ms = abs(long_ts - short_ts) * 1000.0
+                                if self.exit_desync_limit is not None and diff_ms > self.exit_desync_limit:
+                                    is_exit = False
+                                    exit_res["reason"] = f"EXIT_DESYNC_SKIP ({diff_ms:.0f}ms > {self.exit_desync_limit}ms)"
                         
                         # --- ДИАГНОСТИЧЕСКОЕ ЛОГИРОВАНИЕ ВЫХОДА (каждые 5 секунд на символ) ---
                         _now_log = time.time()
