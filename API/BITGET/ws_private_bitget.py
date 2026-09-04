@@ -141,6 +141,36 @@ class BitgetPositionStream:
                                         for side in ("LONG", "SHORT"):
                                             if (sym, side) not in incoming_syms:
                                                 self.positions[sym][side] = {"size": 0.0, "price": 0.0}
+                            elif channel == "orders":
+                                for o in data.get("data", []):
+                                    sym = o.get("instId", "").replace("_UMCBL", "").strip().upper()
+                                    if not sym:
+                                        continue
+                                    raw_side = (o.get("posSide") or o.get("side") or "").upper()
+                                    if raw_side == "BOTH" or not raw_side:
+                                        side_val = str(o.get("side", "")).upper()
+                                        raw_side = "LONG" if side_val == "BUY" else "SHORT"
+                                    
+                                    order_status = str(o.get("status", "")).lower()
+                                    trade_scope = str(o.get("tradeScope", "")).lower()
+                                    is_close = trade_scope == "close" or o.get("reduceOnly") is True
+                                    cum_qty = float(o.get("accBaseVolume") or o.get("baseVolume") or o.get("size") or 0.0)
+                                    avg_price = float(o.get("priceAvg") or o.get("price") or 0.0)
+
+                                    if sym not in self.positions:
+                                        self.positions[sym] = {
+                                            "LONG": {"size": 0.0, "price": 0.0},
+                                            "SHORT": {"size": 0.0, "price": 0.0}
+                                        }
+
+                                    if raw_side in ("LONG", "SHORT"):
+                                        if order_status == "filled" and is_close:
+                                            self.positions[sym][raw_side] = {"size": 0.0, "price": 0.0}
+                                        elif order_status in ("filled", "partially_filled") and cum_qty > 0:
+                                            self.positions[sym][raw_side] = {
+                                                "size": cum_qty,
+                                                "price": avg_price
+                                            }
                                         
             except Exception as e:
                 log(f"[BITGET WS_PRIVATE] Error: {e}", level="ERROR")

@@ -159,7 +159,11 @@ class PositionFSM:
         price_long = self.engine_res.get("long_avg_price", 0.0)
         price_short = self.engine_res.get("short_avg_price", 0.0)
 
-        # 2. Отправка ордеров (MARKET через реактивные WS стримы)
+        # 2. Параллельная отправка ордеров и мониторинг налива
+        self._set_state(PositionState.VERIFYING_FILL)
+        req_long_qty = self.engine_res.get("long_qty", 0.0)
+        req_short_qty = self.engine_res.get("short_qty", 0.0)
+
         tasks = []
         if self.long_ex in self.orders:
             tasks.append(self.orders[self.long_ex].place_order(
@@ -169,6 +173,9 @@ class PositionFSM:
             tasks.append(self.orders[self.short_ex].place_order(
                 self.native_short, "SELL", size_short_usd, price_short, order_type="MARKET", position_side="SHORT"
             ))
+
+        # Запускаем ожидание налива СРАЗУ в момент отправки ордеров
+        wait_task = asyncio.create_task(self._wait_for_fill_confirmation(req_long_qty, req_short_qty))
 
         has_submit_error = False
         if tasks:
@@ -184,6 +191,7 @@ class PositionFSM:
                     break
 
         if has_submit_error:
+            wait_task.cancel()
             # Немедленно отменяем открытые ордера по успевшей ноге
             cancel_tasks = []
             if self.long_ex in self.orders:
@@ -197,14 +205,8 @@ class PositionFSM:
             await self._emergency_unwind()
             return False
 
-        # 3. Фаза верификации налива (VERIFYING_FILL) — мгновенно из стримов WS
-        self._set_state(PositionState.VERIFYING_FILL)
-        req_long_qty = self.engine_res.get("long_qty", 0.0)
-        req_short_qty = self.engine_res.get("short_qty", 0.0)
-
-        self.long_pos, self.short_pos, l_rate, s_rate = await self._wait_for_fill_confirmation(
-            req_long_qty, req_short_qty
-        )
+        # Ожидаем завершения подтверждения налива (которое шло параллельно отправке)
+        self.long_pos, self.short_pos, l_rate, s_rate = await wait_task
         l_size = self.long_pos.get("size", 0.0)
         s_size = self.short_pos.get("size", 0.0)
 
