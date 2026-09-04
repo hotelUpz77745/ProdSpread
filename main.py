@@ -496,3 +496,6 @@ if __name__ == "__main__":
 #     "ANTHROPIC": null,
 #     "ONG": null 
 # }
+
+
+# logs/test_hedge_binance_kucoin.log и logs/test_hedge_binance_bitget.log.
