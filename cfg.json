@@ -98,7 +98,7 @@
     "trading_rules": {
         "entry": {
             "order_execution_type": "MARKET",
-            "order_execution_type_desc": "Allowed values: IOC | LIMIT_GTC | MARKET",
+            "order_execution_type_desc": "Allowed values: MARKET (IOC and LIMIT_GTC removed)",
             "max_desync_ms": null,
             "spread_entry": 0.007,
             "min_fill_rate": 0.5,

@@ -28,6 +28,10 @@ def round_by_step(value: float, step_str) -> str:
 class InsufficientMarginError(Exception):
     pass
 
+from API.BINANCE.ws_trade_binance import BinanceWsTrader
+from API.BITGET.ws_trade_bitget import BitgetWsTrader
+from API.KUCOIN.ws_trade_kucoin import KucoinWsTrader
+
 class BinanceOrder:
     def __init__(self, api_key: str, api_secret: str, session: aiohttp.ClientSession, position_stream=None):
         self.api_key = api_key
@@ -36,22 +40,18 @@ class BinanceOrder:
         self.position_stream = position_stream
         self.symbol_info = None
         self._bg_task = None
-        self._keepalive_task = None
+        self.ws_trader = BinanceWsTrader(self.api_key, self.api_secret, session=self.session)
 
     def start(self):
         """Запускает фоновые таски. Вызывать ПОСЛЕ старта event loop."""
         self._bg_task = asyncio.create_task(self._fetch_exchange_info_loop())
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        asyncio.create_task(self.ws_trader.start())
 
-    async def _keepalive_loop(self):
-        while True:
-            try:
-                await asyncio.sleep(45)
-                await self.warmup()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                log(f"[BinanceOrder] Keepalive error: {e}", level="WARNING")
+    async def close(self):
+        if self._bg_task:
+            self._bg_task.cancel()
+        if self.ws_trader:
+            await self.ws_trader.close()
 
     async def _fetch_exchange_info_loop(self):
         while True:
@@ -121,7 +121,7 @@ class BinanceOrder:
             raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_qty={raw_qty}, step_size={step_size}).")
 
 
-    async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None, time_in_force: str = "IOC"):
+    async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "MARKET", position_side: str = None, **kwargs):
         self.last_activity_ts = __import__("time").time()
         if not price or price <= 0:
             raise ValueError(f"[{symbol}] Reference price is required to calculate quantity")
@@ -147,16 +147,18 @@ class BinanceOrder:
             raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_qty={raw_qty}, step_size={step_size}).")
 
 
+        # 1. Отправка через реактивный горячий WebSocket стрим торговли
+        if self.ws_trader:
+            try:
+                res = await self.ws_trader.place_order(symbol, side, qty_str, position_side=position_side)
+                log(f"[BinanceOrder][WS] Ордер исполнен: {res}", level="INFO")
+                return res
+            except Exception as ws_err:
+                log(f"[BinanceOrder] WS place_order сбой ({ws_err}), аварийный fallback на REST...", level="WARNING")
+
         timestamp = int(time.time() * 1000)
-        
         pos_side_str = f"&positionSide={position_side.upper()}" if position_side else ""
-        
-        if order_type.upper() == "LIMIT":
-            tif = (time_in_force or "IOC").upper()
-            query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=LIMIT&timeInForce={tif}&quantity={qty_str}&price={price_str}&timestamp={timestamp}"
-        else:
-            query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=MARKET&quantity={qty_str}&timestamp={timestamp}"
-            
+        query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=MARKET&quantity={qty_str}&timestamp={timestamp}"
         signature = self._generate_signature(query_string)
         
         url = f"https://fapi.binance.com/fapi/v1/order?{query_string}&signature={signature}"
@@ -242,23 +244,6 @@ class BinanceOrder:
                 return False
         return False
 
-    async def warmup(self):
-        if __import__("time").time() - getattr(self, "last_activity_ts", 0.0) < 30.0:
-            return
-        """Отправляет фейковый POST запрос для прогрева WAF/Gateway и TLS туннеля"""
-        try:
-            timestamp = int(time.time() * 1000)
-            query_string = f"symbol=INVALID_PAIR_WARMUP&side=BUY&type=LIMIT&timeInForce=IOC&quantity=1&price=1&timestamp={timestamp}"
-            signature = self._generate_signature(query_string)
-            url = f"https://fapi.binance.com/fapi/v1/order?{query_string}&signature={signature}"
-            headers = {"X-MBX-APIKEY": self.api_key}
-            
-            async with self.session.post(url, headers=headers) as resp:
-                await resp.read()
-                # Убираем лог, чтобы не спамить каждые 2 минуты
-        except Exception:
-            pass
-
     def get_executed_position(self, symbol: str, side: str):
         if self.position_stream:
             return self.position_stream.get_position(symbol, side)
@@ -343,22 +328,18 @@ class KucoinOrder:
         self.margin_settings = margin_settings
         self.symbol_info = None
         self._bg_task = None
-        self._keepalive_task = None
+        self.ws_trader = KucoinWsTrader(self.api_key, self.api_secret, self.api_passphrase, margin_settings=self.margin_settings, session=self.session)
 
     def start(self):
         """Запускает фоновые таски. Вызывать ПОСЛЕ старта event loop."""
         self._bg_task = asyncio.create_task(self._fetch_exchange_info_loop())
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        asyncio.create_task(self.ws_trader.start())
 
-    async def _keepalive_loop(self):
-        while True:
-            try:
-                await asyncio.sleep(45)
-                await self.warmup()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                log(f"[KucoinOrder] Keepalive error: {e}", level="WARNING")
+    async def close(self):
+        if self._bg_task:
+            self._bg_task.cancel()
+        if self.ws_trader:
+            await self.ws_trader.close()
 
     async def _fetch_exchange_info_loop(self):
         while True:
@@ -425,7 +406,7 @@ class KucoinOrder:
             raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_lots={raw_lots}, lot_size={lot_size}, multiplier={multiplier}).")
 
 
-    async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None, time_in_force: str = "IOC"):
+    async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "MARKET", position_side: str = None, **kwargs):
         self.last_activity_ts = __import__("time").time()
         if not price or price <= 0:
             raise ValueError(f"[{symbol}] Reference price is required to calculate quantity")
@@ -449,6 +430,15 @@ class KucoinOrder:
         if float(qty_str) <= 0:
             raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_lots={raw_lots}, lot_size={lot_size}, multiplier={multiplier}).")
         
+        # 1. Отправка через реактивный горячий WebSocket / UTA клиент
+        if self.ws_trader:
+            try:
+                res = await self.ws_trader.place_order(symbol, side, qty_str, position_side=position_side)
+                log(f"[KucoinOrder][WS] Ордер исполнен: {res}", level="INFO")
+                return res
+            except Exception as ws_err:
+                log(f"[KucoinOrder] WS place_order сбой ({ws_err}), аварийный fallback на REST...", level="WARNING")
+
         endpoint = "/api/v1/orders"
         now = str(int(time.time() * 1000))
         
@@ -462,16 +452,10 @@ class KucoinOrder:
             "symbol": symbol,
             "side": side.lower(),
             "size": qty_str,
+            "type": "market",
             "leverage": leverage,
             "marginMode": marginMode
         }
-        
-        if order_type.upper() == "LIMIT":
-            body["type"] = "limit"
-            body["timeInForce"] = (time_in_force or "IOC").upper()
-            body["price"] = price_str
-        else:
-            body["type"] = "market"
             
         if position_side:
             body["positionSide"] = position_side.upper()
@@ -534,46 +518,6 @@ class KucoinOrder:
                     log(f"[KucoinOrder] Отменены все ордера по {symbol}", level="INFO")
         except Exception as e:
             log(f"[KucoinOrder] Ошибка отмены ордеров {symbol}: {e}", level="ERROR")
-
-    async def warmup(self):
-        if __import__("time").time() - getattr(self, "last_activity_ts", 0.0) < 30.0:
-            return
-        """Отправляет фейковый POST запрос для прогрева WAF/Gateway и TLS туннеля"""
-        try:
-            endpoint = "/api/v1/orders"
-            now = str(int(time.time() * 1000))
-            
-            body = {
-                "clientOid": str(uuid.uuid4()),
-                "symbol": "INVALID_PAIR_WARMUP",
-                "side": "buy",
-                "type": "limit",
-                "timeInForce": "IOC",
-                "size": "1",
-                "price": "1"
-            }
-            body_str = json.dumps(body)
-            str_to_sign = now + "POST" + endpoint + body_str
-            signature = self._generate_signature(str_to_sign)
-            
-            passphrase_hmac = hmac.new(self.api_secret.encode('utf-8'), self.api_passphrase.encode('utf-8'), hashlib.sha256)
-            encrypted_passphrase = base64.b64encode(passphrase_hmac.digest()).decode('utf-8')
-            
-            headers = {
-                'KC-API-KEY': self.api_key,
-                'KC-API-SIGN': signature,
-                'KC-API-TIMESTAMP': now,
-                'KC-API-PASSPHRASE': encrypted_passphrase,
-                'KC-API-KEY-VERSION': '2',
-                'Content-Type': 'application/json'
-            }
-            
-            url = f"https://api-futures.kucoin.com{endpoint}"
-            async with self.session.post(url, headers=headers, data=body_str) as resp:
-                await resp.read()
-                # Убираем лог, чтобы не спамить
-        except Exception:
-            pass
 
     async def get_active_positions(self) -> list:
         if not self.api_key:
@@ -781,37 +725,6 @@ class KucoinOrder:
 
 class OkxOrder:
 
-    async def _keepalive_loop(self):
-        while True:
-            try:
-                import asyncio
-                await asyncio.sleep(45)
-                await self.warmup()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                pass
-
-    async def warmup(self):
-        import time
-        if time.time() - getattr(self, "last_activity_ts", 0.0) < 30.0:
-            return
-        try:
-            timestamp = str(int(time.time() * 1000))
-            body = '{"instId":"INVALID-SWAP","tdMode":"cross","side":"buy","ordType":"limit","sz":"1","px":"1"}'
-            signature = self._generate_signature(timestamp, "POST", "/api/v5/trade/order", body)
-            headers = {
-                "OK-ACCESS-KEY": self.api_key,
-                "OK-ACCESS-SIGN": signature,
-                "OK-ACCESS-TIMESTAMP": timestamp,
-                "OK-ACCESS-PASSPHRASE": self.api_passphrase,
-                "Content-Type": "application/json"
-            }
-            async with self.session.post("https://www.okx.com/api/v5/trade/order", headers=headers, data=body) as resp:
-                await resp.read()
-        except Exception:
-            pass
-
     def check_order_size(self, symbol: str, size_usd: float, price: float):
         pass
 
@@ -845,55 +758,19 @@ class BitgetOrder:
         self.session = session
         self.position_stream = position_stream
         self.symbol_info = []
+        self._bg_task = None
+        self.ws_trader = BitgetWsTrader(self.api_key, self.api_secret, self.api_passphrase, margin_settings=self.margin_settings, session=self.session)
 
     def start(self):
         self._bg_task = asyncio.create_task(self.update_symbol_info())
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        asyncio.create_task(self.ws_trader.start())
         return self._bg_task
 
-    
-    async def _keepalive_loop(self):
-        while True:
-            try:
-                import asyncio
-                await asyncio.sleep(45)
-                await self.warmup()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                pass
-
-    async def warmup(self):
-        import time, json
-        if time.time() - getattr(self, "last_activity_ts", 0.0) < 30.0:
-            return
-        try:
-            timestamp = str(int(time.time() * 1000))
-            body_dict = {
-                "symbol": "INVALIDUSDT",
-                "productType": "usdt-futures",
-                "marginMode": "crossed",
-                "marginCoin": "USDT",
-                "size": "1",
-                "price": "1",
-                "side": "buy",
-                "tradeSide": "open",
-                "orderType": "limit",
-                "force": "ioc"
-            }
-            body = json.dumps(body_dict)
-            signature = self._generate_signature(timestamp, "POST", "/api/v2/mix/order/place-order", body)
-            headers = {
-                "ACCESS-KEY": self.api_key,
-                "ACCESS-SIGN": signature,
-                "ACCESS-TIMESTAMP": timestamp,
-                "ACCESS-PASSPHRASE": self.api_passphrase,
-                "Content-Type": "application/json"
-            }
-            async with self.session.post("https://api.bitget.com/api/v2/mix/order/place-order", headers=headers, data=body) as resp:
-                await resp.read()
-        except Exception:
-            pass
+    async def close(self):
+        if self._bg_task:
+            self._bg_task.cancel()
+        if self.ws_trader:
+            await self.ws_trader.close()
 
     def _generate_signature(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
         message = timestamp + method.upper() + request_path + body
@@ -933,7 +810,7 @@ class BitgetOrder:
         if float(qty_str) <= 0:
             raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_qty={raw_qty}).")
 
-    async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None, time_in_force: str = "IOC"):
+    async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "MARKET", position_side: str = None, **kwargs):
         self.last_activity_ts = __import__("time").time()
         if not price or price <= 0:
             raise ValueError(f"[{symbol}] Reference price is required")
@@ -979,6 +856,15 @@ class BitgetOrder:
 
         trade_side = "open"
 
+        # 1. Отправка через реактивный горячий WebSocket стрим торговли
+        if self.ws_trader:
+            try:
+                res = await self.ws_trader.place_order(symbol, side, qty_str, trade_side=trade_side)
+                log(f"[BitgetOrder][WS] Ордер исполнен: {res}", level="INFO")
+                return res
+            except Exception as ws_err:
+                log(f"[BitgetOrder] WS place_order сбой ({ws_err}), аварийный fallback на REST...", level="WARNING")
+
         mm = self.margin_settings["margin_type"].lower()
         if mm == "cross":
             mm = "crossed"
@@ -991,12 +877,9 @@ class BitgetOrder:
             "size": qty_str,
             "side": side.lower(),
             "tradeSide": trade_side,
-            "orderType": order_type.lower(),
+            "orderType": "market",
             "clientOid": str(uuid.uuid4())
         }
-        if order_type.upper() == "LIMIT":
-            body["price"] = price_str
-            body["force"] = (time_in_force or "IOC").lower()
             
         body_str = json.dumps(body)
         signature = self._generate_signature(now, "POST", endpoint, body_str)

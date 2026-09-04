@@ -97,30 +97,26 @@ class PositionFSM:
 
     async def run_open(self) -> bool:
         """
-        Запуск пайплайна открытия позиции:
-        IDLE -> SUBMITTING -> RESTING_BOOK -> [CANCELLING (только для LIMIT_GTC)] -> VERIFYING_FILL -> ACTIVE_HEDGED / EMERGENCY_UNWIND / ABORTED
+        Запуск пайплайна открытия позиции (Market-Only):
+        IDLE -> SUBMITTING (MARKET via WS) -> VERIFYING_FILL -> ACTIVE_HEDGED / EMERGENCY_UNWIND / ABORTED
         """
         self._set_state(PositionState.SUBMITTING)
         spread_val = self.engine_res.get("net_spread", self.engine_res.get("vwap_spread", 0.0))
         gross_val = self.engine_res.get("vwap_spread", 0.0)
-        log(f"[{self.sym}] Открываем: LONG {self.long_ex} | SHORT {self.short_ex} | Net Spread: {spread_val * 100:.2f}% (Gross: {gross_val * 100:.2f}%, Режим: {self.order_policy})", level="INFO")
+        log(f"[{self.sym}] Открываем: LONG {self.long_ex} | SHORT {self.short_ex} | Net Spread: {spread_val * 100:.2f}% (Gross: {gross_val * 100:.2f}%, Режим: MARKET)", level="INFO")
 
-        tif = "GTC" if self.order_policy == "LIMIT_GTC" else "IOC"
-        long_dist = float(self.cfg["trading_risks"][self.long_ex.lower()]["limit_allow_distance"])
-        short_dist = float(self.cfg["trading_risks"][self.short_ex.lower()]["limit_allow_distance"])
+        price_long = self.engine_res.get("long_avg_price", 0.0)
+        size_long_usd = self.engine_res.get("long_qty", 0.0) * price_long
 
-        price_long_limit = self.engine_res.get("long_avg_price", 0.0) * long_dist
-        size_long_usd = self.engine_res.get("long_qty", 0.0) * price_long_limit
-
-        price_short_limit = self.engine_res.get("short_avg_price", 0.0) / short_dist
-        size_short_usd = self.engine_res.get("short_qty", 0.0) * price_short_limit
+        price_short = self.engine_res.get("short_avg_price", 0.0)
+        size_short_usd = self.engine_res.get("short_qty", 0.0) * price_short
 
         # 1. Pre-flight проверка размеров ордеров
         try:
             if self.long_ex in self.orders:
-                self.orders[self.long_ex].check_order_size(self.native_long, size_long_usd, price_long_limit)
+                self.orders[self.long_ex].check_order_size(self.native_long, size_long_usd, price_long)
             if self.short_ex in self.orders:
-                self.orders[self.short_ex].check_order_size(self.native_short, size_short_usd, price_short_limit)
+                self.orders[self.short_ex].check_order_size(self.native_short, size_short_usd, price_short)
         except Exception as e:
             log(f"[{self.sym}] 🚨 Ошибка валидации размера ордеров до входа: {e}", level="ERROR")
             self.ban_coin_cb(self.sym, reason=f"Order Size Validation Error: {e}", duration_sec=3600)
@@ -131,17 +127,15 @@ class PositionFSM:
                 }))
             return False
 
-        order_type = "MARKET" if self.order_policy == "MARKET" else "LIMIT"
-
-        # 2. Отправка ордеров
+        # 2. Отправка ордеров (MARKET через реактивные WS стримы)
         tasks = []
         if self.long_ex in self.orders:
             tasks.append(self.orders[self.long_ex].place_order(
-                self.native_long, "BUY", size_long_usd, price_long_limit, order_type=order_type, position_side="LONG", time_in_force=tif
+                self.native_long, "BUY", size_long_usd, price_long, order_type="MARKET", position_side="LONG"
             ))
         if self.short_ex in self.orders:
             tasks.append(self.orders[self.short_ex].place_order(
-                self.native_short, "SELL", size_short_usd, price_short_limit, order_type=order_type, position_side="SHORT", time_in_force=tif
+                self.native_short, "SELL", size_short_usd, price_short, order_type="MARKET", position_side="SHORT"
             ))
 
         has_submit_error = False
@@ -171,20 +165,7 @@ class PositionFSM:
             await self._emergency_unwind()
             return False
 
-        # 3. Фаза ожидания налива (RESTING_BOOK)
-        self._set_state(PositionState.RESTING_BOOK)
-        # 4. Фаза отмены остатков (CANCELLING) - только для LIMIT_GTC (в IOC неналитое сжигает сама биржа)
-        if self.order_policy == "LIMIT_GTC":
-            self._set_state(PositionState.CANCELLING)
-            cancel_tasks = []
-            if self.long_ex in self.orders:
-                cancel_tasks.append(self.orders[self.long_ex].cancel_all_orders(self.native_long))
-            if self.short_ex in self.orders:
-                cancel_tasks.append(self.orders[self.short_ex].cancel_all_orders(self.native_short))
-            if cancel_tasks:
-                await asyncio.gather(*cancel_tasks, return_exceptions=True)
-
-        # 5. Фаза верификации налива (VERIFYING_FILL) — ТОЛЬКО из стримов WS, без REST!
+        # 3. Фаза верификации налива (VERIFYING_FILL) — мгновенно из стримов WS
         self._set_state(PositionState.VERIFYING_FILL)
         req_long_qty = self.engine_res.get("long_qty", 0.0)
         req_short_qty = self.engine_res.get("short_qty", 0.0)
@@ -198,9 +179,9 @@ class PositionFSM:
         l_size = self.long_pos.get("size", 0.0)
         s_size = self.short_pos.get("size", 0.0)
 
-        # Для MARKET и IOC ордеров: поллинг кэша WS с кастомным таймаутом
+        # Для MARKET ордеров: поллинг кэша WS с кастомным таймаутом
         # (zero-cost: чтение локального dict, без сетевых запросов)
-        if self.order_policy in ["MARKET", "IOC"] and (l_size < req_long_qty or s_size < req_short_qty):
+        if l_size < req_long_qty or s_size < req_short_qty:
             deadline = time.time() + self.fill_confirm_timeout
             while time.time() < deadline:
                 await asyncio.sleep(self.fill_confirm_poll_interval)
@@ -356,31 +337,20 @@ class PositionFSM:
         long_qty = l_pos.get("size", 0.0)
         short_qty = s_pos.get("size", 0.0)
 
-        is_panic = (reason == "TTL_EXPIRED" or reason == "LOW_FILL_RATE")
-        order_type = "MARKET" if is_panic else "LIMIT"
-        tif = "IOC"
-
-        long_dist = float(self.cfg["trading_risks"][self.long_ex.lower()]["limit_allow_distance"])
-        short_dist = float(self.cfg["trading_risks"][self.short_ex.lower()]["limit_allow_distance"])
-
         tasks = []
         if long_qty > 0 and self.long_ex in self.orders:
             price_long = exit_res.get("long_close_price") or l_pos.get("price", 0.0)
             if price_long <= 0: price_long = self.engine_res.get("long_avg_price", 1.0)
-            # При продаже агрессивная лимитка ставится чуть ниже рынка для гарантированного забора бидов
-            price_long_limit = (price_long / long_dist) if order_type == "LIMIT" else price_long
-            size_usd = long_qty * price_long_limit
+            size_usd = long_qty * price_long
             tasks.append(self.orders[self.long_ex].place_order(
-                self.native_long, "SELL", size_usd, price_long_limit, order_type=order_type, position_side="LONG", time_in_force=tif
+                self.native_long, "SELL", size_usd, price_long, order_type="MARKET", position_side="LONG"
             ))
         if short_qty > 0 and self.short_ex in self.orders:
             price_short = exit_res.get("short_close_price") or s_pos.get("price", 0.0)
             if price_short <= 0: price_short = self.engine_res.get("short_avg_price", 1.0)
-            # При покупке агрессивная лимитка ставится чуть выше рынка для гарантированного забора асков
-            price_short_limit = (price_short * short_dist) if order_type == "LIMIT" else price_short
-            size_usd = short_qty * price_short_limit
+            size_usd = short_qty * price_short
             tasks.append(self.orders[self.short_ex].place_order(
-                self.native_short, "BUY", size_usd, price_short_limit, order_type=order_type, position_side="SHORT", time_in_force=tif
+                self.native_short, "BUY", size_usd, price_short, order_type="MARKET", position_side="SHORT"
             ))
 
         if tasks:
