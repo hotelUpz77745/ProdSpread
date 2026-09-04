@@ -100,6 +100,12 @@
             "top_n_candidates": 4,
             "check_synthetic_exit": true,
             "check_synthetic_slippage": true,
+            "check_book_decay": false,
+            "check_book_decay_desc": "Enable/disable Order Flow Imbalance / Book Decay Velocity filter (true/false)",
+            "max_book_decay_velocity": -5.0,
+            "max_book_decay_velocity_desc": "Threshold in %/sec of book depth drain (e.g. -5.0 means volume drops faster than 500%/s)",
+            "lead_lag_sequencing": true,
+            "lead_lag_sequencing_desc": "If true, dispatches slower exchange (Bitget/Kucoin) first in async batch to align matching engine arrival",
             "max_slippage_ratio": 0.5,
             "hard_max_slippage": 0.015,
             "fill_confirm_timeout_sec": {

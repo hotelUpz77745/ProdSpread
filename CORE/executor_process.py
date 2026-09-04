@@ -148,6 +148,15 @@ class ExecutorProcess:
         self.orders["KUCOIN"].start()
         self.orders["BITGET"].start()
         
+        # Гарантированный прогрев WebSocket торговых стримов ДО старта торговли
+        warmup_tasks = []
+        for ex in ("BINANCE", "BITGET", "KUCOIN"):
+            if ex in self.orders and hasattr(self.orders[ex], "warmup"):
+                warmup_tasks.append(self.orders[ex].warmup())
+        if warmup_tasks:
+            await asyncio.gather(*warmup_tasks, return_exceptions=True)
+            log("[ExecutorProcess] 🔥 Все торговые WebSocket-стримы прогреты и авторизованы ДО старта торговли.", level="INFO")
+        
         if os.environ.get("BINANCE_API_KEY"):
             asyncio.create_task(self.binance_pos_stream.start())
         if os.environ.get("KUCOIN_API_KEY"):

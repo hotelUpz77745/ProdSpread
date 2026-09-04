@@ -21,6 +21,8 @@ class TradingEngine:
         self.check_synthetic_slippage = bool(self.cfg["trading_rules"]["entry"]["check_synthetic_slippage"])
         self.max_slippage_ratio = float(self.cfg["trading_rules"]["entry"]["max_slippage_ratio"])
         self.hard_max_slippage = float(self.cfg["trading_rules"]["entry"]["hard_max_slippage"])
+        self.check_book_decay = bool(self.cfg["trading_rules"]["entry"].get("check_book_decay", False))
+        self.max_book_decay_velocity = float(self.cfg["trading_rules"]["entry"].get("max_book_decay_velocity", -5.0))
         self.decay_map = self.cfg["trading_rules"]["exit"]["profit_decay_map"]
         self.trading_risks = self.cfg["trading_risks"]
         self._book_history = {}
@@ -48,7 +50,7 @@ class TradingEngine:
         short_ex = self.exchanges[short_idx]
 
         # Защита от токсичного потока: расчет Book Decay Velocity (OFI)
-        if sym and now_mono > 0.0:
+        if self.check_book_decay and sym and now_mono > 0.0:
             hist_long = self._book_history.get((long_ex, sym))
             if hist_long:
                 dt_l = now_mono - hist_long["ts"]
@@ -56,7 +58,7 @@ class TradingEngine:
                     v_decay_l = OrderbookUtils.calculate_book_decay_velocity(
                         long_book.get("asks", []), hist_long.get("asks", []), dt_l, top_k=3
                     )
-                    if v_decay_l < -5.0:
+                    if v_decay_l < self.max_book_decay_velocity:
                         return False, {"reason": f"BOOK_DECAY_TOXIC (Long Asks draining {v_decay_l:.1f}/s)"}
 
             hist_short = self._book_history.get((short_ex, sym))
@@ -66,7 +68,7 @@ class TradingEngine:
                     v_decay_s = OrderbookUtils.calculate_book_decay_velocity(
                         short_book.get("bids", []), hist_short.get("bids", []), dt_s, top_k=3
                     )
-                    if v_decay_s < -5.0:
+                    if v_decay_s < self.max_book_decay_velocity:
                         return False, {"reason": f"BOOK_DECAY_TOXIC (Short Bids draining {v_decay_s:.1f}/s)"}
 
             self._book_history[(long_ex, sym)] = {

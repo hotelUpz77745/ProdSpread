@@ -100,6 +100,7 @@ class PositionFSM:
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
         self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
         self.unwind_retry_pause = float(unwind_cfg["retry_pause_sec"])
+        self.lead_lag_sequencing = bool(self.cfg["trading_rules"]["entry"].get("lead_lag_sequencing", True))
 
         self.exec_res: Dict[str, Any] = {}
         self.long_pos: Dict[str, float] = {"size": 0.0, "price": 0.0}
@@ -253,7 +254,8 @@ class PositionFSM:
             (_get_ex_priority(self.long_ex), self.long_ex, self.native_long, "BUY", size_long_usd, price_long, "LONG"),
             (_get_ex_priority(self.short_ex), self.short_ex, self.native_short, "SELL", size_short_usd, price_short, "SHORT")
         ]
-        legs.sort(key=lambda x: x[0])
+        if self.lead_lag_sequencing:
+            legs.sort(key=lambda x: x[0])
 
         tasks = []
         for _, ex, native_sym, side, size_usd, price, pos_side in legs:

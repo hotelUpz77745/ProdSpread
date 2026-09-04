@@ -49,6 +49,17 @@ class BinanceOrder:
         self._bg_task = asyncio.create_task(self._fetch_exchange_info_loop())
         asyncio.create_task(self.ws_trader.start())
 
+    async def warmup(self):
+        """Гарантирует полный прогрев и авторизацию WebSocket торгового стрима."""
+        if self.ws_trader:
+            if not self.ws_trader._running:
+                await self.ws_trader.start()
+            if self.ws_trader._ws and not self.ws_trader._ws.closed:
+                try:
+                    await self.ws_trader._ws.ping()
+                except Exception:
+                    pass
+
     async def close(self):
         if self._bg_task:
             self._bg_task.cancel()
@@ -343,6 +354,17 @@ class KucoinOrder:
             self.ws_trader.session = self.session
         self._bg_task = asyncio.create_task(self._fetch_exchange_info_loop())
         asyncio.create_task(self.ws_trader.start())
+
+    async def warmup(self):
+        """Гарантирует полный прогрев и авторизацию WebSocket торгового стрима."""
+        if self.ws_trader:
+            if not self.ws_trader._running:
+                await self.ws_trader.start()
+            if self.ws_trader._ws and not self.ws_trader._ws.closed:
+                try:
+                    await self.ws_trader._ws.ping()
+                except Exception:
+                    pass
 
     async def close(self):
         if self._bg_task:
@@ -781,6 +803,17 @@ class BitgetOrder:
         self._bg_task = asyncio.create_task(self.update_symbol_info())
         asyncio.create_task(self.ws_trader.start())
         return self._bg_task
+
+    async def warmup(self):
+        """Гарантирует полный прогрев и авторизацию WebSocket торгового стрима."""
+        if self.ws_trader:
+            if not self.ws_trader._running:
+                await self.ws_trader.start()
+            if self.ws_trader._ws and not self.ws_trader._ws.closed:
+                try:
+                    await self.ws_trader._ws.ping()
+                except Exception:
+                    pass
 
     async def close(self):
         if self._bg_task:
