@@ -38,3 +38,43 @@ await asyncio.sleep(self.cfg["EXECUTION_PAUSE"]) нужно дергать ме�
 
 Также будет отдельный вопрос по OIC ордерам. Это очень жесткая фича на стороне биржи которая (по крайней мере для наших настроек) очень часто не дает войти второй ноге. 
 Вопрос: можно ли в параметрах хзапроса ордеров типа IOC задавать порог лояльности что мол ордер считать исполненным если например покрыто хотя бы 80% объема. И второй вопрос -- можно ли задать свой таймаут (окно работы ордера IOC) (например задать его больше) чтобы все таки дать возможность полного налива. В противном случае если этого всего нет то нужно будет оставить IOC но сделать опционально выброр в конфигах перехода на обычные лимитные ордера которые мы будет курировать сами при помощи того же пресловутого EXECUTION_PAUSE с последующей отменой остатка. (тогда снова будет актуален параметр min_fill_rate (сейчас он по сути не работает так как исполненность решается на стороне ордера IOC по принципу бей или беги)). выкатишь полный план по всего и всея что я тут теюбе описал -->
+
+
+
+async def _wait_for_fill_confirmation(
+    self, req_long_qty: float, req_short_qty: float
+) -> Tuple[Dict[str, float], Dict[str, float], float, float]:
+    """
+    Реактивный опрос локального WS-кэша позиций до подтверждения налива обеих ног (min_fill_rate)
+    или истечения предельного таймаута fill_confirm_timeout_sec.
+    """
+    start_time = time.perf_counter()
+    deadline = start_time + self.fill_confirm_timeout
+
+    while True:
+        # Чтение из локального WS-кэша (0 сетевых задержек, чтение dict в памяти)
+        if self.long_ex in self.orders:
+            p_long = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
+            if p_long.get("size", 0.0) > 0:
+                self.long_pos = p_long
+        if self.short_ex in self.orders:
+            p_short = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
+            if p_short.get("size", 0.0) > 0:
+                self.short_pos = p_short
+
+        l_rate = self.long_pos.get("size", 0.0) / req_long_qty
+        s_rate = self.short_pos.get("size", 0.0) / req_short_qty
+
+        if l_rate >= self.min_fill_rate and s_rate >= self.min_fill_rate:
+            elapsed = time.perf_counter() - start_time
+            log(f"[{self.sym}] 🚀 Обе ноги подтверждены за {elapsed*1000:.1f} мс (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
+            break
+
+        if time.perf_counter() >= deadline:
+            elapsed = time.perf_counter() - start_time
+            log(f"[{self.sym}] ⏱ Таймаут подтверждения налива ({elapsed*1000:.1f} мс). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
+            break
+
+        await asyncio.sleep(self.fill_confirm_poll_interval)
+
+    return self.long_pos, self.short_pos, l_rate, s_rate

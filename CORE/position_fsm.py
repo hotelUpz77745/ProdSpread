@@ -104,32 +104,47 @@ class PositionFSM:
         """
         start_time = time.perf_counter()
         deadline = start_time + self.fill_confirm_timeout
+        l_rate = 0.0
+        s_rate = 0.0
 
-        while True:
-            # Чтение из локального WS-кэша (0 сетевых задержек, чтение dict в памяти)
+        while time.perf_counter() < deadline:
+            # Безопасное чтение из локального WS-кэша
             if self.long_ex in self.orders:
-                p_long = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
-                if p_long.get("size", 0.0) > 0:
-                    self.long_pos = p_long
-            if self.short_ex in self.orders:
-                p_short = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
-                if p_short.get("size", 0.0) > 0:
-                    self.short_pos = p_short
+                try:
+                    p_long = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
+                    if p_long and p_long.get("size", 0.0) > 0:
+                        self.long_pos = p_long
+                except Exception as e:
+                    log(f"[{self.sym}] Ошибка чтения WS-кэша {self.long_ex}: {e}", level="WARNING")
 
-            l_rate = self.long_pos.get("size", 0.0) / req_long_qty
-            s_rate = self.short_pos.get("size", 0.0) / req_short_qty
+            if self.short_ex in self.orders:
+                try:
+                    p_short = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
+                    if p_short and p_short.get("size", 0.0) > 0:
+                        self.short_pos = p_short
+                except Exception as e:
+                    log(f"[{self.sym}] Ошибка чтения WS-кэша {self.short_ex}: {e}", level="WARNING")
+
+            l_size = self.long_pos.get("size", 0.0)
+            s_size = self.short_pos.get("size", 0.0)
+
+            l_rate = (l_size / req_long_qty) if req_long_qty > 0 else 0.0
+            s_rate = (s_size / req_short_qty) if req_short_qty > 0 else 0.0
 
             if l_rate >= self.min_fill_rate and s_rate >= self.min_fill_rate:
                 elapsed = time.perf_counter() - start_time
-                log(f"[{self.sym}] 🚀 Обе ноги подтверждены за {elapsed*1000:.1f} мс (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
-                break
-
-            if time.perf_counter() >= deadline:
-                elapsed = time.perf_counter() - start_time
-                log(f"[{self.sym}] ⏱ Таймаут подтверждения налива ({elapsed*1000:.1f} мс). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
+                elapsed_ms = elapsed * 1000.0
+                price_l = self.long_pos.get("price", self.engine_res.get("long_avg_price", 0.0))
+                price_s = self.short_pos.get("price", self.engine_res.get("short_avg_price", 0.0))
+                total_usd = (l_size * price_l) + (s_size * price_s)
+                speed_usd_s = total_usd / max(elapsed, 0.0001)
+                log(f"[{self.sym}] 🚀 Обе ноги подтверждены за {elapsed_ms:.1f} мс (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%) | Скорость: {speed_usd_s:.0f} USD/сек", level="INFO")
                 break
 
             await asyncio.sleep(self.fill_confirm_poll_interval)
+        else:
+            elapsed = time.perf_counter() - start_time
+            log(f"[{self.sym}] ⏱ Таймаут подтверждения налива ({elapsed*1000.0:.1f} мс). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
 
         return self.long_pos, self.short_pos, l_rate, s_rate
 
