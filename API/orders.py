@@ -251,6 +251,11 @@ class BinanceOrder:
             return self.position_stream.get_position(symbol, side)
         return {"size": 0.0, "price": 0.0}
 
+    def get_last_close_price(self, symbol: str) -> float:
+        if self.position_stream and hasattr(self.position_stream, "get_last_close_price"):
+            return self.position_stream.get_last_close_price(symbol)
+        return 0.0
+
     async def get_position_rest(self, symbol: str, side: str = None) -> dict:
         if not self.api_key:
             return {"size": 0.0, "price": 0.0, "status": "ok"}
@@ -706,6 +711,11 @@ class KucoinOrder:
             }
         return {"size": 0.0, "price": 0.0}
 
+    def get_last_close_price(self, symbol: str) -> float:
+        if self.position_stream and hasattr(self.position_stream, "get_last_close_price"):
+            return self.position_stream.get_last_close_price(symbol)
+        return 0.0
+
     async def get_exact_position(self, symbol: str, side: str) -> dict:
         return await self.get_exact_position_guarded(symbol, side)
 
@@ -1098,6 +1108,11 @@ class BitgetOrder:
         if self.position_stream:
             return self.position_stream.get_position(symbol, side)
         return {"size": 0.0, "price": 0.0}
+
+    def get_last_close_price(self, symbol: str) -> float:
+        if self.position_stream and hasattr(self.position_stream, "get_last_close_price"):
+            return self.position_stream.get_last_close_price(symbol)
+        return 0.0
 
     async def get_position_rest(self, symbol: str, side: str = None) -> dict:
         if not self.api_key:

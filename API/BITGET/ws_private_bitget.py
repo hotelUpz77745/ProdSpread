@@ -28,6 +28,7 @@ class BitgetPositionStream:
         self.is_connected = False
         self._external_stop = False
         self.positions: Dict[str, Dict[str, Dict[str, float]]] = {}
+        self.last_close_prices: Dict[str, float] = {}
 
     async def stop(self):
         self._external_stop = True
@@ -58,6 +59,10 @@ class BitgetPositionStream:
         if not sym or sym not in self.positions:
             return {"size": 0.0, "price": 0.0}
         return self.positions[sym].get(side.upper(), {"size": 0.0, "price": 0.0})
+
+    def get_last_close_price(self, symbol: str) -> float:
+        sym = symbol.replace("_UMCBL", "").strip().upper()
+        return self.last_close_prices.get(sym, 0.0)
 
     async def run(self):
         self.session = aiohttp.ClientSession()
@@ -166,6 +171,8 @@ class BitgetPositionStream:
                                     if raw_side in ("LONG", "SHORT"):
                                         if order_status == "filled" and is_close:
                                             self.positions[sym][raw_side] = {"size": 0.0, "price": 0.0}
+                                            if avg_price > 0:
+                                                self.last_close_prices[sym] = avg_price
                                         elif order_status in ("filled", "partially_filled") and cum_qty > 0:
                                             self.positions[sym][raw_side] = {
                                                 "size": cum_qty,

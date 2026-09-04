@@ -143,6 +143,56 @@ class PositionFSM:
 
         return self.long_pos, self.short_pos, l_rate, s_rate
 
+    async def _wait_for_close_confirmation(self) -> Tuple[bool, float, float]:
+        """
+        Реактивный опрос локального WS-кэша позиций до подтверждения обнуления обеих ног (size == 0.0)
+        или истечения предельного таймаута fill_confirm_timeout_sec.
+        Возвращает (is_closed, close_price_long, close_price_short).
+        """
+        start_time = time.perf_counter()
+        deadline = start_time + self.fill_confirm_timeout
+        close_p_long = 0.0
+        close_p_short = 0.0
+
+        while time.perf_counter() < deadline:
+            l_closed = True
+            s_closed = True
+
+            if self.long_ex in self.orders:
+                try:
+                    p_long = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
+                    if p_long and p_long.get("size", 0.0) > 0:
+                        l_closed = False
+                    if hasattr(self.orders[self.long_ex], "get_last_close_price"):
+                        p = self.orders[self.long_ex].get_last_close_price(self.native_long)
+                        if p > 0:
+                            close_p_long = p
+                except Exception as e:
+                    log(f"[{self.sym}] Ошибка чтения WS-кэша закрытия {self.long_ex}: {e}", level="WARNING")
+
+            if self.short_ex in self.orders:
+                try:
+                    p_short = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
+                    if p_short and p_short.get("size", 0.0) > 0:
+                        s_closed = False
+                    if hasattr(self.orders[self.short_ex], "get_last_close_price"):
+                        p = self.orders[self.short_ex].get_last_close_price(self.native_short)
+                        if p > 0:
+                            close_p_short = p
+                except Exception as e:
+                    log(f"[{self.sym}] Ошибка чтения WS-кэша закрытия {self.short_ex}: {e}", level="WARNING")
+
+            if l_closed and s_closed:
+                elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+                log(f"[{self.sym}] 🚀 Обе ноги подтверждены закрытыми по WS за {elapsed_ms:.1f} мс (0.0)", level="INFO")
+                return True, close_p_long, close_p_short
+
+            await asyncio.sleep(self.fill_confirm_poll_interval)
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+        log(f"[{self.sym}] ⏱ Таймаут подтверждения закрытия по WS ({elapsed_ms:.1f} мс), переход к контрольной проверке...", level="WARNING")
+        return False, close_p_long, close_p_short
+
     async def run_open(self) -> bool:
         """
         Запуск пайплайна открытия позиции (Market-Only):
@@ -335,24 +385,34 @@ class PositionFSM:
         self._set_state(PositionState.CLOSING)
         log(f"[{self.sym}] Закрываем позицию: LONG {self.long_ex} | SHORT {self.short_ex} ({reason})", level="INFO")
 
-        # Проверяем фактические объемы в позициях перед закрытием
-        l_pos = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0, "price": 0.0}
-        s_pos = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT") if self.short_ex in self.orders else {"size": 0.0, "price": 0.0}
+        # Проверяем фактические объемы в позициях перед закрытием из локального WS-кэша
+        l_ws = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG") if self.long_ex in self.orders else {}
+        s_ws = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT") if self.short_ex in self.orders else {}
 
-        long_qty = l_pos.get("size", 0.0)
-        short_qty = s_pos.get("size", 0.0)
+        long_qty = l_ws.get("size", 0.0) or self.long_pos.get("size", 0.0)
+        short_qty = s_ws.get("size", 0.0) or self.short_pos.get("size", 0.0)
+
+        # Если локальный кэш пуст, делаем fallback на REST
+        if long_qty <= 0 and self.long_ex in self.orders:
+            l_pos = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG")
+            long_qty = l_pos.get("size", 0.0)
+        if short_qty <= 0 and self.short_ex in self.orders:
+            s_pos = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT")
+            short_qty = s_pos.get("size", 0.0)
+
+        price_long = exit_res.get("long_close_price") or self.exec_res.get("entry_long_price", 1.0)
+        price_short = exit_res.get("short_close_price") or self.exec_res.get("entry_short_price", 1.0)
+
+        # 1. Запуск мониторинга закрытия по WS параллельно с отправкой ордеров
+        close_wait_task = asyncio.create_task(self._wait_for_close_confirmation())
 
         tasks = []
         if long_qty > 0 and self.long_ex in self.orders:
-            price_long = exit_res.get("long_close_price") or l_pos.get("price", 0.0)
-            if price_long <= 0: price_long = self.engine_res.get("long_avg_price", 1.0)
             size_usd = long_qty * price_long
             tasks.append(self.orders[self.long_ex].place_order(
                 self.native_long, "SELL", size_usd, price_long, order_type="MARKET", position_side="LONG"
             ))
         if short_qty > 0 and self.short_ex in self.orders:
-            price_short = exit_res.get("short_close_price") or s_pos.get("price", 0.0)
-            if price_short <= 0: price_short = self.engine_res.get("short_avg_price", 1.0)
             size_usd = short_qty * price_short
             tasks.append(self.orders[self.short_ex].place_order(
                 self.native_short, "BUY", size_usd, price_short, order_type="MARKET", position_side="SHORT"
@@ -361,7 +421,49 @@ class PositionFSM:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Контрольный опрос и подчистка остатков (до 3 попыток до подтверждения строго 0.0)
+        # 2. Ожидаем быстрого подтверждения обнуления по WS (обычно 15-50 мс)
+        is_closed_fast, fast_p_long, fast_p_short = await close_wait_task
+
+        if is_closed_fast:
+            log(f"[{self.sym}] Позиция полностью ликвидирована на обеих биржах (0.0) через быстрый WS-стрим.", level="INFO")
+            if self.long_ex in self.orders:
+                await self.orders[self.long_ex].cancel_all_orders(self.native_long)
+            if self.short_ex in self.orders:
+                await self.orders[self.short_ex].cancel_all_orders(self.native_short)
+
+            self._set_state(PositionState.SETTLED)
+            if self.pm:
+                self.pm.confirm_exit(self.route, self.sym)
+            if self.writer:
+                asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {
+                    "route": self.route, "sym": self.sym, "reason": reason
+                }))
+
+            if self.on_settle_cb:
+                entry_l = self.exec_res.get("entry_long_price", price_long)
+                entry_s = self.exec_res.get("entry_short_price", price_short)
+                exit_l = fast_p_long if fast_p_long > 0 else (exit_res.get("long_close_price") or price_long)
+                exit_s = fast_p_short if fast_p_short > 0 else (exit_res.get("short_close_price") or price_short)
+                actual_long_usd = long_qty * entry_l
+                actual_short_usd = short_qty * entry_s
+
+                asyncio.create_task(self.on_settle_cb(
+                    sym=self.sym,
+                    route=self.route,
+                    long_ex=self.long_ex,
+                    short_ex=self.short_ex,
+                    entry_long_price=entry_l,
+                    entry_short_price=entry_s,
+                    exit_long_price=exit_l,
+                    exit_short_price=exit_s,
+                    actual_long_usd=actual_long_usd,
+                    actual_short_usd=actual_short_usd,
+                    exit_res=exit_res,
+                    reason=reason
+                ))
+            return True
+
+        # 3. Fallback: Контрольный опрос и подчистка остатков через REST (если WS превысил таймаут)
         for attempt in range(3):
             await asyncio.sleep(self.unwind_retry_pause)
             l_check = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0}
@@ -386,14 +488,26 @@ class PositionFSM:
                         "route": self.route, "sym": self.sym, "reason": reason
                     }))
                 if self.on_settle_cb:
-                    open_time_ms = getattr(self, "open_time_ms", 0)
-                    if not open_time_ms and getattr(self, "open_time", 0):
-                        open_time_ms = int(self.open_time * 1000)
-                    if not open_time_ms:
-                        open_time_ms = int((time.time() - 60) * 1000)
+                    entry_l = self.exec_res.get("entry_long_price", price_long)
+                    entry_s = self.exec_res.get("entry_short_price", price_short)
+                    exit_l = fast_p_long if fast_p_long > 0 else (exit_res.get("long_close_price") or price_long)
+                    exit_s = fast_p_short if fast_p_short > 0 else (exit_res.get("short_close_price") or price_short)
+                    actual_long_usd = long_qty * entry_l
+                    actual_short_usd = short_qty * entry_s
 
                     asyncio.create_task(self.on_settle_cb(
-                        self.sym, self.native_long, self.native_short, self.long_ex, self.short_ex, open_time_ms
+                        sym=self.sym,
+                        route=self.route,
+                        long_ex=self.long_ex,
+                        short_ex=self.short_ex,
+                        entry_long_price=entry_l,
+                        entry_short_price=entry_s,
+                        exit_long_price=exit_l,
+                        exit_short_price=exit_s,
+                        actual_long_usd=actual_long_usd,
+                        actual_short_usd=actual_short_usd,
+                        exit_res=exit_res,
+                        reason=reason
                     ))
                 return True
                 

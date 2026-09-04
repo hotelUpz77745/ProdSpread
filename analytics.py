@@ -69,9 +69,20 @@ class TradeAnalytics:
             "slippage": slippage
         }
 
-    def record_close(self, long_price_close: float, short_price_close: float, spread_out: float, slippage_out: float = 0.0, long_executed_usd: float = None, short_executed_usd: float = None) -> None:
+    def record_close(self, long_price_close: float, short_price_close: float, spread_out: float, slippage_out: float = 0.0, long_executed_usd: float = None, short_executed_usd: float = None) -> Dict[str, Any]:
         if not self.active_trade:
-            return
+            # Fallback для позиций, закрываемых после перезапуска бота
+            self.active_trade = {
+                "route": "UNKNOWN",
+                "direction": "LONG_SHORT",
+                "long_ex": "BINANCE",
+                "short_ex": "BITGET",
+                "open_time": time.time() - 60,
+                "long_price_in": long_price_close,
+                "short_price_in": short_price_close,
+                "spread_in": 0.0,
+                "slippage": 0.0
+            }
             
         t_in = self.active_trade
         close_time = time.time()
@@ -91,11 +102,11 @@ class TradeAnalytics:
         
         gross_pnl = (long_pnl + short_pnl) / 2.0
         
-        long_cfg = self.risks_cfg[long_ex.lower()]
-        short_cfg = self.risks_cfg[short_ex.lower()]
+        long_cfg = self.risks_cfg.get(long_ex.lower(), {"trade_size_usd": 20.0, "taker_fee": 0.0005})
+        short_cfg = self.risks_cfg.get(short_ex.lower(), {"trade_size_usd": 20.0, "taker_fee": 0.0006})
         
-        actual_long_usd = long_executed_usd if long_executed_usd is not None else long_cfg["trade_size_usd"]
-        actual_short_usd = short_executed_usd if short_executed_usd is not None else short_cfg["trade_size_usd"]
+        actual_long_usd = long_executed_usd if long_executed_usd is not None and long_executed_usd > 0 else long_cfg["trade_size_usd"]
+        actual_short_usd = short_executed_usd if short_executed_usd is not None and short_executed_usd > 0 else short_cfg["trade_size_usd"]
         
         l_fee_usd = actual_long_usd * (long_cfg["taker_fee"] * 2.0)
         s_fee_usd = actual_short_usd * (short_cfg["taker_fee"] * 2.0)
@@ -121,22 +132,23 @@ class TradeAnalytics:
             "Open_Time": dt_open,
             "Close_Time": dt_close,
             "Duration": duration_str,
-            "Long_Price_In": round(t_in["long_price_in"], 5),
-            "Short_Price_In": round(t_in["short_price_in"], 5),
-            "Long_Price_Out": round(long_price_close, 5),
-            "Short_Price_Out": round(short_price_close, 5),
+            "Long_Price_In": round(t_in["long_price_in"], 6),
+            "Short_Price_In": round(t_in["short_price_in"], 6),
+            "Long_Price_Out": round(long_price_close, 6),
+            "Short_Price_Out": round(short_price_close, 6),
             "Long_PnL": round(long_pnl, 5),
             "Short_PnL": round(short_pnl, 5),
             "Long_PnL_USD": round(long_pnl_usd, 4),
             "Short_PnL_USD": round(short_pnl_usd, 4),
             "Long_Fee_USD": round(l_fee_usd, 4),
             "Short_Fee_USD": round(s_fee_usd, 4),
+            "Total_Fee_USD": round(l_fee_usd + s_fee_usd, 4),
             "Slippage": round(total_slip, 5),
             "Gross_PnL": round(gross_pnl, 5),
             "Net_PnL": round(net_pnl, 5),
             "Net_PnL_USD": round(net_pnl_usd, 4),
-            "Win": 1 if net_pnl_usd > 0 else -1,
-            "Spread_In": round(t_in['spread_in'], 4),
+            "Win": 1 if net_pnl_usd >= 0 else -1,
+            "Spread_In": round(t_in.get('spread_in', 0.0), 4),
             "Spread_Out": round(spread_out, 4),
             "Cumulative_PnL_USD": round(self.cumulative_pnl_usd, 4)
         }
@@ -146,108 +158,11 @@ class TradeAnalytics:
             f"Сделка #{self.trade_counter} ({t_in['direction']})\n"
             f"Связка: {t_in['route']}\n"
             f"Время: {dt_open} -> {dt_close} ({duration_str})\n"
-            f"Вход | {long_ex}: {t_in['long_price_in']:.5f} | {short_ex}: {t_in['short_price_in']:.5f} | Спред: {t_in['spread_in']:.4f}\n"
-            f"Выход| {long_ex}: {long_price_close:.5f} | {short_ex}: {short_price_close:.5f} | Спред: {spread_out:.4f}\n"
-            f"PnL USD: {long_ex} {long_pnl_usd:.4f}$ | {short_ex} {short_pnl_usd:.4f}$\n"
-            f"P&L: {net_pnl_usd:.4f} USD ({net_pnl:.5f})\n"
-            f"Cumulative PnL: {self.cumulative_pnl_usd:.4f}$\n"
-            f"=========================================\n\n"
-        )
-        
-        try:
-            def _io_tasks():
-                try:
-                    with open(self.filepath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                except:
-                    data = []
-                    
-                data.append(trade_obj)
-                with open(self.filepath, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=4, ensure_ascii=False)
-                    
-                with open(self.readable_path, "a", encoding="utf-8") as f:
-                    f.write(readable)
-                    
-                log(f"[ANALYTICS] Сделка #{self.trade_counter} ({t_in['direction']}) закрыта. Net PnL: {net_pnl_usd:.4f} USD.", level="DEBUG", is_signal=True)
-
-            _analytics_executor.submit(_io_tasks)
-        except Exception as e:
-            log(f"Error submitting IO tasks in analytics: {e}", level="ERROR")
-            
-        self.active_trade = {}
-        return trade_obj 
-
-    def record_settlement(self, settle_res: Dict[str, Any], exit_res: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Фиксация фактического биржевого клиринга (реальные доллары, комиссии и цены исполнения).
-        """
-        t_in = self.active_trade
-        close_time = time.time()
-        open_time = t_in.get("open_time", close_time)
-        
-        duration_sec = int(close_time - open_time)
-        mins, secs = divmod(duration_sec, 60)
-        duration_str = f"{mins} min {secs} sec"
-        
-        dt_open = datetime.fromtimestamp(open_time, self.tz).strftime('%Y-%m-%d %H:%M:%S')
-        dt_close = datetime.fromtimestamp(close_time, self.tz).strftime('%Y-%m-%d %H:%M:%S')
-        
-        long_ex = settle_res.get("long_ex") or t_in.get("long_ex", "UNKNOWN")
-        short_ex = settle_res.get("short_ex") or t_in.get("short_ex", "UNKNOWN")
-        route = t_in.get("route", f"{long_ex}_{short_ex}")
-        
-        long_open_p = float(settle_res.get("long_open_price") or t_in.get("long_price_in", 0.0))
-        long_close_p = float(settle_res.get("long_close_price", 0.0))
-        short_open_p = float(settle_res.get("short_open_price") or t_in.get("short_price_in", 0.0))
-        short_close_p = float(settle_res.get("short_close_price", 0.0))
-        
-        long_net_usd = float(settle_res.get("long_net_pnl_usd", 0.0))
-        short_net_usd = float(settle_res.get("short_net_pnl_usd", 0.0))
-        total_comm_usd = float(settle_res.get("total_commission_usd", 0.0))
-        net_pnl_usd = float(settle_res.get("total_net_pnl_usd", 0.0))
-        net_yield_pct = float(settle_res.get("net_yield_pct", 0.0))
-        
-        self.cumulative_pnl_usd += net_pnl_usd
-        self.trade_counter += 1
-        
-        spread_in = float(t_in.get("spread_in", 0.0))
-        spread_out = float(exit_res.get("vwap_spread_out", 0.0)) if exit_res else 0.0
-        
-        trade_obj = {
-            "Trade_ID": self.trade_counter,
-            "Route": route,
-            "Direction": t_in.get("direction", "LONG_SHORT"),
-            "Long_Ex": long_ex,
-            "Short_Ex": short_ex,
-            "Open_Time": dt_open,
-            "Close_Time": dt_close,
-            "Duration": duration_str,
-            "Long_Price_In": round(long_open_p, 6),
-            "Short_Price_In": round(short_open_p, 6),
-            "Long_Price_Out": round(long_close_p, 6),
-            "Short_Price_Out": round(short_close_p, 6),
-            "Long_PnL_USD": round(long_net_usd, 4),
-            "Short_PnL_USD": round(short_net_usd, 4),
-            "Total_Fee_USD": round(total_comm_usd, 4),
-            "Net_PnL": round(net_yield_pct, 5),
-            "Net_PnL_USD": round(net_pnl_usd, 4),
-            "Win": 1 if net_pnl_usd >= 0 else -1,
-            "Spread_In": round(spread_in, 4),
-            "Spread_Out": round(spread_out, 4),
-            "Cumulative_PnL_USD": round(self.cumulative_pnl_usd, 4)
-        }
-        
-        readable = (
-            f"=========================================\n"
-            f"Сделка #{self.trade_counter} (РЕАЛЬНЫЙ БИРЖЕВОЙ КЛИРИНГ)\n"
-            f"Связка: {route}\n"
-            f"Время: {dt_open} -> {dt_close} ({duration_str})\n"
-            f"Вход | {long_ex}: {long_open_p:.6f} | {short_ex}: {short_open_p:.6f} | Спред: {spread_in:.4f}\n"
-            f"Выход| {long_ex}: {long_close_p:.6f} | {short_ex}: {short_close_p:.6f} | Спред: {spread_out:.4f}\n"
-            f"PnL USD: {long_ex} {long_net_usd:+.4f}$ | {short_ex} {short_net_usd:+.4f}$\n"
-            f"Комиссии: {total_comm_usd:.4f} USD\n"
-            f"P&L: {net_pnl_usd:+.4f} USD ({net_yield_pct*100:+.3f}%)\n"
+            f"Вход | {long_ex}: {t_in['long_price_in']:.6f} | {short_ex}: {t_in['short_price_in']:.6f} | Спред: {trade_obj['Spread_In']:.4f}\n"
+            f"Выход| {long_ex}: {long_price_close:.6f} | {short_ex}: {short_price_close:.6f} | Спред: {spread_out:.4f}\n"
+            f"PnL USD: {long_ex} {long_pnl_usd:+.4f}$ | {short_ex} {short_pnl_usd:+.4f}$\n"
+            f"Комиссии: {trade_obj['Total_Fee_USD']:.4f} USD\n"
+            f"P&L: {net_pnl_usd:+.4f} USD ({net_pnl*100:+.3f}%)\n"
             f"Cumulative PnL: {self.cumulative_pnl_usd:+.4f}$\n"
             f"=========================================\n\n"
         )
@@ -267,7 +182,7 @@ class TradeAnalytics:
                 with open(self.readable_path, "a", encoding="utf-8") as f:
                     f.write(readable)
                     
-                log(f"[ANALYTICS] [{self.symbol}] Сделка #{self.trade_counter} ({route}) сохранена. Net PnL: {net_pnl_usd:+.4f} USD.", level="INFO")
+                log(f"[ANALYTICS] [{self.symbol}] Сделка #{self.trade_counter} ({t_in['route']}) сохранена. Net PnL: {net_pnl_usd:+.4f} USD.", level="INFO")
 
             _analytics_executor.submit(_io_tasks)
         except Exception as e:

@@ -225,38 +225,38 @@ class ExecutorProcess:
         self.active_fsm.pop(sym, None)
 
 
-    async def _post_close_settlement(self, sym: str, native_long: str, native_short: str, long_ex: str, short_ex: str, open_time_ms: int):
-        """Фактический биржевой клиринг через ExchangeSettlement."""
-        long_trade_size = float(self.cfg["trading_risks"][long_ex.lower()]["trade_size_usd"])
-        short_trade_size = float(self.cfg["trading_risks"][short_ex.lower()]["trade_size_usd"])
-        total_inv = long_trade_size + short_trade_size
-
+    async def _post_close_settlement(self, sym: str, route: str, long_ex: str, short_ex: str,
+                                     entry_long_price: float, entry_short_price: float,
+                                     exit_long_price: float, exit_short_price: float,
+                                     actual_long_usd: float, actual_short_usd: float,
+                                     exit_res: dict = None, reason: str = ""):
+        """Моментальный локальный расчет PnL за 0 мс по реальным ценам исполнения."""
         try:
-            settle_res = await self.settlement.settle_trade(
-                sym=sym,
-                native_long=native_long,
-                native_short=native_short,
-                long_ex=long_ex,
-                short_ex=short_ex,
-                open_time_ms=open_time_ms,
-                total_investment_usd=total_inv,
-                delay_sec=1.8
-            )
-            net_usd = settle_res["total_net_pnl_usd"]
-            net_yield = settle_res["net_yield_pct"]
-
             if sym not in self.analytics_map:
                 self.analytics_map[sym] = TradeAnalytics(sym, self.cfg["trading_risks"])
 
-            self.analytics_map[sym].record_settlement(settle_res)
+            spread_out = exit_res.get("vwap_spread_out", 0.0) if exit_res else 0.0
+            trade_obj = self.analytics_map[sym].record_close(
+                long_price_close=exit_long_price,
+                short_price_close=exit_short_price,
+                spread_out=spread_out,
+                slippage_out=0.0,
+                long_executed_usd=actual_long_usd,
+                short_executed_usd=actual_short_usd
+            )
+
+            # Моментальное обновление total_balance.json
             update_total_balance(self.cfg)
 
+            net_usd = trade_obj.get("Net_PnL_USD", 0.0) if trade_obj else 0.0
+            net_yield = trade_obj.get("Net_PnL", 0.0) if trade_obj else 0.0
+
             if net_usd < 0:
-                self.ban_coin(sym, reason=f"Убыточная сделка, Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)")
+                self.ban_coin(sym, reason=f"Убыточная сделка ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)")
             else:
-                log(f"[{sym}] 🎉 Прибыльная сделка: Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", level="INFO")
+                log(f"[{sym}] 🎉 Прибыльная сделка ({reason}): Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", level="INFO")
         except Exception as e:
-            log(f"[{sym}] Ошибка биржевого клиринга: {e}", level="ERROR")
+            log(f"[{sym}] Ошибка локального клиринга PnL: {e}", level="ERROR")
 
     async def run(self):
         await self.init_runtime()

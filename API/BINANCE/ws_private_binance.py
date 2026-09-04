@@ -93,6 +93,11 @@ class BinancePositionStream:
         
         # Track positions by symbol
         self.positions: Dict[str, Dict[str, Any]] = {}
+        self.last_close_prices: Dict[str, float] = {}
+
+    def get_last_close_price(self, symbol: str) -> float:
+        sym = normalize_symbol(symbol)
+        return self.last_close_prices.get(sym, 0.0)
 
     async def stop(self):
         self._external_stop = True
@@ -167,6 +172,8 @@ class BinancePositionStream:
         if order_status in ("FILLED", "PARTIALLY_FILLED"):
             if order_status == "FILLED" and is_reduce:
                 self.positions[symbol][pos_side_raw] = {"size": 0.0, "price": 0.0}
+                if avg_price > 0:
+                    self.last_close_prices[symbol] = avg_price
             elif cum_qty > 0:
                 self.positions[symbol][pos_side_raw] = {
                     "size": cum_qty,
