@@ -152,9 +152,9 @@ class BitgetPositionStream:
                                         raw_side = "LONG" if side_val == "BUY" else "SHORT"
                                     
                                     order_status = str(o.get("status", "")).lower()
-                                    trade_scope = str(o.get("tradeScope", "")).lower()
-                                    is_close = trade_scope == "close" or o.get("reduceOnly") is True
-                                    cum_qty = float(o.get("accBaseVolume") or o.get("baseVolume") or o.get("size") or 0.0)
+                                    trade_side = str(o.get("tradeSide") or o.get("tradeScope") or "").lower()
+                                    is_close = trade_side == "close" or str(o.get("reduceOnly", "")).lower() in ("yes", "true")
+                                    cum_qty = float(o.get("accBaseVolume") or o.get("baseVolume") or 0.0)
                                     avg_price = float(o.get("priceAvg") or o.get("price") or 0.0)
 
                                     if sym not in self.positions:
@@ -177,8 +177,11 @@ class BitgetPositionStream:
             finally:
                 if ping_task:
                     ping_task.cancel()
-                    with contextlib.suppress(Exception):
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
                         await ping_task
                 self.is_connected = False
                 self.ready = False
-                await asyncio.sleep(2)
+                if not self._external_stop and not self.stop_flag():
+                    await asyncio.sleep(2)
+        if self.session and not self.session.closed:
+            await self.session.close()
