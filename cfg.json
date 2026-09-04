@@ -22,11 +22,11 @@
     },
     "trading_risks": {
         "binance": {
-            "paper_start_balance": 22.17,
+            "paper_start_balance": 22.14,
             "trade_size_usd": 20.0,
             "taker_fee": 0.0005,
-            "volatility_discount_entry": 0.45,
-            "volatility_discount_exit": 0.9,
+            "volatility_discount_entry": 0.30,
+            "volatility_discount_exit": 0.8,
             "limit_allow_distance": 1.0025,
             "max_positions": 1
         },
@@ -34,8 +34,8 @@
             "paper_start_balance": 6.43,
             "trade_size_usd": 20.0,
             "taker_fee": 0.0006,
-            "volatility_discount_entry": 0.45,
-            "volatility_discount_exit": 0.9,
+            "volatility_discount_entry": 0.30,
+            "volatility_discount_exit": 0.8,
             "limit_allow_distance": 1.0025,
             "max_positions": 1
         },
@@ -43,17 +43,17 @@
             "paper_start_balance": 30.0,
             "trade_size_usd": 100.0,
             "taker_fee": 0.0006,
-            "volatility_discount_entry": 0.45,
+            "volatility_discount_entry": 0.30,
             "volatility_discount_exit": 1.0,
             "limit_allow_distance": 1.0025,
             "max_positions": 1
         },
         "bitget": {
-            "paper_start_balance": 11.99,
+            "paper_start_balance": 11.84,
             "trade_size_usd": 20.0,
             "taker_fee": 0.0006,
-            "volatility_discount_entry": 0.45,
-            "volatility_discount_exit": 0.9,
+            "volatility_discount_entry": 0.30,
+            "volatility_discount_exit": 0.8,
             "limit_allow_distance": 1.0025,
             "max_positions": 1
         }
@@ -97,7 +97,7 @@
     },
     "trading_rules": {
         "entry": {
-            "order_execution_type": "IOC",
+            "order_execution_type": "MARKET",
             "order_execution_type_desc": "Allowed values: IOC | LIMIT_GTC | MARKET",
             "max_desync_ms": null,
             "spread_entry": 0.007,

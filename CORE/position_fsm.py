@@ -101,8 +101,9 @@ class PositionFSM:
         IDLE -> SUBMITTING -> RESTING_BOOK -> [CANCELLING (только для LIMIT_GTC)] -> VERIFYING_FILL -> ACTIVE_HEDGED / EMERGENCY_UNWIND / ABORTED
         """
         self._set_state(PositionState.SUBMITTING)
-        spread_val = self.engine_res.get("vwap_spread", 0.0)
-        log(f"[{self.sym}] Открываем: LONG {self.long_ex} | SHORT {self.short_ex} | Spread: {spread_val * 100:.2f}% (Режим: {self.order_policy})", level="INFO")
+        spread_val = self.engine_res.get("net_spread", self.engine_res.get("vwap_spread", 0.0))
+        gross_val = self.engine_res.get("vwap_spread", 0.0)
+        log(f"[{self.sym}] Открываем: LONG {self.long_ex} | SHORT {self.short_ex} | Net Spread: {spread_val * 100:.2f}% (Gross: {gross_val * 100:.2f}%, Режим: {self.order_policy})", level="INFO")
 
         tif = "GTC" if self.order_policy == "LIMIT_GTC" else "IOC"
         long_dist = float(self.cfg["trading_risks"][self.long_ex.lower()]["limit_allow_distance"])

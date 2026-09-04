@@ -59,8 +59,16 @@ class TradingEngine:
         
         vwap_spread = (short_vwap_bid - long_vwap_ask) / long_vwap_ask
         
-        if vwap_spread < self.spread_entry:
-            return False, {"reason": f"LOW_SPREAD ({vwap_spread * 100:.3f}% < {self.spread_entry * 100:.3f}%)"}
+        # Учет собственной комиссии на входе
+        entry_long_fee = self._get_fee(long_ex)
+        entry_short_fee = self._get_fee(short_ex)
+        entry_comm = entry_long_fee + entry_short_fee
+        net_spread = vwap_spread - entry_comm
+        
+        if net_spread < self.spread_entry:
+            return False, {
+                "reason": f"LOW_SPREAD (Net: {net_spread * 100:.3f}% < {self.spread_entry * 100:.3f}%, Gross: {vwap_spread * 100:.3f}%, Fee: {entry_comm * 100:.3f}%)"
+            }
             
         # СИНТЕТИЧЕСКАЯ ПРОВЕРКА ВЫХОДА (Round-Trip Liquidity Check)
         # Опциональный рубильник в конфиге. Симулирует немедленный выход из позиции.
@@ -81,7 +89,7 @@ class TradingEngine:
                 short_synthetic_slip = (short_exit_vwap_ask - short_vwap_bid) / short_vwap_bid
                 total_slippage = long_synthetic_slip + short_synthetic_slip
                 
-                max_allowed = vwap_spread * self.max_slippage_ratio
+                max_allowed = net_spread * self.max_slippage_ratio
                 
                 if total_slippage > max_allowed:
                     return False, {"reason": f"HIGH_REVERSE_SLIPPAGE (Slip: {total_slippage*100:.2f}% > DynMax: {max_allowed*100:.2f}%)"}
@@ -91,11 +99,13 @@ class TradingEngine:
                     
         return True, {
             "vwap_spread": vwap_spread,
+            "net_spread": net_spread,
+            "entry_comm": entry_comm,
             "long_avg_price": long_vwap_ask,
             "short_avg_price": short_vwap_bid,
             "long_qty": long_qty,
             "short_qty": short_qty,
-            "details": f"VWAP Spread:{vwap_spread * 100:+.3f}%",
+            "details": f"Net Spread:{net_spread * 100:+.3f}% (Gross:{vwap_spread * 100:+.3f}%, Fee:{entry_comm * 100:.3f}%)",
             "long_ex": long_ex,
             "short_ex": short_ex
         }
@@ -140,9 +150,9 @@ class TradingEngine:
             
         long_fee = self._get_fee(long_ex) * long_executed_volume_rate
         short_fee = self._get_fee(short_ex) * short_executed_volume_rate
-        total_comm = (long_fee * 2.0) + (short_fee * 2.0)
+        exit_comm = long_fee + short_fee  # Учитываем только собственную комиссию выхода (1 комиссия на ногу)
         
-        net_yield = (long_realized_pnl * long_executed_volume_rate) + (short_realized_pnl * short_executed_volume_rate) - total_comm
+        net_yield = (long_realized_pnl * long_executed_volume_rate) + (short_realized_pnl * short_executed_volume_rate) - exit_comm
         
         vwap_spread_out = (short_vwap_ask - long_vwap_bid) / long_vwap_bid
         is_exit = net_yield >= target_val
@@ -174,8 +184,8 @@ class TradingEngine:
         expected_long = expected_res["long_avg_price"]
         expected_short = expected_res["short_avg_price"]
         
-        long_limit_dist = float(self.trading_risks[long_ex.lower()].get("limit_allow_distance", 1.1))
-        short_limit_dist = float(self.trading_risks[short_ex.lower()].get("limit_allow_distance", 1.1))
+        long_limit_dist = float(self.trading_risks[long_ex.lower()]["limit_allow_distance"])
+        short_limit_dist = float(self.trading_risks[short_ex.lower()]["limit_allow_distance"])
         
         long_limit_price = expected_long * long_limit_dist
         short_limit_price = expected_short / short_limit_dist
