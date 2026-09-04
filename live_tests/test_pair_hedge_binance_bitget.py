@@ -75,6 +75,8 @@ async def main():
         b_order.symbol_info = (await r.json()).get("symbols", [])
     await bg_order.update_symbol_info()
 
+    b_order.start()
+    bg_order.start()
     log_msg("[1/5] Прогрев и ожидание готовности WebSocket стримов...")
     for _ in range(50):
         if b_stream.ready and bg_stream.ready:
@@ -83,9 +85,9 @@ async def main():
 
     log_msg(f"  Binance Stream Ready: {b_stream.ready}, Bitget Stream Ready: {bg_stream.ready}")
 
-    # Прогреваем REST-сессии
+    # Прогреваем REST-сессии прямо перед сбором стакана (боевой разогрев сокетов)
     await asyncio.gather(b_order.warmup(), bg_order.warmup())
-    log_msg("  REST-сессии (TCP/TLS keepalive) прогреты.")
+    log_msg("  REST-сессии (TCP/TLS keepalive) прогреты (как в боевом рантайме).")
 
     # 3. Публичные стаканы
     books = {"BINANCE": {}, "BITGET": {}}

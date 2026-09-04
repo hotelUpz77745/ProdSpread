@@ -76,6 +76,8 @@ async def main():
     async with session.get("https://api-futures.kucoin.com/api/v1/contracts/active") as r:
         k_order.symbol_info = (await r.json()).get("data", [])
 
+    b_order.start()
+    k_order.start()
     log_msg("[1/5] Прогрев и ожидание готовности WebSocket стримов...")
     for _ in range(50):
         if b_stream.ready and k_stream.ready:
@@ -84,9 +86,9 @@ async def main():
 
     log_msg(f"  Binance Stream Ready: {b_stream.ready}, Kucoin Stream Ready: {k_stream.ready}")
 
-    # Прогреваем REST-сессии
+    # Прогреваем REST-сессии прямо перед сбором стакана (боевой разогрев сокетов)
     await asyncio.gather(b_order.warmup(), k_order.warmup())
-    log_msg("  REST-сессии (TCP/TLS keepalive) прогреты.")
+    log_msg("  REST-сессии (TCP/TLS keepalive) прогреты (как в боевом рантайме).")
 
     # 3. Публичные стаканы
     books = {"BINANCE": {}, "KUCOIN": {}}
