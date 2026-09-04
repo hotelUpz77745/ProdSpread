@@ -103,7 +103,7 @@
             "max_slippage_ratio": 0.5,
             "hard_max_slippage": 0.015,
             "fill_confirm_timeout_sec": {
-                "BINANCE_KUCOIN": 0.150,
+                "BINANCE_KUCOIN": 0.200,
                 "BINANCE_BITGET": 0.200,
                 "KUCOIN_BITGET": 0.180,
                 "BINANCE_OKX": 0.150,
@@ -111,7 +111,7 @@
                 "OKX_BITGET": 0.200
             },
             "fill_confirm_timeout_sec_desc": "Max seconds to poll WS cache for fill confirmation in MARKET mode. Configured per exchange pair.",
-            "fill_confirm_poll_interval_sec": 0.001,
+            "fill_confirm_poll_interval_sec": 0.0,
             "fill_confirm_poll_interval_sec_desc": "Interval (sec) between WS cache reads during fill confirmation polling"
         },
         "exit": {
