@@ -55,12 +55,14 @@ class ExecutorProcess:
         )
         
         # Orders
+        net_cfg = self.cfg.get("network_settings", {})
         self.orders = {
             "BINANCE": BinanceOrder(
                 api_key=os.environ.get("BINANCE_API_KEY", ""),
                 api_secret=os.environ.get("BINANCE_API_SECRET", ""),
                 session=None,
-                position_stream=self.binance_pos_stream
+                position_stream=self.binance_pos_stream,
+                network_settings=net_cfg
             ),
             "KUCOIN": KucoinOrder(
                 api_key=os.environ.get("KUCOIN_API_KEY", ""),
@@ -68,7 +70,8 @@ class ExecutorProcess:
                 api_passphrase=os.environ.get("KUCOIN_API_PASSPHRASE", ""),
                 session=None,
                 position_stream=self.kucoin_pos_stream,
-                margin_settings=self.cfg["margin_settings"]["KUCOIN"]
+                margin_settings=self.cfg["margin_settings"]["KUCOIN"],
+                network_settings=net_cfg
             ),
             "OKX": OkxOrder(),
             "BITGET": BitgetOrder(
@@ -77,7 +80,8 @@ class ExecutorProcess:
                 api_passphrase=os.environ.get("BITGET_API_PASSPHRASE", ""),
                 margin_settings=self.cfg["margin_settings"]["BITGET"],
                 session=None,
-                position_stream=self.bitget_pos_stream
+                position_stream=self.bitget_pos_stream,
+                network_settings=net_cfg
             )
         }
         

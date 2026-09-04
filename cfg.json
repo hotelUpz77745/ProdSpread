@@ -182,5 +182,11 @@
             "retry_pause_sec": 0.05,
             "retry_pause_sec_desc": "Pause (sec) between emergency unwind attempts"
         }
+    },
+    "network_settings": {
+        "rest_keepalive_interval_sec": 45,
+        "rest_keepalive_interval_sec_desc": "Интервал (сек) фонового опроса/прогрева постоянных TCP/TLS сессий к REST API бирж (0 для отключения).",
+        "idle_warmup_threshold_sec": 30,
+        "idle_warmup_threshold_sec_desc": "Минимальное время бездействия (сек) после последнего реального ордера, перед тем как слать фейковый прогревочный ордер."
     }
 }

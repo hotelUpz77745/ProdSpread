@@ -29,11 +29,14 @@ class InsufficientMarginError(Exception):
     pass
 
 class BinanceOrder:
-    def __init__(self, api_key: str, api_secret: str, session: aiohttp.ClientSession, position_stream=None):
+    def __init__(self, api_key: str, api_secret: str, session: aiohttp.ClientSession, position_stream=None, network_settings: dict = None):
         self.api_key = api_key
         self.api_secret = api_secret
         self.session = session
         self.position_stream = position_stream
+        net_cfg = network_settings or {}
+        self.keepalive_interval_sec = float(net_cfg.get("rest_keepalive_interval_sec", 45))
+        self.idle_warmup_threshold_sec = float(net_cfg.get("idle_warmup_threshold_sec", 30))
         self.symbol_info = None
         self._bg_task = None
         self._keepalive_task = None
@@ -42,12 +45,13 @@ class BinanceOrder:
     def start(self):
         """Запускает фоновые таски. Вызывать ПОСЛЕ старта event loop."""
         self._bg_task = asyncio.create_task(self._fetch_exchange_info_loop())
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        if self.keepalive_interval_sec > 0:
+            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
     async def _keepalive_loop(self):
         while True:
             try:
-                await asyncio.sleep(45)
+                await asyncio.sleep(self.keepalive_interval_sec)
                 await self.warmup()
             except asyncio.CancelledError:
                 break
@@ -55,7 +59,7 @@ class BinanceOrder:
                 log(f"[BinanceOrder] Keepalive error: {e}", level="WARNING")
 
     async def warmup(self):
-        if time.time() - getattr(self, "last_activity_ts", 0.0) < 30.0:
+        if time.time() - getattr(self, "last_activity_ts", 0.0) < self.idle_warmup_threshold_sec:
             return
         """Прогрев сессии POST запросом с невалидным символом для удержания TLS/TCP сессии."""
         try:
@@ -338,13 +342,16 @@ class BinanceOrder:
         return []
 
 class KucoinOrder:
-    def __init__(self, api_key: str, api_secret: str, api_passphrase: str, session: aiohttp.ClientSession, position_stream, margin_settings: dict):
+    def __init__(self, api_key: str, api_secret: str, api_passphrase: str, session: aiohttp.ClientSession, position_stream, margin_settings: dict, network_settings: dict = None):
         self.api_key = api_key
         self.api_secret = api_secret
         self.api_passphrase = api_passphrase
         self.session = session
         self.position_stream = position_stream
         self.margin_settings = margin_settings
+        net_cfg = network_settings or {}
+        self.keepalive_interval_sec = float(net_cfg.get("rest_keepalive_interval_sec", 45))
+        self.idle_warmup_threshold_sec = float(net_cfg.get("idle_warmup_threshold_sec", 30))
         self.symbol_info = None
         self._bg_task = None
         self._keepalive_task = None
@@ -353,12 +360,13 @@ class KucoinOrder:
     def start(self):
         """Запускает фоновые таски. Вызывать ПОСЛЕ старта event loop."""
         self._bg_task = asyncio.create_task(self._fetch_exchange_info_loop())
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        if self.keepalive_interval_sec > 0:
+            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
     async def _keepalive_loop(self):
         while True:
             try:
-                await asyncio.sleep(45)
+                await asyncio.sleep(self.keepalive_interval_sec)
                 await self.warmup()
             except asyncio.CancelledError:
                 break
@@ -366,7 +374,7 @@ class KucoinOrder:
                 log(f"[KucoinOrder] Keepalive error: {e}", level="WARNING")
 
     async def warmup(self):
-        if time.time() - getattr(self, "last_activity_ts", 0.0) < 30.0:
+        if time.time() - getattr(self, "last_activity_ts", 0.0) < self.idle_warmup_threshold_sec:
             return
         """Прогрев сессии POST запросом с невалидным символом для удержания TLS/TCP сессии."""
         try:
@@ -812,13 +820,16 @@ class OkxOrder:
         return {"size": 0.0, "price": 0.0}
 
 class BitgetOrder:
-    def __init__(self, api_key: str, api_secret: str, api_passphrase: str, margin_settings: dict, session=None, position_stream=None):
+    def __init__(self, api_key: str, api_secret: str, api_passphrase: str, margin_settings: dict, session=None, position_stream=None, network_settings: dict = None):
         self.api_key = api_key
         self.api_secret = api_secret
         self.api_passphrase = api_passphrase
         self.margin_settings = margin_settings
         self.session = session
         self.position_stream = position_stream
+        net_cfg = network_settings or {}
+        self.keepalive_interval_sec = float(net_cfg.get("rest_keepalive_interval_sec", 45))
+        self.idle_warmup_threshold_sec = float(net_cfg.get("idle_warmup_threshold_sec", 30))
         self.symbol_info = []
         self._bg_task = None
         self._keepalive_task = None
@@ -826,13 +837,14 @@ class BitgetOrder:
 
     def start(self):
         self._bg_task = asyncio.create_task(self.update_symbol_info())
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        if self.keepalive_interval_sec > 0:
+            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         return self._bg_task
 
     async def _keepalive_loop(self):
         while True:
             try:
-                await asyncio.sleep(45)
+                await asyncio.sleep(self.keepalive_interval_sec)
                 await self.warmup()
             except asyncio.CancelledError:
                 break
@@ -840,7 +852,7 @@ class BitgetOrder:
                 log(f"[BitgetOrder] Keepalive error: {e}", level="WARNING")
 
     async def warmup(self):
-        if time.time() - getattr(self, "last_activity_ts", 0.0) < 30.0:
+        if time.time() - getattr(self, "last_activity_ts", 0.0) < self.idle_warmup_threshold_sec:
             return
         """Прогрев сессии POST запросом с невалидным символом для удержания TLS/TCP сессии."""
         try:
