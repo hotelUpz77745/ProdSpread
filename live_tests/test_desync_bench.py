@@ -1,20 +1,37 @@
 # ============================================================
 # FILE: live_tests/test_desync_bench.py
-# ROLE: Измерение реальных дельт рассинхрона стаканов (max_desync_ms)
-#       между биржами на живых публичных WS-стримах
-#
-# Запуск:  python live_tests/test_desync_bench.py
-# Выход:   logs/desync_bench_<timestamp>.json + сводная таблица
+# ROLE: Измерение реального рассинхрона стаканов (max_desync_ms)
+#       в точности так, как его вычисляет боевой бот в main.py
 # ============================================================
+"""
+БЕНЧМАРК РАССИНХРОНА СТАКАНОВ (100% АНАЛОГ main.py)
+==================================================
+В боевом боте (main.py):
+  1. При получении каждого кадра стакана по WS:
+       self.ts[exchange_name][base_coin] = time.monotonic()
+  2. В вычислительном цикле перед выстрелом:
+       diff_ms = abs(self.ts[long_ex][sym] - self.ts[short_ex][sym]) * 1000.0
+       if diff_ms > self.entry_desync_limit:  # (max_desync_ms)
+           continue  # отсекаем сигнал как рассинхронизированный
+
+Этот скрипт запускает точно такие же стримы L2 стаканов,
+регистрирует self.ts через time.monotonic(), крутит цикл с шагом
+MAIN_LOOP_DELAY и замеряет эмпирическое распределение diff_ms
+на реальных боевых парах.
+
+Запуск на сервере:
+    python live_tests/test_desync_bench.py
+    (или python test_desync_bench.py)
+"""
 
 import asyncio
-import json
 import os
 import sys
 import time
+import json
+import numpy as np
 from collections import defaultdict
-from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -29,252 +46,210 @@ if hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
+from API.discovery import DiscoveryManager
 from API.BINANCE.stakan import BinanceStakanStream
 from API.KUCOIN.stakan import KucoinStakanStream
-from API.OKX.stakan import OkxStakanStream
 from API.BITGET.stakan import BitgetStakanStream
+from API.OKX.stakan import OkxStakanStream
 
-
-# ── Параметры теста ───────────────────────────────────────────
-WARMUP_SEC = 10     # Прогрев сокетов перед началом замера
-MEASURE_SEC = 60    # Длительность замера (1 минута)
-TOTAL_SEC = WARMUP_SEC + MEASURE_SEC
-
-TEST_COINS = [
-    "BTC", "ETH", "SOL", "BNB", "XRP",
-    "DOGE", "ADA", "AVAX", "DOT", "LINK",
-]
-
-EXCHANGES = ["BINANCE", "KUCOIN", "BITGET"]
-
-
-def to_native(coin: str, exchange: str, quote: str = "USDT") -> str:
-    if exchange == "KUCOIN":
-        alias = {"BTC": "XBT"}.get(coin, coin)
-        return f"{alias}{quote}M"
-    elif exchange == "OKX":
-        return f"{coin}-{quote}-SWAP"
-    else:
-        return f"{coin}{quote}"
-
-
-NATIVE_TO_COIN: Dict[str, Dict[str, str]] = {}
-for _coin in TEST_COINS:
-    for _ex in EXCHANGES:
-        _native = to_native(_coin, _ex)
-        NATIVE_TO_COIN.setdefault(_ex, {})[_native.upper()] = _coin
-
-# Локальное время прибытия пакета (именно оно проверяется в main.py через time.monotonic())
-last_local_ts: Dict[str, Dict[str, Optional[float]]] = {
-    coin: {ex: None for ex in EXCHANGES}
-    for coin in TEST_COINS
-}
-
-# Серверное время биржи (event_time_ms)
-last_event_ms: Dict[str, Dict[str, Optional[int]]] = {
-    coin: {ex: None for ex in EXCHANGES}
-    for coin in TEST_COINS
-}
-
-local_deltas: Dict[str, List[float]] = defaultdict(list)
-server_deltas: Dict[str, List[float]] = defaultdict(list)
-
-start_time: float = 0.0
-warmup_done: bool = False
-
-
-def record_event(exchange: str, coin: str, event_ms: int, local_mono: float) -> None:
-    global warmup_done
-    now = time.time()
-
-    if not warmup_done:
-        if now - start_time < WARMUP_SEC:
-            last_local_ts[coin][exchange] = local_mono
-            last_event_ms[coin][exchange] = event_ms
-            return
-        else:
-            warmup_done = True
-            print(f"[{elapsed():>4.0f}s] 🔥 Прогрев завершён — начинаем измерение ({MEASURE_SEC}с)...")
-
-    prev_other_local = last_local_ts[coin]
-    last_local_ts[coin][exchange] = local_mono
-    last_event_ms[coin][exchange] = event_ms
-
-    for other_ex in EXCHANGES:
-        if other_ex == exchange:
-            continue
-        other_local = prev_other_local.get(other_ex)
-        if other_local is not None:
-            # Замер в миллисекундах (как в main.py: abs(ts1 - ts2) * 1000.0)
-            diff_local_ms = abs(local_mono - other_local) * 1000.0
-            pair = f"{min(exchange, other_ex)}_{max(exchange, other_ex)}"
-            local_deltas[pair].append(diff_local_ms)
-
-            other_srv = last_event_ms[coin].get(other_ex)
-            if other_srv is not None and event_ms > 0 and other_srv > 0:
-                diff_srv_ms = abs(event_ms - other_srv)
-                server_deltas[pair].append(float(diff_srv_ms))
-
-
-def elapsed() -> float:
-    return time.time() - start_time
-
-
-def make_handler(exchange: str):
-    async def on_depth(d) -> None:
-        coin = NATIVE_TO_COIN.get(exchange, {}).get(d.symbol.upper())
-        if coin:
-            local_mono = time.monotonic()
-            ev_ms = getattr(d, "event_time_ms", 0)
-            record_event(exchange, coin, ev_ms, local_mono)
-    return on_depth
-
-
-def percentile(data: List[float], pct: float) -> float:
-    if not data:
-        return 0.0
-    s = sorted(data)
-    k = (len(s) - 1) * pct / 100.0
-    lo, hi = int(k), min(int(k) + 1, len(s) - 1)
-    return s[lo] + (s[hi] - s[lo]) * (k - lo)
-
-
-def build_report() -> dict:
-    report = {}
-    for pair, vals in sorted(local_deltas.items()):
-        if not vals:
-            continue
-        arr = sorted(vals)
-        n = len(arr)
-        p50 = percentile(arr, 50)
-        p75 = percentile(arr, 75)
-        p90 = percentile(arr, 90)
-        p95 = percentile(arr, 95)
-        p99 = percentile(arr, 99)
-        report[pair] = {
-            "samples": n,
-            "min_ms": round(min(arr), 2),
-            "avg_ms": round(sum(arr) / n, 2),
-            "p50_ms": round(p50, 2),
-            "p75_ms": round(p75, 2),
-            "p90_ms": round(p90, 2),
-            "p95_ms": round(p95, 2),
-            "p99_ms": round(p99, 2),
-            "max_ms": round(max(arr), 2),
-            "pass_75ms": round(sum(1 for x in arr if x <= 75) / n * 100, 1),
-            "pass_100ms": round(sum(1 for x in arr if x <= 100) / n * 100, 1),
-            "pass_125ms": round(sum(1 for x in arr if x <= 125) / n * 100, 1),
-            "pass_150ms": round(sum(1 for x in arr if x <= 150) / n * 100, 1),
-            "pass_200ms": round(sum(1 for x in arr if x <= 200) / n * 100, 1),
-        }
-    return report
-
-
-def print_table(report: dict) -> None:
-    print("\n" + "=" * 92)
-    print("📊 РЕЗУЛЬТАТЫ ЗАМЕРА РАССИНХРОНА СТАКАНОВ (LOCAL PACKET ARRIVAL DESYNC)")
-    print("=" * 92)
-    print(f"{'СВЯЗКА':<20} {'ПРОБ':>7} {'MIN':>6} {'AVG':>6} {'P50':>6} {'P90':>6} {'P95':>6} {'P99':>6} {'MAX':>7}")
-    print("-" * 92)
-    for pair, s in sorted(report.items(), key=lambda x: x[1]["avg_ms"]):
-        print(f"{pair:<20} {s['samples']:>7,d} "
-              f"{s['min_ms']:>6.1f} {s['avg_ms']:>6.1f} {s['p50_ms']:>6.1f} "
-              f"{s['p90_ms']:>6.1f} {s['p95_ms']:>6.1f} {s['p99_ms']:>6.1f} {s['max_ms']:>7.1f}  мс")
-    print("=" * 92)
-
-    print("\n📈 ПРОЦЕНТ СИГНАЛОВ, ПРОХОДЯЩИХ ФИЛЬТР ПРИ РАЗНЫХ ЗНАЧЕНИЯХ max_desync_ms:")
-    print("-" * 92)
-    print(f"{'СВЯЗКА':<20} {'<=75ms':>10} {'<=100ms':>10} {'<=125ms (CFG)':>14} {'<=150ms':>10} {'<=200ms':>10}")
-    print("-" * 92)
-    for pair, s in sorted(report.items()):
-        print(f"{pair:<20} {s['pass_75ms']:>9.1f}% {s['pass_100ms']:>9.1f}% "
-              f"{s['pass_125ms']:>13.1f}% {s['pass_150ms']:>9.1f}% {s['pass_200ms']:>9.1f}%")
-    print("=" * 92)
-
-    print("\n💡 РЕКОМЕНДАЦИИ ДЛЯ cfg.json (на основе 95-го перцентиля P95):")
-    for pair, s in sorted(report.items()):
-        rec = max(75, int(s['p95_ms'] * 1.15))
-        status = "✅ 125ms отлично подходит" if s['p95_ms'] <= 125 else f"⚠️ P95={s['p95_ms']:.0f}ms, поднимите до {rec}ms"
-        print(f"  • {pair}: {status} (пропускает {s['pass_125ms']:.1f}% тиков при 125ms)")
-    print()
+DURATION_SECONDS = 45  # Длительность замера (сек)
 
 
 async def main():
-    global start_time
-    os.makedirs("logs", exist_ok=True)
+    print("=" * 85)
+    print("🔬 БЕНЧМАРК РАССИНХРОНА СТАКАНОВ (Точная копия логики main.py)")
+    print(f"   Замер diff_ms = abs(self.ts[ex1] - self.ts[ex2]) * 1000.0 на боевых сокетах")
+    print("=" * 85)
 
-    print("=" * 80)
-    print("🔬 ЗАМЕР РАССИНХРОНА СТАКАНОВ (test_desync_bench.py)")
-    print(f"   Биржи: {EXCHANGES} | Монеты: {TEST_COINS}")
-    print(f"   Прогрев: {WARMUP_SEC}с | Замер: {MEASURE_SEC}с | Итого: {TOTAL_SEC}с")
-    print("=" * 80)
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg_path = os.path.join(root_dir, "cfg.json")
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
 
-    symbols_per_ex = {
-        ex: [to_native(coin, ex) for coin in TEST_COINS]
-        for ex in EXCHANGES
+    active_routes_cfg = cfg.get("active_routes", {})
+    entry_desync_limit = cfg.get("trading_rules", {}).get("entry", {}).get("max_desync_ms", 125)
+    main_loop_delay = cfg.get("MAIN_LOOP_DELAY", 0.0)
+
+    print(f"Конфигурация:")
+    print(f"  • Текущий max_desync_ms в cfg.json: {entry_desync_limit} мс")
+    print(f"  • MAIN_LOOP_DELAY:                  {main_loop_delay} с")
+
+    # 1. Построение топологии инструментов (как в main.py)
+    print("\n[1/4] Построение топологии инструментов через Discovery...")
+    discovery = DiscoveryManager(quote=cfg.get("QUOTE", "USDT"))
+    await discovery.build_topology()
+
+    active_routes = [r for r, is_active in active_routes_cfg.items() if is_active]
+    print(f"  Активные связки: {active_routes}")
+    print(f"  Общих монет в пуле: {len(discovery.active_pairs_map)}")
+
+    if not discovery.active_pairs_map:
+        print("❌ Нет общих монет для активных связок. Завершение.")
+        await discovery.aclose()
+        return
+
+    # 2. Инициализация публичных сокетов стаканов (как в main.py)
+    print("\n[2/4] Запуск публичных WebSocket-стримов стаканов...")
+    stream_classes = {
+        "BINANCE": BinanceStakanStream,
+        "KUCOIN": KucoinStakanStream,
+        "OKX": OkxStakanStream,
+        "BITGET": BitgetStakanStream
     }
 
-    stream_map = {
-        "BINANCE": BinanceStakanStream(symbols_per_ex["BINANCE"]),
-        "KUCOIN": KucoinStakanStream(symbols_per_ex["KUCOIN"]),
-        "BITGET": BitgetStakanStream(symbols_per_ex["BITGET"])
-    }
-
-    start_time = time.time()
+    streams = {}
     tasks = []
-    for ex, stream in stream_map.items():
-        handler = make_handler(ex)
-        tasks.append(asyncio.create_task(stream.run(handler)))
-        print(f"  ✅ Запущен WebSocket стрим {ex} ({len(symbols_per_ex[ex])} пар)")
+    
+    # self.ts[exchange_name][base_coin] = time.monotonic() (1-в-1 как в main.py)
+    ts: Dict[str, Dict[str, float]] = defaultdict(dict)
+    books: Dict[str, Dict[str, dict]] = defaultdict(dict)
 
-    print(f"\n⏳ Ожидание прогрева {WARMUP_SEC}с...\n")
+    def make_depth_handler(exchange_name: str):
+        async def on_depth(d):
+            base_coin = None
+            for coin, mapping in discovery.coin_to_native.items():
+                if mapping.get(exchange_name) == d.symbol or coin == d.symbol:
+                    base_coin = coin
+                    break
+            if base_coin and getattr(d, 'bids', None) and getattr(d, 'asks', None):
+                # Фиксация времени прибытия пакета ровно как в main.py строка 114
+                ts[exchange_name][base_coin] = time.monotonic()
+                books[exchange_name][base_coin] = {"bids": d.bids, "asks": d.asks}
+        return on_depth
 
-    async def progress_ticker():
-        while True:
-            await asyncio.sleep(10)
-            t = elapsed()
-            total_samples = sum(len(v) for v in local_deltas.values())
-            status = "ПРОГРЕВ" if not warmup_done else "ИЗМЕРЕНИЕ"
-            print(f"  [{t:>4.0f}s | {status}] Накоплено замеров: {total_samples:,}")
+    for ex, syms in discovery.ws_routes.items():
+        if syms and ex in stream_classes:
+            stream = stream_classes[ex](syms)
+            streams[ex] = stream
+            handler = make_depth_handler(ex)
+            tasks.append(asyncio.create_task(stream.run(handler)))
+            print(f"  ✅ {ex}: запущен стрим ({len(syms)} тикеров)")
 
-    prog_task = asyncio.create_task(progress_ticker())
+    # 3. Прогрев (ожидание первых пакетов)
+    print("\n[3/4] Прогрев сокетов (5 сек)...")
+    await asyncio.sleep(5.0)
+
+    # 4. Вычислительный цикл замера (1-в-1 логика main.py)
+    print(f"\n[4/4] Сбор реальной статистики рассинхрона ({DURATION_SECONDS} сек)...")
+    print("Нажмите Ctrl+C для досрочного завершения и вывода отчета.\n")
+
+    # Сбор замеров: samples[route] = [diff_ms, ...]
+    samples: Dict[str, List[float]] = defaultdict(list)
+    # Помонетный сбор для выявления проблемных монет
+    coin_samples: Dict[str, Dict[str, List[float]]] = defaultdict(lambda: defaultdict(list))
+
+    start_time = time.monotonic()
+    last_print_time = start_time
+    total_iterations = 0
+
     try:
-        await asyncio.sleep(TOTAL_SEC)
+        while time.monotonic() - start_time < DURATION_SECONDS:
+            now_mono = time.monotonic()
+            total_iterations += 1
+
+            for sym in discovery.active_pairs_map:
+                for route in active_routes:
+                    parts = route.split("_")
+                    if len(parts) != 2:
+                        continue
+                    long_ex, short_ex = parts[0], parts[1]
+
+                    # Проверка наличия меток времени (как в main.py строка 377)
+                    if sym not in ts[long_ex] or sym not in ts[short_ex]:
+                        continue
+
+                    t_long = ts[long_ex][sym]
+                    t_short = ts[short_ex][sym]
+
+                    # Проверка на свежесть данных (не старше 5 сек, как в main.py строка 347)
+                    if (now_mono - t_long) <= 5.0 and (now_mono - t_short) <= 5.0:
+                        # РОVНО ТОТ САМЫЙ РАСЧЕТ ИЗ main.py (строка 380):
+                        diff_ms = abs(t_long - t_short) * 1000.0
+                        samples[route].append(diff_ms)
+                        coin_samples[route][sym].append(diff_ms)
+
+            # Промежуточный прогресс каждые 5 сек
+            if now_mono - last_print_time >= 5.0:
+                elapsed_s = int(now_mono - start_time)
+                parts_str = []
+                for r in active_routes:
+                    cnt = len(samples[r])
+                    if cnt > 0:
+                        recent = samples[r][-500:]
+                        parts_str.append(f"{r}: avg={np.mean(recent):.1f}ms, p95={np.percentile(recent, 95):.1f}ms ({cnt:,} проб)")
+                print(f"  [{elapsed_s:2d}s/{DURATION_SECONDS}s] " + " | ".join(parts_str))
+                last_print_time = now_mono
+
+            if main_loop_delay > 0:
+                await asyncio.sleep(main_loop_delay)
+            else:
+                await asyncio.sleep(0.005)  # 5 мс минимальный квант для бенчмарка
+
     except KeyboardInterrupt:
-        print("\n⛔ Замер остановлен пользователем по Ctrl+C.")
+        print("\n⛔ Замер остановлен пользователем (Ctrl+C). Формирование отчета...")
     finally:
-        prog_task.cancel()
-        for stream in stream_map.values():
-            try:
-                await stream.aclose()
-            except Exception:
-                pass
         for t in tasks:
             t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        for s in streams.values():
+            try:
+                await s.aclose()
+            except Exception:
+                pass
+        await discovery.aclose()
 
-    report = build_report()
-    total_samples = sum(s["samples"] for s in report.values())
-    print(f"\nТест завершён. Всего замеров: {total_samples:,}")
-    print_table(report)
+    # 5. Итоговый отчет
+    print("\n" + "=" * 92)
+    print("📊 ИТОГОВЫЙ ОТЧЕТ РАССИНХРОНА СТАКАНОВ (IDENTICAL TO main.py diff_ms)")
+    print("=" * 92)
 
-    ts_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    out_path = os.path.join("logs", f"desync_bench_{ts_str}.json")
-    meta = {
-        "timestamp_utc": ts_str,
-        "test_coins": TEST_COINS,
-        "warmup_sec": WARMUP_SEC,
-        "measure_sec": MEASURE_SEC,
-        "total_samples": total_samples,
-        "pairs": report,
-    }
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2, ensure_ascii=False)
-    print(f"📁 Подробный отчет сохранён: {out_path}\n")
+    thresholds = [50, 75, 100, 125, 150, 200]
+
+    for route in active_routes:
+        data = samples.get(route, [])
+        if not data:
+            print(f"\n❌ [{route}]: нет замеров (проверьте подключение).")
+            continue
+
+        arr = np.array(data)
+        count = len(arr)
+        min_v = np.min(arr)
+        mean_v = np.mean(arr)
+        p50 = np.percentile(arr, 50)
+        p75 = np.percentile(arr, 75)
+        p90 = np.percentile(arr, 90)
+        p95 = np.percentile(arr, 95)
+        p99 = np.percentile(arr, 99)
+        max_v = np.max(arr)
+
+        print(f"\nСВЯЗКА: 🚀 {route} (Выборка: {count:,} проверок)")
+        print("-" * 92)
+        print(f"  Метрики задержки (diff_ms = abs(ts_ex1 - ts_ex2) * 1000.0):")
+        print(f"    MIN:    {min_v:6.2f} мс")
+        print(f"    AVG:    {mean_v:6.2f} мс  (Средний рассинхрон)")
+        print(f"    P50:    {p50:6.2f} мс  (Медиана: 50% всех проверок)")
+        print(f"    P75:    {p75:6.2f} мс")
+        print(f"    P90:    {p90:6.2f} мс")
+        print(f"    P95:    {p95:6.2f} мс  (95% всех проверок быстрее этого порога!)")
+        print(f"    P99:    {p99:6.2f} мс")
+        print(f"    MAX:    {max_v:6.2f} мс")
+        print()
+        print("  Проходимость торговых сигналов при разных значениях max_desync_ms:")
+        for th in thresholds:
+            pass_pct = (np.sum(arr <= th) / count) * 100.0
+            marker = "👈 [ТЕКУЩЕЕ В CFG]" if th == entry_desync_limit else ""
+            print(f"    <= {th:3d} мс: {pass_pct:6.2f}% сигналов будет пропущено в торговлю {marker}")
+
+        rec_val = max(75, int(np.ceil(p95 / 5.0) * 5))
+        print(f"\n  💡 ВЫВОД И РЕКОМЕНДАЦИЯ ДЛЯ {route}:")
+        if p95 <= entry_desync_limit:
+            pass_at_current = (np.sum(arr <= entry_desync_limit) / count) * 100.0
+            print(f"     ✅ Порог {entry_desync_limit} мс идеален: пропускает {pass_at_current:.1f}% сигналов и срезает рассинхроны.")
+        else:
+            print(f"     ⚠️ P95 равен {p95:.1f} мс. При текущем {entry_desync_limit} мс отсекается больше 5% сигналов.")
+            print(f"     👉 Рекомендуемое оптимальное значение: max_desync_ms = {rec_val} мс.")
+
+    print("\n" + "=" * 92)
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nЗамер прерван.")
+    asyncio.run(main())
