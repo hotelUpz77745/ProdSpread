@@ -233,19 +233,24 @@ async def main():
         print(f"    P99:    {p99:6.2f} мс")
         print(f"    MAX:    {max_v:6.2f} мс")
         print()
-        print("  Проходимость торговых сигналов при разных значениях max_desync_ms:")
+        if isinstance(entry_desync_limit, dict):
+            pair_limit = entry_desync_limit.get(route, entry_desync_limit.get("default", 150))
+        else:
+            pair_limit = entry_desync_limit
+
+        print(f"  Проходимость торговых сигналов при разных значениях max_desync_ms (порог для {route}: {pair_limit} мс):")
         for th in thresholds:
             pass_pct = (np.sum(arr <= th) / count) * 100.0
-            marker = "👈 [ТЕКУЩЕЕ В CFG]" if th == entry_desync_limit else ""
+            marker = f"👈 [ТЕКУЩЕЕ В CFG ДЛЯ {route}]" if th == pair_limit else ""
             print(f"    <= {th:3d} мс: {pass_pct:6.2f}% сигналов будет пропущено в торговлю {marker}")
 
         rec_val = max(75, int(np.ceil(p95 / 5.0) * 5))
         print(f"\n  💡 ВЫВОД И РЕКОМЕНДАЦИЯ ДЛЯ {route}:")
-        if p95 <= entry_desync_limit:
-            pass_at_current = (np.sum(arr <= entry_desync_limit) / count) * 100.0
-            print(f"     ✅ Порог {entry_desync_limit} мс идеален: пропускает {pass_at_current:.1f}% сигналов и срезает рассинхроны.")
+        pass_at_current = (np.sum(arr <= pair_limit) / count) * 100.0
+        if p95 <= pair_limit:
+            print(f"     ✅ Порог {pair_limit} мс идеален: пропускает {pass_at_current:.1f}% сигналов и срезает рассинхроны.")
         else:
-            print(f"     ⚠️ P95 равен {p95:.1f} мс. При текущем {entry_desync_limit} мс отсекается больше 5% сигналов.")
+            print(f"     ⚠️ При пороге {pair_limit} мс пропускается {pass_at_current:.1f}% сигналов (P95={p95:.1f} мс).")
             print(f"     👉 Рекомендуемое оптимальное значение: max_desync_ms = {rec_val} мс.")
 
     print("\n" + "=" * 92)

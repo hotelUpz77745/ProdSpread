@@ -123,6 +123,24 @@ class Main:
             return True
         return False
 
+    def _get_desync_limit(self, limit_cfg, long_ex: str, short_ex: str) -> Optional[float]:
+        """
+        Возвращает лимит max_desync_ms для конкретной связки.
+        Поддерживает как словарь { "BINANCE_KUCOIN": 125, "BINANCE_BITGET": 200 },
+        так и скалярное числовое значение.
+        """
+        if isinstance(limit_cfg, dict):
+            r1 = f"{long_ex}_{short_ex}"
+            r2 = f"{short_ex}_{long_ex}"
+            if r1 in limit_cfg:
+                return float(limit_cfg[r1])
+            if r2 in limit_cfg:
+                return float(limit_cfg[r2])
+            return float(limit_cfg.get("default", 200.0))
+        elif limit_cfg is not None:
+            return float(limit_cfg)
+        return None
+
     async def _handle_ipc_events(self, reader, writer):
         """Асинхронная вычитка событий и статусов из процесса исполнения."""
         self.executor_writer = writer
@@ -267,9 +285,10 @@ class Main:
                             short_ts = self.ts[short_ex].get(sym, 0.0)
                             if long_ts > 0 and short_ts > 0:
                                 diff_ms = abs(long_ts - short_ts) * 1000.0
-                                if self.exit_desync_limit is not None and diff_ms > self.exit_desync_limit:
+                                limit = self._get_desync_limit(self.exit_desync_limit, long_ex, short_ex)
+                                if limit is not None and diff_ms > limit:
                                     is_exit = False
-                                    exit_res["reason"] = f"EXIT_DESYNC_SKIP ({diff_ms:.0f}ms > {self.exit_desync_limit}ms)"
+                                    exit_res["reason"] = f"EXIT_DESYNC_SKIP ({diff_ms:.0f}ms > {limit:.0f}ms)"
                         
                         # --- ДИАГНОСТИЧЕСКОЕ ЛОГИРОВАНИЕ ВЫХОДА (каждые 5 секунд на символ) ---
                         _now_log = time.time()
@@ -378,7 +397,8 @@ class Main:
                                     continue
                                 
                                 diff_ms = abs(self.ts[long_ex][sym] - self.ts[short_ex][sym]) * 1000.0
-                                if self.entry_desync_limit is not None and diff_ms > self.entry_desync_limit:
+                                limit = self._get_desync_limit(self.entry_desync_limit, long_ex, short_ex)
+                                if limit is not None and diff_ms > limit:
                                     continue
                                 
                                 if self.pm.can_enter(long_ex, short_ex, sym):

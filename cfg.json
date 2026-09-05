@@ -94,7 +94,15 @@
         "entry": {
             "order_execution_type": "MARKET",
             "order_execution_type_desc": "Allowed values: MARKET (IOC and LIMIT_GTC removed)",
-            "max_desync_ms": 125,
+            "max_desync_ms": {
+                "BINANCE_KUCOIN": 125,
+                "BINANCE_BITGET": 200,
+                "KUCOIN_BITGET": 200,
+                "BINANCE_OKX": 150,
+                "KUCOIN_OKX": 150,
+                "OKX_BITGET": 200
+            },
+            "max_desync_ms_desc": "Пороги рассинхрона стаканов (мс) для каждой связки. Настроены индивидуально под скорость стримов бирж.",
             "min_top_depth_usd": 20.0,
             "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
             "spread_entry": 0.008,
@@ -121,7 +129,14 @@
             "fill_confirm_poll_interval_sec_desc": "Interval (sec) between WS cache reads during fill confirmation polling"
         },
         "exit": {
-            "max_desync_ms": 400,
+            "max_desync_ms": {
+                "BINANCE_KUCOIN": 350,
+                "BINANCE_BITGET": 450,
+                "KUCOIN_BITGET": 450,
+                "BINANCE_OKX": 400,
+                "KUCOIN_OKX": 400,
+                "OKX_BITGET": 450
+            },
             "close_confirm_timeout_sec": {
                 "BINANCE_KUCOIN": 1.800,
                 "BINANCE_BITGET": 1.800,
