@@ -10,6 +10,7 @@ import traceback
 import os
 import json
 import numpy as np
+from typing import Optional
 import multiprocessing as mp
 from dotenv import load_dotenv
 
