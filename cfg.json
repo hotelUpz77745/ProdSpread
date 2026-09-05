@@ -55,9 +55,9 @@
     },
     "volume_filters": {
         "BINANCE": 5000000.0,
-        "KUCOIN": 2000000.0,
-        "OKX": 2000000.0,
-        "BITGET": 2000000.0
+        "KUCOIN": 5000000.0,
+        "OKX": 5000000.0,
+        "BITGET": 5000000.0
     },
     "active_routes": {
         "BINANCE_KUCOIN": true,
@@ -76,11 +76,11 @@
         },
         "KUCOIN": {
             "leverage": 20,
-            "margin_type": "CROSS",
-            "desc": "margin_type allowed values: ISOLATED | CROSS"
+            "margin_type": "cross",
+            "desc": "margin_type allowed values: isolated | cross"
         },
         "OKX": {
-            "leverage": 5,
+            "leverage": 20,
             "margin_type": "cross",
             "desc": "margin_type allowed values: isolated | cross"
         },
@@ -94,7 +94,9 @@
         "entry": {
             "order_execution_type": "MARKET",
             "order_execution_type_desc": "Allowed values: MARKET (IOC and LIMIT_GTC removed)",
-            "max_desync_ms": 200,
+            "max_desync_ms": 125,
+            "min_top_depth_usd": 20.0,
+            "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
             "spread_entry": 0.008,
             "min_spread_entry": 0.0015,
             "min_spread_entry_desc": "Минимально допустимый фактический чистый спред при входе. Если факт <= min_spread_entry, активируется extreme_profit_decay_map.",

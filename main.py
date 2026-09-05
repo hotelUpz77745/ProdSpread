@@ -50,6 +50,7 @@ class Main:
         self.exit_desync_limit  = self.cfg["trading_rules"]["exit"].get("max_desync_ms")
         self.top_n_candidates   = self.cfg["trading_rules"]["entry"]["top_n_candidates"]
         self.min_signal_dwell_ms = float(self.cfg["trading_rules"]["entry"].get("min_signal_dwell_ms", 0.0))
+        self.min_top_depth_usd = float(self.cfg["trading_rules"]["entry"].get("min_top_depth_usd", 0.0))
         self._signal_first_seen = {}
         self.topology_rebuild_interval = self.cfg["topology_rebuild_interval_sec"]
         
@@ -217,8 +218,8 @@ class Main:
         # Initial balance write
         update_total_balance(self.cfg, is_startup=True)
 
-        # 5. Главный вычислительный цикл (Numba JIT)
-        prices_array = np.full((7, 2), [np.inf, 0.0], dtype=np.float64)
+        # 5. Главный вычислительный цикл (Numba JIT: [ask_p, ask_usd, bid_p, bid_usd])
+        prices_array = np.full((7, 4), [np.inf, 0.0, 0.0, 0.0], dtype=np.float64)
 
         try:
             while True:
@@ -339,20 +340,33 @@ class Main:
                             
                             prices_array.fill(np.inf)
                             prices_array[:, 1] = 0.0
+                            prices_array[:, 2] = 0.0
+                            prices_array[:, 3] = 0.0
                             
                             for ex_name, ex_idx in EX_TO_IDX.items():
                                 book = self.books[ex_name].get(sym)
                                 ts_val = self.ts[ex_name].get(sym, 0.0)
                                 if book and book.get("bids") and book.get("asks"):
                                     if (now_mono - ts_val) <= 5.0:  # is stale check
-                                        prices_array[ex_idx, 0] = book["asks"][0][0]
-                                        prices_array[ex_idx, 1] = book["bids"][0][0]
+                                        ask_p = book["asks"][0][0]
+                                        ask_q = book["asks"][0][1]
+                                        bid_p = book["bids"][0][0]
+                                        bid_q = book["bids"][0][1]
+                                        prices_array[ex_idx, 0] = ask_p
+                                        prices_array[ex_idx, 1] = ask_p * ask_q
+                                        prices_array[ex_idx, 2] = bid_p
+                                        prices_array[ex_idx, 3] = bid_p * bid_q
                             
-                            candidates = pre_calculate_orderbook(prices_array, self.active_routes_array, top_n=self.top_n_candidates)
+                            candidates = pre_calculate_orderbook(
+                                prices_array, 
+                                self.active_routes_array, 
+                                top_n=self.top_n_candidates,
+                                min_top_depth_usd=self.min_top_depth_usd
+                            )
                             
                             for cand in candidates:
                                 long_idx, short_idx, est_spread = int(cand[0]), int(cand[1]), float(cand[2])
-                                if long_idx < 0 or short_idx < 0:
+                                if long_idx < 0 or short_idx < 0 or est_spread <= 0.0:
                                     continue
                                 long_ex, short_ex = IDX_TO_EX[long_idx], IDX_TO_EX[short_idx]
                                 

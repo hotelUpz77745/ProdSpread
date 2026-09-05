@@ -124,22 +124,41 @@ class OrderbookUtils:
 
 
 @njit(fastmath=True, cache=True)
-def pre_calculate_orderbook(prices: np.ndarray, active_routes: np.ndarray, top_n: int) -> np.ndarray:
+def pre_calculate_orderbook(prices: np.ndarray, active_routes: np.ndarray, top_n: int, min_top_depth_usd: float = 0.0) -> np.ndarray:
     """
     Рассчитывает математический спред для всех активных связок (до 21),
     сортирует их по убыванию спреда и возвращает топ N кандидатов.
+    Если prices имеет 4 колонки: [ask_p, ask_usd, bid_p, bid_usd],
+    отсекает связки с объемом первого уровня ниже min_top_depth_usd.
     """
     M = active_routes.shape[0]
     out = np.zeros((M, 5), dtype=np.float64)
+    has_depth = (prices.shape[1] >= 4)
     
     for i in range(M):
         ex1 = int(active_routes[i, 0])
         ex2 = int(active_routes[i, 1])
         
-        ask1 = prices[ex1, 0]
-        bid1 = prices[ex1, 1]
-        ask2 = prices[ex2, 0]
-        bid2 = prices[ex2, 1]
+        if has_depth:
+            ask1 = prices[ex1, 0]
+            ask1_usd = prices[ex1, 1]
+            bid1 = prices[ex1, 2]
+            bid1_usd = prices[ex1, 3]
+            
+            ask2 = prices[ex2, 0]
+            ask2_usd = prices[ex2, 1]
+            bid2 = prices[ex2, 2]
+            bid2_usd = prices[ex2, 3]
+        else:
+            ask1 = prices[ex1, 0]
+            ask1_usd = 999999.0
+            bid1 = prices[ex1, 1]
+            bid1_usd = 999999.0
+            
+            ask2 = prices[ex2, 0]
+            ask2_usd = 999999.0
+            bid2 = prices[ex2, 1]
+            bid2_usd = 999999.0
         
         if ask1 == np.inf or bid1 == 0.0 or ask2 == np.inf or bid2 == 0.0:
             out[i, 0] = -1.0
@@ -149,13 +168,26 @@ def pre_calculate_orderbook(prices: np.ndarray, active_routes: np.ndarray, top_n
             out[i, 4] = 0.0
             continue
             
-        # [ИСТОРИЧЕСКАЯ СПРАВКА]
-        # Возвращена формула деления на верхнюю точку (Шорт):
-        # spread_1 = (bid2 - ask1) / bid2 * 100.0
-        # Это дает более жесткий фильтр от шума, синхронизировано с PapperSpread.
-        spread_1 = (bid2 - ask1) / bid2 * 100.0
-        spread_2 = (bid1 - ask2) / bid1 * 100.0
-        
+        # Направление 1: Long ex1, Short ex2 (покупаем ask1, продаем bid2)
+        if min_top_depth_usd > 0.0 and (ask1_usd < min_top_depth_usd or bid2_usd < min_top_depth_usd):
+            spread_1 = -999.0
+        else:
+            spread_1 = (bid2 - ask1) / bid2 * 100.0
+            
+        # Направление 2: Long ex2, Short ex1 (покупаем ask2, продаем bid1)
+        if min_top_depth_usd > 0.0 and (ask2_usd < min_top_depth_usd or bid1_usd < min_top_depth_usd):
+            spread_2 = -999.0
+        else:
+            spread_2 = (bid1 - ask2) / bid1 * 100.0
+            
+        if spread_1 <= -999.0 and spread_2 <= -999.0:
+            out[i, 0] = -1.0
+            out[i, 1] = -1.0
+            out[i, 2] = -999.0
+            out[i, 3] = 0.0
+            out[i, 4] = 0.0
+            continue
+            
         if spread_1 >= spread_2:
             out[i, 0] = ex1       
             out[i, 1] = ex2       
