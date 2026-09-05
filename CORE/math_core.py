@@ -122,6 +122,26 @@ class OrderbookUtils:
             return 0.0, 0.0
         return calc_execution_qty_limit_jit(arr, target_qty, limit_price, is_buy, volatility_discount)
 
+    @staticmethod
+    def find_first_qualified_level(levels: List[Any], min_usd: float, is_ask: bool) -> tuple:
+        """
+        Находит первый уровень в стакане с объемом >= min_usd.
+        Возвращает (index, price, usd_volume).
+        Если подходящий уровень не найден, возвращает (-1, np.inf if is_ask else 0.0, 0.0).
+        """
+        if not levels:
+            return -1, np.inf if is_ask else 0.0, 0.0
+            
+        for i in range(len(levels)):
+            lvl = levels[i]
+            p = float(lvl[0])
+            q = float(lvl[1])
+            usd_vol = p * q
+            if usd_vol >= min_usd or min_usd <= 0.0:
+                return i, p, usd_vol
+                
+        return -1, np.inf if is_ask else 0.0, 0.0
+
 
 @njit(fastmath=True, cache=True)
 def pre_calculate_orderbook(prices: np.ndarray, active_routes: np.ndarray, top_n: int, min_top_depth_usd: float = 0.0) -> np.ndarray:

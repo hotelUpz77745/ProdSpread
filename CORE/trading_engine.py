@@ -27,6 +27,7 @@ class TradingEngine:
             {"index": 1, "seconds": 60, "target_val": -999.0}
         ])
         self.trading_risks = self.cfg["trading_risks"]
+        self.min_top_depth_usd = float(self.cfg["trading_rules"]["entry"].get("min_top_depth_usd", 0.0))
 
     def _get_vol_discount_entry(self, exchange_name: str) -> float:
         return float(self.trading_risks[exchange_name.lower()]["volatility_discount_entry"])
@@ -41,19 +42,42 @@ class TradingEngine:
                        long_book: Dict[str, Any], 
                        short_book: Dict[str, Any], 
                        cand: list,
-                       size_usd: float) -> Tuple[bool, Dict[str, Any]]:
+                       size_usd: float,
+                       long_ask_offset: int = 0,
+                       short_bid_offset: int = 0) -> Tuple[bool, Dict[str, Any]]:
         
         long_idx = int(cand[0])
         short_idx = int(cand[1])
         long_ex = self.exchanges[long_idx]
         short_ex = self.exchanges[short_idx]
         
+        # Если смещения не переданы, определяем первые квалифицированные уровни (мусор перед ними отсекается)
+        if long_ask_offset <= 0 and self.min_top_depth_usd > 0.0:
+            idx, _, _ = OrderbookUtils.find_first_qualified_level(
+                long_book.get("asks", []), self.min_top_depth_usd, is_ask=True
+            )
+            if idx < 0:
+                return False, {"reason": "NO_QUALIFIED_ASK_DEPTH"}
+            long_ask_offset = idx
+
+        if short_bid_offset <= 0 and self.min_top_depth_usd > 0.0:
+            idx, _, _ = OrderbookUtils.find_first_qualified_level(
+                short_book.get("bids", []), self.min_top_depth_usd, is_ask=False
+            )
+            if idx < 0:
+                return False, {"reason": "NO_QUALIFIED_BID_DEPTH"}
+            short_bid_offset = idx
+
         long_vol = self._get_vol_discount_entry(long_ex)
         short_vol = self._get_vol_discount_entry(short_ex)
         
+        # Срез стакана строго от первого квалифицированного уровня с объемом >= min_top_depth_usd
+        asks_slice = long_book["asks"][long_ask_offset:] if long_ask_offset > 0 else long_book.get("asks", [])
+        bids_slice = short_book["bids"][short_bid_offset:] if short_bid_offset > 0 else short_book.get("bids", [])
+        
         # Для лонга - покупаем из асков. Для шорта - продаем в биды.
-        long_vwap_ask = OrderbookUtils.calculate_vwap_by_usd(long_book["asks"], size_usd, long_vol)
-        short_vwap_bid = OrderbookUtils.calculate_vwap_by_usd(short_book["bids"], size_usd, short_vol)
+        long_vwap_ask = OrderbookUtils.calculate_vwap_by_usd(asks_slice, size_usd, long_vol)
+        short_vwap_bid = OrderbookUtils.calculate_vwap_by_usd(bids_slice, size_usd, short_vol)
         
         if long_vwap_ask <= 0 or short_vwap_bid <= 0:
             return False, {"reason": "INSUFFICIENT_VOLUME"}
@@ -111,7 +135,9 @@ class TradingEngine:
             "short_qty": short_qty,
             "details": f"Net Spread:{net_spread * 100:+.3f}% (Gross:{vwap_spread * 100:+.3f}%, Fee:{entry_comm * 100:.3f}%)",
             "long_ex": long_ex,
-            "short_ex": short_ex
+            "short_ex": short_ex,
+            "long_ask_offset": long_ask_offset,
+            "short_bid_offset": short_bid_offset
         }
 
     def evaluate_exit(self, 

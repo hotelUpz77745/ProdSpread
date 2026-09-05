@@ -17,7 +17,7 @@ load_dotenv()
 
 from CORE.utils import Utils
 from CORE.trading_engine import TradingEngine
-from CORE.math_core import pre_calculate_orderbook
+from CORE.math_core import pre_calculate_orderbook, OrderbookUtils
 from CORE.position_manager import PositionManager
 from CORE.executor_process import run_executor_process
 from CORE.ipc_socket import async_write_msg, async_read_msg
@@ -342,20 +342,24 @@ class Main:
                             prices_array[:, 1] = 0.0
                             prices_array[:, 2] = 0.0
                             prices_array[:, 3] = 0.0
+                            filtered_offsets = {}
                             
                             for ex_name, ex_idx in EX_TO_IDX.items():
                                 book = self.books[ex_name].get(sym)
                                 ts_val = self.ts[ex_name].get(sym, 0.0)
                                 if book and book.get("bids") and book.get("asks"):
                                     if (now_mono - ts_val) <= 5.0:  # is stale check
-                                        ask_p = book["asks"][0][0]
-                                        ask_q = book["asks"][0][1]
-                                        bid_p = book["bids"][0][0]
-                                        bid_q = book["bids"][0][1]
+                                        ask_idx, ask_p, ask_usd = OrderbookUtils.find_first_qualified_level(
+                                            book["asks"], self.min_top_depth_usd, is_ask=True
+                                        )
+                                        bid_idx, bid_p, bid_usd = OrderbookUtils.find_first_qualified_level(
+                                            book["bids"], self.min_top_depth_usd, is_ask=False
+                                        )
                                         prices_array[ex_idx, 0] = ask_p
-                                        prices_array[ex_idx, 1] = ask_p * ask_q
+                                        prices_array[ex_idx, 1] = ask_usd
                                         prices_array[ex_idx, 2] = bid_p
-                                        prices_array[ex_idx, 3] = bid_p * bid_q
+                                        prices_array[ex_idx, 3] = bid_usd
+                                        filtered_offsets[ex_idx] = (max(0, ask_idx), max(0, bid_idx))
                             
                             candidates = pre_calculate_orderbook(
                                 prices_array, 
@@ -379,11 +383,15 @@ class Main:
                                 
                                 if self.pm.can_enter(long_ex, short_ex, sym):
                                     size_usd = self.cfg["trading_risks"][long_ex.lower()]["trade_size_usd"]
+                                    long_ask_offset, _ = filtered_offsets.get(long_idx, (0, 0))
+                                    _, short_bid_offset = filtered_offsets.get(short_idx, (0, 0))
                                     is_valid_entry, engine_res = self.engine.evaluate_entry(
                                         self.books[long_ex][sym],
                                         self.books[short_ex][sym],
                                         cand,
-                                        size_usd
+                                        size_usd,
+                                        long_ask_offset=long_ask_offset,
+                                        short_bid_offset=short_bid_offset
                                     )
                                     
                                     route = f"{long_ex}_{short_ex}"
