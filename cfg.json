@@ -55,9 +55,9 @@
     },
     "volume_filters": {
         "BINANCE": 5000000.0,
-        "KUCOIN": 5000000.0,
-        "OKX": 5000000.0,
-        "BITGET": 5000000.0
+        "KUCOIN": 2000000.0,
+        "OKX": 2000000.0,
+        "BITGET": 2000000.0
     },
     "active_routes": {
         "BINANCE_KUCOIN": true,
