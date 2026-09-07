@@ -267,6 +267,15 @@ class BinanceOrder:
             return self.position_stream.get_position(symbol, side)
         return {"size": 0.0, "price": 0.0}
 
+    def subscribe_position_update(self, symbol: str, side: str) -> Optional[asyncio.Event]:
+        if self.position_stream and hasattr(self.position_stream, "subscribe_update"):
+            return self.position_stream.subscribe_update(symbol, side)
+        return None
+
+    def unsubscribe_position_update(self, symbol: str, side: str) -> None:
+        if self.position_stream and hasattr(self.position_stream, "unsubscribe_update"):
+            self.position_stream.unsubscribe_update(symbol, side)
+
     def get_last_close_price(self, symbol: str) -> float:
         if self.position_stream and hasattr(self.position_stream, "get_last_close_price"):
             return self.position_stream.get_last_close_price(symbol)
@@ -767,6 +776,15 @@ class KucoinOrder:
             }
         return {"size": 0.0, "price": 0.0}
 
+    def subscribe_position_update(self, symbol: str, side: str) -> Optional[asyncio.Event]:
+        if self.position_stream and hasattr(self.position_stream, "subscribe_update"):
+            return self.position_stream.subscribe_update(symbol, side)
+        return None
+
+    def unsubscribe_position_update(self, symbol: str, side: str) -> None:
+        if self.position_stream and hasattr(self.position_stream, "unsubscribe_update"):
+            self.position_stream.unsubscribe_update(symbol, side)
+
     def get_last_close_price(self, symbol: str) -> float:
         if self.position_stream and hasattr(self.position_stream, "get_last_close_price"):
             return self.position_stream.get_last_close_price(symbol)
@@ -1206,6 +1224,15 @@ class BitgetOrder:
         if self.position_stream:
             return self.position_stream.get_position(symbol, side)
         return {"size": 0.0, "price": 0.0}
+
+    def subscribe_position_update(self, symbol: str, side: str) -> Optional[asyncio.Event]:
+        if self.position_stream and hasattr(self.position_stream, "subscribe_update"):
+            return self.position_stream.subscribe_update(symbol, side)
+        return None
+
+    def unsubscribe_position_update(self, symbol: str, side: str) -> None:
+        if self.position_stream and hasattr(self.position_stream, "unsubscribe_update"):
+            self.position_stream.unsubscribe_update(symbol, side)
 
     def get_last_close_price(self, symbol: str) -> float:
         if self.position_stream and hasattr(self.position_stream, "get_last_close_price"):

@@ -10,7 +10,7 @@ import time
 import hmac
 import hashlib
 import base64
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, Tuple
 from c_log import log
 
 class KucoinPositionStream:
@@ -39,6 +39,33 @@ class KucoinPositionStream:
         # Track positions by symbol
         self.positions: Dict[str, Dict[str, Any]] = {}
         self.last_close_prices: Dict[str, float] = {}
+        # Реестр реактивных слушателей: (symbol, side) -> asyncio.Event
+        self._update_events: Dict[Tuple[str, str], asyncio.Event] = {}
+
+    def subscribe_update(self, symbol: str, side: str) -> asyncio.Event:
+        """Регистрирует или возвращает Event ДО отправки ордера."""
+        sym = symbol.strip().upper()
+        s = side.strip().upper()
+        key = (sym, s)
+        ev = self._update_events.get(key)
+        if ev is None:
+            ev = asyncio.Event()
+            self._update_events[key] = ev
+        return ev
+
+    def unsubscribe_update(self, symbol: str, side: str) -> None:
+        """Очистка реестра слушателей."""
+        sym = symbol.strip().upper()
+        s = side.strip().upper()
+        self._update_events.pop((sym, s), None)
+
+    def _notify(self, symbol: str, side: str) -> None:
+        """Мгновенно будит FSM при обновлении позиции по (symbol, side)."""
+        sym = symbol.strip().upper()
+        s = side.strip().upper()
+        ev = self._update_events.get((sym, s))
+        if ev and not ev.is_set():
+            ev.set()
 
     def get_last_close_price(self, symbol: str) -> float:
         sym = symbol.strip().upper()
@@ -193,6 +220,7 @@ class KucoinPositionStream:
                                 "size": filled_size,
                                 "price": match_price if match_price > 0 else curr_p.get("price", 0.0)
                             }
+                        self._notify(symbol, pos_side)
 
             elif topic.startswith("/contract/position"):
                 pdata = data.get("data", {})
@@ -208,12 +236,18 @@ class KucoinPositionStream:
                     if pos_amt == 0.0:
                         self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
                         self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
+                        self._notify(symbol, "LONG")
+                        self._notify(symbol, "SHORT")
                     elif pos_side == "LONG":
                         self.positions[symbol]["LONG"] = {"size": abs(float(pos_amt)), "price": ep_raw}
                         self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
+                        self._notify(symbol, "LONG")
+                        self._notify(symbol, "SHORT")
                     elif pos_side == "SHORT":
                         self.positions[symbol]["SHORT"] = {"size": abs(float(pos_amt)), "price": ep_raw}
                         self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
+                        self._notify(symbol, "LONG")
+                        self._notify(symbol, "SHORT")
                     else:
                         if pos_amt > 0:
                             self.positions[symbol]["LONG"] = {"size": float(pos_amt), "price": ep_raw}
@@ -224,6 +258,8 @@ class KucoinPositionStream:
                         else:
                             self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
                             self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
+                        self._notify(symbol, "LONG")
+                        self._notify(symbol, "SHORT")
 
     async def start(self):
         self._external_stop = False

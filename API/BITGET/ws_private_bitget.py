@@ -10,7 +10,7 @@ import time
 import hmac
 import base64
 import contextlib
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, Tuple
 from c_log import log
 
 class BitgetPositionStream:
@@ -29,6 +29,33 @@ class BitgetPositionStream:
         self._external_stop = False
         self.positions: Dict[str, Dict[str, Dict[str, float]]] = {}
         self.last_close_prices: Dict[str, float] = {}
+        # Реестр реактивных слушателей: (symbol, side) -> asyncio.Event
+        self._update_events: Dict[Tuple[str, str], asyncio.Event] = {}
+
+    def subscribe_update(self, symbol: str, side: str) -> asyncio.Event:
+        """Регистрирует или возвращает Event ДО отправки ордера."""
+        sym = symbol.replace("_UMCBL", "").strip().upper()
+        s = side.strip().upper()
+        key = (sym, s)
+        ev = self._update_events.get(key)
+        if ev is None:
+            ev = asyncio.Event()
+            self._update_events[key] = ev
+        return ev
+
+    def unsubscribe_update(self, symbol: str, side: str) -> None:
+        """Очистка реестра слушателей."""
+        sym = symbol.replace("_UMCBL", "").strip().upper()
+        s = side.strip().upper()
+        self._update_events.pop((sym, s), None)
+
+    def _notify(self, symbol: str, side: str) -> None:
+        """Мгновенно будит FSM при обновлении позиции по (symbol, side)."""
+        sym = symbol.replace("_UMCBL", "").strip().upper()
+        s = side.strip().upper()
+        ev = self._update_events.get((sym, s))
+        if ev and not ev.is_set():
+            ev.set()
 
     async def stop(self):
         self._external_stop = True
@@ -140,12 +167,14 @@ class BitgetPositionStream:
                                         }
                                     if raw_side in ("LONG", "SHORT"):
                                         self.positions[sym][raw_side] = {"size": size, "price": price}
+                                        self._notify(sym, raw_side)
                                         
                                 if data.get("action") == "snapshot":
                                     for sym in list(self.positions.keys()):
                                         for side in ("LONG", "SHORT"):
                                             if (sym, side) not in incoming_syms:
                                                 self.positions[sym][side] = {"size": 0.0, "price": 0.0}
+                                                self._notify(sym, side)
                             elif channel == "orders":
                                 for o in data.get("data", []):
                                     sym = o.get("instId", "").replace("_UMCBL", "").strip().upper()
@@ -173,11 +202,13 @@ class BitgetPositionStream:
                                             self.positions[sym][raw_side] = {"size": 0.0, "price": 0.0}
                                             if avg_price > 0:
                                                 self.last_close_prices[sym] = avg_price
+                                            self._notify(sym, raw_side)
                                         elif order_status in ("filled", "partially_filled") and cum_qty > 0:
                                             self.positions[sym][raw_side] = {
                                                 "size": cum_qty,
                                                 "price": avg_price
                                             }
+                                            self._notify(sym, raw_side)
                                         
             except Exception as e:
                 log(f"[BITGET WS_PRIVATE] Error: {e}", level="ERROR")

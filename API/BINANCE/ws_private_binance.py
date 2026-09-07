@@ -7,7 +7,7 @@ import asyncio
 import aiohttp
 import re
 import json
-from typing import Optional, Callable, Set, Dict, Any
+from typing import Optional, Callable, Set, Dict, Any, Tuple
 from c_log import log
 
 # Permitted symbols regex
@@ -94,6 +94,33 @@ class BinancePositionStream:
         # Track positions by symbol
         self.positions: Dict[str, Dict[str, Any]] = {}
         self.last_close_prices: Dict[str, float] = {}
+        # Реестр реактивных слушателей: (symbol, side) -> asyncio.Event
+        self._update_events: Dict[Tuple[str, str], asyncio.Event] = {}
+
+    def subscribe_update(self, symbol: str, side: str) -> asyncio.Event:
+        """Регистрирует или возвращает Event ДО отправки ордера."""
+        sym = normalize_symbol(symbol) or symbol.strip().upper()
+        s = side.strip().upper()
+        key = (sym, s)
+        ev = self._update_events.get(key)
+        if ev is None:
+            ev = asyncio.Event()
+            self._update_events[key] = ev
+        return ev
+
+    def unsubscribe_update(self, symbol: str, side: str) -> None:
+        """Гарантированная очистка реестра во избежание утечек памяти."""
+        sym = normalize_symbol(symbol) or symbol.strip().upper()
+        s = side.strip().upper()
+        self._update_events.pop((sym, s), None)
+
+    def _notify(self, symbol: str, side: str) -> None:
+        """Мгновенно будит FSM при обновлении позиции по (symbol, side)."""
+        sym = normalize_symbol(symbol) or symbol.strip().upper()
+        s = side.strip().upper()
+        ev = self._update_events.get((sym, s))
+        if ev and not ev.is_set():
+            ev.set()
 
     def get_last_close_price(self, symbol: str) -> float:
         sym = normalize_symbol(symbol)
@@ -174,11 +201,13 @@ class BinancePositionStream:
                 self.positions[symbol][pos_side_raw] = {"size": 0.0, "price": 0.0}
                 if avg_price > 0:
                     self.last_close_prices[symbol] = avg_price
+                self._notify(symbol, pos_side_raw)
             elif cum_qty > 0:
                 self.positions[symbol][pos_side_raw] = {
                     "size": cum_qty,
                     "price": avg_price
                 }
+                self._notify(symbol, pos_side_raw)
 
     async def _handle_account_update(self, data: dict):
         acc = data.get("a", {})
@@ -200,16 +229,21 @@ class BinancePositionStream:
             if pos_side_raw == "BOTH":
                 if pos_amt > 0:
                     self.positions[symbol]["LONG"] = {"size": abs(pos_amt), "price": ep_raw}
+                    self._notify(symbol, "LONG")
                 elif pos_amt < 0:
                     self.positions[symbol]["SHORT"] = {"size": abs(pos_amt), "price": ep_raw}
+                    self._notify(symbol, "SHORT")
                 else:
                     self.positions[symbol]["LONG"] = {"size": 0.0, "price": 0.0}
                     self.positions[symbol]["SHORT"] = {"size": 0.0, "price": 0.0}
+                    self._notify(symbol, "LONG")
+                    self._notify(symbol, "SHORT")
             else:
                 self.positions[symbol][pos_side_raw] = {
                     "size": abs(pos_amt),
                     "price": ep_raw
                 }
+                self._notify(symbol, pos_side_raw)
 
     async def _handle_messages(self):
         while not self._external_stop and not self.stop_flag():
