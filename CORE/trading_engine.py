@@ -15,19 +15,20 @@ class TradingEngine:
         self.cfg = cfg
         self.exchanges = exchanges
         
-        # Строго читаем через [''] без get(..., default)
-        self.spread_entry = float(self.cfg["trading_rules"]["entry"]["spread_entry"])
-        self.check_synthetic_exit = bool(self.cfg["trading_rules"]["entry"]["check_synthetic_exit"])
-        self.check_synthetic_slippage = bool(self.cfg["trading_rules"]["entry"]["check_synthetic_slippage"])
-        self.max_slippage_ratio = float(self.cfg["trading_rules"]["entry"]["max_slippage_ratio"])
-        self.hard_max_slippage = float(self.cfg["trading_rules"]["entry"]["hard_max_slippage"])
+        # Читаем параметры фильтра сигналов из signal_filters (с fallback на flat entry)
+        signal_cfg = self.cfg["trading_rules"]["entry"].get("signal_filters", self.cfg["trading_rules"]["entry"])
+        self.spread_entry = float(signal_cfg["spread_entry"])
+        self.check_synthetic_exit = bool(signal_cfg["check_synthetic_exit"])
+        self.check_synthetic_slippage = bool(signal_cfg["check_synthetic_slippage"])
+        self.max_slippage_ratio = float(signal_cfg["max_slippage_ratio"])
+        self.hard_max_slippage = float(signal_cfg["hard_max_slippage"])
+        self.min_top_depth_usd = float(signal_cfg.get("min_top_depth_usd", 0.0))
         self.decay_map = self.cfg["trading_rules"]["exit"]["relative_profit_decay_map"]
         self.extreme_decay_map = self.cfg["trading_rules"]["exit"].get("extreme_profit_decay_map", [
             {"index": 0, "seconds": 0, "target_val": 0.0000},
             {"index": 1, "seconds": 60, "target_val": -999.0}
         ])
         self.trading_risks = self.cfg["trading_risks"]
-        self.min_top_depth_usd = float(self.cfg["trading_rules"]["entry"].get("min_top_depth_usd", 0.0))
 
     def _get_vol_discount_entry(self, exchange_name: str) -> float:
         return float(self.trading_risks[exchange_name.lower()]["volatility_discount_entry"])

@@ -47,11 +47,12 @@ class Main:
         self.engine = TradingEngine(self.cfg, IDX_TO_EX)
         
         # Configs
-        self.entry_desync_limit = self.cfg["trading_rules"]["entry"]["max_desync_ms"]
+        signal_cfg = self.cfg["trading_rules"]["entry"].get("signal_filters", self.cfg["trading_rules"]["entry"])
+        self.entry_desync_limit = signal_cfg["max_desync_ms"]
         self.exit_desync_limit  = self.cfg["trading_rules"]["exit"]["max_desync_ms"]
-        self.top_n_candidates   = self.cfg["trading_rules"]["entry"]["top_n_candidates"]
-        self.min_signal_dwell_ms = float(self.cfg["trading_rules"]["entry"]["min_signal_dwell_ms"])
-        self.min_top_depth_usd = float(self.cfg["trading_rules"]["entry"]["min_top_depth_usd"])
+        self.top_n_candidates   = signal_cfg["top_n_candidates"]
+        self.min_signal_dwell_ms = float(signal_cfg["min_signal_dwell_ms"])
+        self.min_top_depth_usd = float(signal_cfg["min_top_depth_usd"])
         self._signal_first_seen = {}
         self.topology_rebuild_interval = self.cfg["topology_rebuild_interval_sec"]
         

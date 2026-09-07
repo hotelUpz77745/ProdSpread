@@ -58,11 +58,15 @@ class PositionFSM:
         self.native_short = self.coin_to_native[sym][short_ex] if sym in self.coin_to_native and short_ex in self.coin_to_native[sym] else sym
 
         self.state = PositionState.IDLE
-        self.order_policy = self.cfg["trading_rules"]["entry"]["order_execution_type"].upper()
-        self.min_fill_rate = float(self.cfg["trading_rules"]["entry"]["min_fill_rate"])
+        entry_cfg = self.cfg["trading_rules"]["entry"]
+        lead_cfg = entry_cfg.get("phase1_lead_leg", entry_cfg)
+        hedge_cfg = entry_cfg.get("phase3_hedge_leg", entry_cfg)
 
-        # Параметры подтверждения налива (из конфига строго через [''], без дефолтов и магии)
-        timeout_cfg = self.cfg["trading_rules"]["entry"]["fill_confirm_timeout_sec"]
+        self.order_policy = entry_cfg.get("order_execution_type", "ASYMMETRIC_LIMIT_IOC").upper()
+        self.min_fill_rate = float(hedge_cfg.get("min_hedge_fill_rate", entry_cfg.get("min_fill_rate", 0.75)))
+
+        # Параметры подтверждения налива (из phase1_lead_leg с fallback на flat entry)
+        timeout_cfg = lead_cfg.get("fill_confirm_timeout_sec", entry_cfg.get("fill_confirm_timeout_sec"))
         if isinstance(timeout_cfg, dict):
             pair_key1 = f"{long_ex}_{short_ex}".upper()
             pair_key2 = f"{short_ex}_{long_ex}".upper()
@@ -77,7 +81,7 @@ class PositionFSM:
         else:
             self.fill_confirm_timeout = float(timeout_cfg)
             
-        self.fill_confirm_poll_interval = float(self.cfg["trading_rules"]["entry"]["fill_confirm_poll_interval_sec"])
+        self.fill_confirm_poll_interval = float(lead_cfg.get("fill_confirm_poll_interval_sec", entry_cfg.get("fill_confirm_poll_interval_sec", 0.0)))
 
         # Параметры подтверждения закрытия позиции (из секции exit с fallback на entry * 2)
         exit_timeout_cfg = self.cfg["trading_rules"].get("exit", {}).get("close_confirm_timeout_sec")
@@ -320,6 +324,14 @@ class PositionFSM:
         lead_ex = roles_cfg["lead"]
         hedge_ex = roles_cfg["hedge"]
         
+        # Получаем фазовые блоки настроек
+        phase1_cfg = entry_cfg.get("phase1_lead_leg", entry_cfg)
+        phase2_cfg = entry_cfg.get("phase2_lead_validation", entry_cfg)
+        phase3_cfg = entry_cfg.get("phase3_hedge_leg", entry_cfg)
+        phase4_cfg = entry_cfg.get("phase4_resolution", entry_cfg)
+        signal_cfg = entry_cfg.get("signal_filters", entry_cfg)
+        quarantine_cfg = entry_cfg.get("quarantine_durations_sec", {})
+        
         # Mapping to long/short roles
         is_lead_long = (lead_ex == self.long_ex)
         native_lead = self.native_long if is_lead_long else self.native_short
@@ -342,7 +354,7 @@ class PositionFSM:
         size_lead_usd = size_long_usd if is_lead_long else size_short_usd
         price_lead_calc = self.engine_res.get("long_avg_price", 0.0) if is_lead_long else self.engine_res.get("short_avg_price", 0.0)
         
-        lead_max_slip = float(entry_cfg.get("lead_max_slippage_pct", 0.0005))
+        lead_max_slip = float(phase1_cfg.get("max_slippage_pct", entry_cfg.get("lead_max_slippage_pct", 0.0005)))
         if is_lead_long:
             price_lead_limit = price_lead_calc * (1 + lead_max_slip)
         else:
@@ -384,8 +396,9 @@ class PositionFSM:
         lead_price_actual = lead_pos.get("price", 0.0) if is_lead_long else self.short_pos.get("price", 0.0)
         
         if lead_qty_actual <= 0.0:
-            log(f"[{self.sym}] Ветка Б (Zero Fill): Lead Leg не налился. Карантин 5 мин.", level="WARNING")
-            self.ban_coin_cb(self.sym, reason="Zero Fill (Lead Leg)", duration_sec=float(entry_cfg["quarantine_durations_sec"].get("zero_fill", 300)))
+            zero_fill_sec = float(phase1_cfg.get("quarantine_zero_fill_sec", quarantine_cfg.get("zero_fill", 300)))
+            log(f"[{self.sym}] Ветка Б (Zero Fill): Lead Leg не налился. Карантин {zero_fill_sec:.0f}с.", level="WARNING")
+            self.ban_coin_cb(self.sym, reason="Zero Fill (Lead Leg)", duration_sec=zero_fill_sec)
             self._set_state(PositionState.ABORTED)
             return False
             
@@ -393,10 +406,13 @@ class PositionFSM:
         # PHASE 2: Validation (Branch A)
         # =========================================================================
         notional_usd = lead_qty_actual * lead_price_actual
-        if notional_usd < 5.0: # Binance minNotional is typically 5
-            log(f"[{self.sym}] Lead Notional < 5$ ({notional_usd:.2f}$). Сброс ноги, карантин.", level="WARNING")
+        min_notional_usd = float(phase2_cfg.get("min_notional_usd", 5.0))
+        hedge_failed_sec = float(phase3_cfg.get("quarantine_hedge_failed_sec", quarantine_cfg.get("hedge_failed", 1800)))
+        
+        if notional_usd < min_notional_usd:
+            log(f"[{self.sym}] Lead Notional < {min_notional_usd}$ ({notional_usd:.2f}$). Сброс ноги, карантин.", level="WARNING")
             await self._emergency_unwind_single(lead_ex, native_lead, lead_qty_actual, lead_price_actual, lead_side, lead_pos_side)
-            self.ban_coin_cb(self.sym, reason="Min Notional Failed", duration_sec=float(entry_cfg["quarantine_durations_sec"].get("hedge_failed", 1800)))
+            self.ban_coin_cb(self.sym, reason="Min Notional Failed", duration_sec=hedge_failed_sec)
             self._set_state(PositionState.ABORTED)
             return False
             
@@ -405,26 +421,26 @@ class PositionFSM:
         else:
             drift = max(0.0, price_lead_calc - lead_price_actual)
             
-        model_drift_ratio = drift / (price_lead_calc * entry_cfg.get("spread_entry", 0.008))
+        spread_entry = float(signal_cfg.get("spread_entry", entry_cfg.get("spread_entry", 0.008)))
+        model_drift_ratio = drift / (price_lead_calc * spread_entry)
         
-        max_drift = float(entry_cfg.get("max_model_drift_ratio", 0.80))
+        max_drift = float(phase2_cfg.get("max_model_drift_ratio", entry_cfg.get("max_model_drift_ratio", 0.80)))
         if model_drift_ratio > max_drift:
+            drift_quarantine_sec = float(phase2_cfg.get("quarantine_model_drift_sec", quarantine_cfg.get("model_drift", 3600)))
             log(f"[{self.sym}] Ветка А1 (Model Drift): Отклонение {model_drift_ratio*100:.1f}% > {max_drift*100:.1f}%. Сброс ноги.", level="WARNING")
             await self._emergency_unwind_single(lead_ex, native_lead, lead_qty_actual, lead_price_actual, lead_side, lead_pos_side)
-            self.ban_coin_cb(self.sym, reason="Model Drift", duration_sec=float(entry_cfg["quarantine_durations_sec"].get("model_drift", 3600)))
+            self.ban_coin_cb(self.sym, reason="Model Drift", duration_sec=drift_quarantine_sec)
             self._set_state(PositionState.ABORTED)
             return False
             
         # =========================================================================
         # PHASE 3: Hedge Leg (Branch A2)
         # =========================================================================
-        hedge_decay_map = entry_cfg.get("hedge_decay_map", [{"iter": 0, "decay_rate": 1.0, "timeout_ms": 300}])
+        hedge_decay_map = phase3_cfg.get("decay_map", entry_cfg.get("hedge_decay_map", [{"iter": 0, "decay_rate": 1.0, "timeout_ms": 300}]))
         hedge_qty_actual = 0.0
         req_hedge_qty = lead_qty_actual # Мы хотим налить ровно столько, сколько налили в Lead
         
-        spread_entry = float(entry_cfg.get("spread_entry", 0.008))
         drift_lead = (lead_price_actual - price_lead_calc) / price_lead_calc if is_lead_long else (price_lead_calc - lead_price_actual) / price_lead_calc
-        
         price_hedge_live = self.engine_res.get("short_avg_price", 0.0) if is_lead_long else self.engine_res.get("long_avg_price", 0.0)
         
         for step in hedge_decay_map:
@@ -434,7 +450,7 @@ class PositionFSM:
             concession = max(0.0, (spread_entry - max(0.0, drift_lead)) * decay_rate)
             
             
-            min_acceptable_net_spread = float(entry_cfg.get("min_spread_entry", 0.0015))
+            min_acceptable_net_spread = float(signal_cfg.get("min_spread_entry", entry_cfg.get("min_spread_entry", 0.0015)))
             entry_fee_l = float(self.cfg["trading_risks"][self.long_ex.lower()]["taker_fee"])
             entry_fee_s = float(self.cfg["trading_risks"][self.short_ex.lower()]["taker_fee"])
             entry_comm = entry_fee_l + entry_fee_s
@@ -493,12 +509,13 @@ class PositionFSM:
         # PHASE 4: Resolution
         # =========================================================================
         hedge_fill_rate = hedge_qty_actual / req_hedge_qty if req_hedge_qty > 0 else 0.0
-        min_hedge_rate = float(entry_cfg.get("min_hedge_fill_rate", 0.75))
+        min_hedge_rate = float(phase3_cfg.get("min_hedge_fill_rate", entry_cfg.get("min_hedge_fill_rate", 0.75)))
         
         if hedge_fill_rate >= min_hedge_rate:
             log(f"[{self.sym}] Ветка А3: Частичный/Полный налив Hedge ({hedge_fill_rate*100:.1f}%). Выравнивание объема.", level="INFO")
             delta_qty = lead_qty_actual - hedge_qty_actual
-            if delta_qty > 0.01: # Подрезаем излишек Lead Leg (MARKET reduceOnly=True)
+            trim_excess = bool(phase4_cfg.get("trim_excess_lead", True))
+            if trim_excess and delta_qty > 0.01: # Подрезаем излишек Lead Leg (MARKET reduceOnly=True)
                 delta_usd = delta_qty * lead_price_actual
                 reduce_side = "SELL" if is_lead_long else "BUY"
                 log(f"[{self.sym}] Подрезка излишка Lead Leg на {delta_qty:.4f}", level="WARNING")
@@ -519,7 +536,8 @@ class PositionFSM:
         else:
             log(f"[{self.sym}] Ветка А4 (Hedge Failed): Налив {hedge_fill_rate*100:.1f}% < {min_hedge_rate*100:.1f}%. Полный сброс.", level="WARNING")
             await self._emergency_unwind()
-            self.ban_coin_cb(self.sym, reason="Hedge Failed", duration_sec=float(entry_cfg["quarantine_durations_sec"].get("hedge_failed", 1800)))
+            hedge_failed_sec = float(phase3_cfg.get("quarantine_hedge_failed_sec", quarantine_cfg.get("hedge_failed", 1800)))
+            self.ban_coin_cb(self.sym, reason="Hedge Failed", duration_sec=hedge_failed_sec)
             self._set_state(PositionState.ABORTED)
             return False
 

@@ -93,57 +93,73 @@
     "trading_rules": {
         "entry": {
             "order_execution_type": "ASYMMETRIC_LIMIT_IOC",
-            "order_execution_type_desc": "Allowed values: MARKET, ASYMMETRIC_LIMIT_IOC",
+            "signal_filters": {
+                "spread_entry": 0.008,
+                "min_spread_entry": 0.0015,
+                "min_spread_entry_desc": "Минимально допустимый фактический чистый спред при входе. Если факт <= min_spread_entry, активируется extreme_profit_decay_map.",
+                "min_top_depth_usd": 200.0,
+                "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
+                "min_signal_dwell_ms": 0,
+                "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
+                "top_n_candidates": 4,
+                "max_desync_ms": {
+                    "BINANCE_KUCOIN": 125,
+                    "BINANCE_BITGET": 200,
+                    "KUCOIN_BITGET": 200,
+                    "BINANCE_OKX": 150,
+                    "KUCOIN_OKX": 150,
+                    "OKX_BITGET": 200
+                },
+                "max_desync_ms_desc": "Пороги рассинхрона стаканов (мс) для каждой связки. Настроены индивидуально под скорость стримов бирж.",
+                "check_synthetic_exit": true,
+                "check_synthetic_slippage": true,
+                "max_slippage_ratio": 0.5,
+                "hard_max_slippage": 0.015
+            },
             "exchange_roles": {
                 "BINANCE_BITGET": {"lead": "BITGET", "hedge": "BINANCE"},
                 "BINANCE_KUCOIN": {"lead": "KUCOIN", "hedge": "BINANCE"}
             },
-            "lead_max_slippage_pct": 0.0005,
-            "max_model_drift_ratio": 0.80,
-            "min_hedge_fill_rate": 0.75,
-            "hedge_decay_map": [
-                {"iter": 0, "decay_rate": 0.50, "timeout_ms": 50},
-                {"iter": 1, "decay_rate": 0.75, "timeout_ms": 150},
-                {"iter": 2, "decay_rate": 1.00, "timeout_ms": 300}
-            ],
-            "quarantine_durations_sec": {
-                "zero_fill": 300,
-                "model_drift": 3600,
-                "hedge_failed": 1800
+            "exchange_roles_desc": "Маршрутизация ролей: lead = слабая/неликвидная биржа (первый выстрел), hedge = ликвидная биржа (мгновенный догон).",
+            "phase1_lead_leg": {
+                "max_slippage_pct": 0.0005,
+                "max_slippage_pct_desc": "Запас цены для LIMIT_IOC выстрела от лучшего аска/бида (0.05%).",
+                "fill_confirm_timeout_sec": {
+                    "BINANCE_KUCOIN": 0.600,
+                    "BINANCE_BITGET": 0.600,
+                    "KUCOIN_BITGET": 0.600,
+                    "BINANCE_OKX": 0.600,
+                    "KUCOIN_OKX": 0.600,
+                    "OKX_BITGET": 0.600
+                },
+                "fill_confirm_timeout_sec_desc": "Макс. время ожидания налива слабой ноги через WS-события или кэш.",
+                "fill_confirm_poll_interval_sec": 0.0,
+                "quarantine_zero_fill_sec": 300,
+                "quarantine_zero_fill_sec_desc": "Карантин монеты при нулевом наливе Lead Leg (Ветка Б)."
             },
-            "max_desync_ms": {
-                "BINANCE_KUCOIN": 125,
-                "BINANCE_BITGET": 200,
-                "KUCOIN_BITGET": 200,
-                "BINANCE_OKX": 150,
-                "KUCOIN_OKX": 150,
-                "OKX_BITGET": 200
+            "phase2_lead_validation": {
+                "min_notional_usd": 5.0,
+                "min_notional_usd_desc": "Минимальный налитый объем Lead Leg в долларах (порог minNotional для возможности хеджирования на Binance).",
+                "max_model_drift_ratio": 0.80,
+                "max_model_drift_ratio_desc": "Максимально допустимый дрейф расчетной цены (80% от входного спреда). При превышении - Ветка А1 (сброс ноги).",
+                "quarantine_model_drift_sec": 3600
             },
-            "max_desync_ms_desc": "Пороги рассинхрона стаканов (мс) для каждой связки. Настроены индивидуально под скорость стримов бирж.",
-            "min_top_depth_usd": 200.0,
-            "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
-            "spread_entry": 0.008,
-            "min_spread_entry": 0.0015,
-            "min_spread_entry_desc": "Минимально допустимый фактический чистый спред при входе. Если факт <= min_spread_entry, активируется extreme_profit_decay_map.",
-            "min_signal_dwell_ms": 0,
-            "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
-            "min_fill_rate": 0.980,
-            "top_n_candidates": 4,
-            "check_synthetic_exit": true,
-            "check_synthetic_slippage": true,
-            "max_slippage_ratio": 0.5,
-            "hard_max_slippage": 0.015,
-            "fill_confirm_timeout_sec": {
-                "BINANCE_KUCOIN": 0.600,
-                "BINANCE_BITGET": 0.600,
-                "KUCOIN_BITGET": 0.600,
-                "BINANCE_OKX": 0.600,
-                "KUCOIN_OKX": 0.600,
-                "OKX_BITGET": 0.600
+            "phase3_hedge_leg": {
+                "min_hedge_fill_rate": 0.75,
+                "min_hedge_fill_rate_desc": "Минимальный суммарный процент налива Hedge Leg для признания связки валидной (75%).",
+                "decay_map": [
+                    {"iter": 0, "decay_rate": 0.50, "timeout_ms": 50},
+                    {"iter": 1, "decay_rate": 0.75, "timeout_ms": 150},
+                    {"iter": 2, "decay_rate": 1.00, "timeout_ms": 300}
+                ],
+                "decay_map_desc": "Итеративная сетка догона Hedge Leg с постепенной уступкой спреда и расширением таймаутов.",
+                "quarantine_hedge_failed_sec": 1800,
+                "quarantine_hedge_failed_sec_desc": "Карантин связки при сбое хеджирования (< 75% налива)."
             },
-            "fill_confirm_timeout_sec_desc": "Max seconds to poll WS cache for fill confirmation in MARKET mode. Configured per exchange pair.",
-            "fill_confirm_poll_interval_sec": 0.0,
-            "fill_confirm_poll_interval_sec_desc": "Interval (sec) between WS cache reads during fill confirmation polling"
+            "phase4_resolution": {
+                "trim_excess_lead": true,
+                "trim_excess_lead_desc": "При частичном наливе хеджа (>= 75%) отправлять MARKET close/reduce_only для подрезки излишка Lead Leg."
+            }
         },
         "exit": {
             "max_desync_ms": {

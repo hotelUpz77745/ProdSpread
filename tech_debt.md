@@ -67,22 +67,37 @@
   "trading_rules": {
     "entry": {
       "order_execution_type": "ASYMMETRIC_LIMIT_IOC",
+      "signal_filters": {
+        "spread_entry": 0.008,
+        "min_spread_entry": 0.0015,
+        "min_top_depth_usd": 200.0,
+        "max_desync_ms": {"BINANCE_KUCOIN": 125, "BINANCE_BITGET": 200}
+      },
       "exchange_roles": {
         "BINANCE_BITGET": {"lead": "BITGET", "hedge": "BINANCE"},
         "BINANCE_KUCOIN": {"lead": "KUCOIN", "hedge": "BINANCE"}
       },
-      "lead_max_slippage_pct": 0.0005,
-      "max_model_drift_ratio": 0.80,
-      "min_hedge_fill_rate": 0.75,
-      "hedge_decay_map": [
-        {"iter": 0, "decay_rate": 0.50, "timeout_ms": 50},
-        {"iter": 1, "decay_rate": 0.75, "timeout_ms": 150},
-        {"iter": 2, "decay_rate": 1.00, "timeout_ms": 300}
-      ],
-      "quarantine_durations_sec": {
-        "zero_fill": 300,
-        "model_drift": 3600,
-        "hedge_failed": 1800
+      "phase1_lead_leg": {
+        "max_slippage_pct": 0.0005,
+        "fill_confirm_timeout_sec": {"BINANCE_KUCOIN": 0.600, "BINANCE_BITGET": 0.600},
+        "quarantine_zero_fill_sec": 300
+      },
+      "phase2_lead_validation": {
+        "min_notional_usd": 5.0,
+        "max_model_drift_ratio": 0.80,
+        "quarantine_model_drift_sec": 3600
+      },
+      "phase3_hedge_leg": {
+        "min_hedge_fill_rate": 0.75,
+        "decay_map": [
+          {"iter": 0, "decay_rate": 0.50, "timeout_ms": 50},
+          {"iter": 1, "decay_rate": 0.75, "timeout_ms": 150},
+          {"iter": 2, "decay_rate": 1.00, "timeout_ms": 300}
+        ],
+        "quarantine_hedge_failed_sec": 1800
+      },
+      "phase4_resolution": {
+        "trim_excess_lead": true
       }
     },
     "exit": {
