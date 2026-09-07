@@ -400,7 +400,11 @@ class PositionFSM:
             self._set_state(PositionState.ABORTED)
             return False
             
-        drift = abs(lead_price_actual - price_lead_calc)
+        if is_lead_long:
+            drift = max(0.0, lead_price_actual - price_lead_calc)
+        else:
+            drift = max(0.0, price_lead_calc - lead_price_actual)
+            
         model_drift_ratio = drift / (price_lead_calc * entry_cfg.get("spread_entry", 0.008))
         
         max_drift = float(entry_cfg.get("max_model_drift_ratio", 0.80))
@@ -429,10 +433,20 @@ class PositionFSM:
             
             concession = max(0.0, (spread_entry - max(0.0, drift_lead)) * decay_rate)
             
-            if is_lead_long: # Hedge is SELL -> Limit Bid = Live Bid * (1 - Concession)
-                price_hedge_limit = price_hedge_live * (1 - concession)
-            else:            # Hedge is BUY -> Limit Ask = Live Ask * (1 + Concession)
-                price_hedge_limit = price_hedge_live * (1 + concession)
+            
+            min_acceptable_net_spread = float(entry_cfg.get("min_spread_entry", 0.0015))
+            entry_fee_l = float(self.cfg["trading_risks"][self.long_ex.lower()]["taker_fee"])
+            entry_fee_s = float(self.cfg["trading_risks"][self.short_ex.lower()]["taker_fee"])
+            entry_comm = entry_fee_l + entry_fee_s
+            
+            if is_lead_long: # Hedge is SELL -> Limit Bid
+                # P_min_allowed = P_lead_actual_long * (1 + min_acceptable_net_spread + Fees)
+                p_min_allowed = lead_price_actual * (1 + min_acceptable_net_spread + entry_comm)
+                price_hedge_limit = max(price_hedge_live * (1 - concession), p_min_allowed)
+            else:            # Hedge is BUY -> Limit Ask
+                # P_max_allowed = P_lead_actual_short / (1 + min_acceptable_net_spread + Fees)
+                p_max_allowed = lead_price_actual / (1 + min_acceptable_net_spread + entry_comm)
+                price_hedge_limit = min(price_hedge_live * (1 + concession), p_max_allowed)
                 
             qty_needed = req_hedge_qty - hedge_qty_actual
             if qty_needed <= 0.001:
