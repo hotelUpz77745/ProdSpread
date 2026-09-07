@@ -106,6 +106,8 @@ class PositionFSM:
         self.short_pos: Dict[str, float] = {"size": 0.0, "price": 0.0}
         self.open_time: float = 0.0
         self.open_time_ms: int = 0
+        self.ws_fill_timings: Dict[str, float] = {}
+        self.ws_close_timings: Dict[str, float] = {}
 
     def _set_state(self, new_state: PositionState):
         prev = self.state
@@ -128,6 +130,7 @@ class PositionFSM:
         deadline = start_time + self.fill_confirm_timeout
         l_rate = 0.0
         s_rate = 0.0
+        self.ws_fill_timings = {self.long_ex: 0.0, self.short_ex: 0.0}
 
         while True:
             # Безопасное чтение из локального WS-кэша
@@ -153,17 +156,22 @@ class PositionFSM:
             l_rate = (l_size / req_long_qty) if req_long_qty > 0 else 0.0
             s_rate = (s_size / req_short_qty) if req_short_qty > 0 else 0.0
 
+            now = time.perf_counter()
+            elapsed_now_ms = (now - start_time) * 1000.0
+
+            if l_rate >= self.min_fill_rate and self.ws_fill_timings.get(self.long_ex, 0.0) == 0.0:
+                self.ws_fill_timings[self.long_ex] = elapsed_now_ms
+            if s_rate >= self.min_fill_rate and self.ws_fill_timings.get(self.short_ex, 0.0) == 0.0:
+                self.ws_fill_timings[self.short_ex] = elapsed_now_ms
+
             # Предикат готовности обеих ног
             if l_rate >= self.min_fill_rate and s_rate >= self.min_fill_rate:
-                elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-                log(f"[{self.sym}] 🚀 Обе ноги подтверждены реактивно за {elapsed_ms:.2f} мс (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
+                log(f"[{self.sym}] 🚀 Обе ноги подтверждены реактивно за {elapsed_now_ms:.2f} мс (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
                 break
 
-            now = time.perf_counter()
             remaining = deadline - now
             if remaining <= 0:
-                elapsed_ms = (now - start_time) * 1000.0
-                log(f"[{self.sym}] ⏱ Таймаут подтверждения налива ({elapsed_ms:.1f} мс). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
+                log(f"[{self.sym}] ⏱ Таймаут подтверждения налива ({elapsed_now_ms:.1f} мс). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
                 break
 
             # Если пуш уже успел взвести событие до входа в ожидание
@@ -216,6 +224,7 @@ class PositionFSM:
         deadline = start_time + self.close_confirm_timeout
         close_p_long = 0.0
         close_p_short = 0.0
+        self.ws_close_timings = {self.long_ex: 0.0, self.short_ex: 0.0}
 
         while True:
             l_closed = True
@@ -245,16 +254,21 @@ class PositionFSM:
                 except Exception as e:
                     log(f"[{self.sym}] Ошибка чтения WS-кэша закрытия {self.short_ex}: {e}", level="WARNING")
 
+            now = time.perf_counter()
+            elapsed_now_ms = (now - start_time) * 1000.0
+
+            if l_closed and self.ws_close_timings.get(self.long_ex, 0.0) == 0.0:
+                self.ws_close_timings[self.long_ex] = elapsed_now_ms
+            if s_closed and self.ws_close_timings.get(self.short_ex, 0.0) == 0.0:
+                self.ws_close_timings[self.short_ex] = elapsed_now_ms
+
             if l_closed and s_closed:
-                elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-                log(f"[{self.sym}] 🚀 Обе ноги подтверждены закрытыми реактивно за {elapsed_ms:.2f} мс (0.0)", level="INFO")
+                log(f"[{self.sym}] 🚀 Обе ноги подтверждены закрытыми реактивно за {elapsed_now_ms:.2f} мс (0.0)", level="INFO")
                 return True, close_p_long, close_p_short
 
-            now = time.perf_counter()
             remaining = deadline - now
             if remaining <= 0:
-                elapsed_ms = (now - start_time) * 1000.0
-                log(f"[{self.sym}] ⏱ Таймаут подтверждения закрытия по WS ({elapsed_ms:.1f} мс), переход к контрольной проверке...", level="WARNING")
+                log(f"[{self.sym}] ⏱ Таймаут подтверждения закрытия по WS ({elapsed_now_ms:.1f} мс), переход к контрольной проверке...", level="WARNING")
                 return False, close_p_long, close_p_short
 
             if (ev_long and ev_long.is_set()) or (ev_short and ev_short.is_set()):
@@ -329,23 +343,40 @@ class PositionFSM:
         if self.short_ex in self.orders and hasattr(self.orders[self.short_ex], "subscribe_position_update"):
             ev_short = self.orders[self.short_ex].subscribe_position_update(self.native_short, "SHORT")
 
+        t_shot_start = time.perf_counter()
+        latencies: Dict[str, float] = {}
+
+        async def timed_order(ex: str, symbol: str, side: str, size_usd: float, price: float, order_type: str, position_side: str):
+            t0 = time.perf_counter()
+            try:
+                res = await self.orders[ex].place_order(
+                    symbol, side, size_usd, price, order_type=order_type, position_side=position_side
+                )
+                latencies[ex] = (time.perf_counter() - t0) * 1000.0
+                return res
+            except Exception as err:
+                latencies[ex] = (time.perf_counter() - t0) * 1000.0
+                raise err
+
         try:
             # Запускаем ожидание налива СРАЗУ в момент отправки ордеров
             wait_task = asyncio.create_task(self._wait_for_fill_confirmation(req_long_qty, req_short_qty, ev_long, ev_short))
 
             tasks = []
             if self.long_ex in self.orders:
-                tasks.append(self.orders[self.long_ex].place_order(
-                    self.native_long, "BUY", size_long_usd, price_long, order_type="MARKET", position_side="LONG"
+                tasks.append(timed_order(
+                    self.long_ex, self.native_long, "BUY", size_long_usd, price_long, "MARKET", "LONG"
                 ))
             if self.short_ex in self.orders:
-                tasks.append(self.orders[self.short_ex].place_order(
-                    self.native_short, "SELL", size_short_usd, price_short, order_type="MARKET", position_side="SHORT"
+                tasks.append(timed_order(
+                    self.short_ex, self.native_short, "SELL", size_short_usd, price_short, "MARKET", "SHORT"
                 ))
 
             has_submit_error = False
+            gather_ms = 0.0
             if tasks:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
+                gather_ms = (time.perf_counter() - t_shot_start) * 1000.0
                 for res in results:
                     if isinstance(res, Exception):
                         has_submit_error = True
@@ -373,6 +404,19 @@ class PositionFSM:
 
             # Ожидаем завершения подтверждения налива (которое шло параллельно отправке)
             self.long_pos, self.short_pos, l_rate, s_rate = await wait_task
+            total_fill_ms = (time.perf_counter() - t_shot_start) * 1000.0
+            l_rest_ms = latencies.get(self.long_ex, 0.0)
+            s_rest_ms = latencies.get(self.short_ex, 0.0)
+            l_ws_ms = self.ws_fill_timings.get(self.long_ex, 0.0)
+            s_ws_ms = self.ws_fill_timings.get(self.short_ex, 0.0)
+            l_lag = max(0.0, l_ws_ms - l_rest_ms) if l_ws_ms > 0 else 0.0
+            s_lag = max(0.0, s_ws_ms - s_rest_ms) if s_ws_ms > 0 else 0.0
+            log(
+                f"[{self.sym}] ⏱ ТЕЛЕМЕТРИЯ ВХОДА (Итого: {total_fill_ms:.1f} мс | HTTP Gather: {gather_ms:.1f} мс):\n"
+                f"      • {self.long_ex}: REST {l_rest_ms:.1f} мс | WS подтверждение {l_ws_ms:.1f} мс (лаг сокета: +{l_lag:.1f} мс)\n"
+                f"      • {self.short_ex}: REST {s_rest_ms:.1f} мс | WS подтверждение {s_ws_ms:.1f} мс (лаг сокета: +{s_lag:.1f} мс)",
+                level="INFO"
+            )
         finally:
             if self.long_ex in self.orders and hasattr(self.orders[self.long_ex], "unsubscribe_position_update"):
                 self.orders[self.long_ex].unsubscribe_position_update(self.native_long, "LONG")
@@ -573,6 +617,21 @@ class PositionFSM:
         if self.short_ex in self.orders and hasattr(self.orders[self.short_ex], "subscribe_position_update"):
             ev_short = self.orders[self.short_ex].subscribe_position_update(self.native_short, "SHORT")
 
+        t_close_shot_start = time.perf_counter()
+        close_latencies: Dict[str, float] = {}
+
+        async def timed_close_order(ex: str, symbol: str, side: str, size_usd: float, price: float, order_type: str, position_side: str):
+            t0 = time.perf_counter()
+            try:
+                res = await self.orders[ex].place_order(
+                    symbol, side, size_usd, price, order_type=order_type, position_side=position_side
+                )
+                close_latencies[ex] = (time.perf_counter() - t0) * 1000.0
+                return res
+            except Exception as err:
+                close_latencies[ex] = (time.perf_counter() - t0) * 1000.0
+                raise err
+
         try:
             # Запуск мониторинга закрытия по WS параллельно с отправкой ордеров
             close_wait_task = asyncio.create_task(self._wait_for_close_confirmation(ev_long, ev_short))
@@ -580,20 +639,35 @@ class PositionFSM:
             tasks = []
             if long_qty > 0 and self.long_ex in self.orders:
                 size_usd = long_qty * price_long
-                tasks.append(self.orders[self.long_ex].place_order(
-                    self.native_long, "SELL", size_usd, price_long, order_type="MARKET", position_side="LONG"
+                tasks.append(timed_close_order(
+                    self.long_ex, self.native_long, "SELL", size_usd, price_long, "MARKET", "LONG"
                 ))
             if short_qty > 0 and self.short_ex in self.orders:
                 size_usd = short_qty * price_short
-                tasks.append(self.orders[self.short_ex].place_order(
-                    self.native_short, "BUY", size_usd, price_short, order_type="MARKET", position_side="SHORT"
+                tasks.append(timed_close_order(
+                    self.short_ex, self.native_short, "BUY", size_usd, price_short, "MARKET", "SHORT"
                 ))
 
+            close_gather_ms = 0.0
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
+                close_gather_ms = (time.perf_counter() - t_close_shot_start) * 1000.0
 
             # 2. Ожидаем быстрого реактивного подтверждения обнуления по WS (< 0.1 мс)
             is_closed_fast, fast_p_long, fast_p_short = await close_wait_task
+            total_close_ms = (time.perf_counter() - t_close_shot_start) * 1000.0
+            cl_rest_ms = close_latencies.get(self.long_ex, 0.0)
+            cs_rest_ms = close_latencies.get(self.short_ex, 0.0)
+            cl_ws_ms = self.ws_close_timings.get(self.long_ex, 0.0)
+            cs_ws_ms = self.ws_close_timings.get(self.short_ex, 0.0)
+            cl_lag = max(0.0, cl_ws_ms - cl_rest_ms) if cl_ws_ms > 0 else 0.0
+            cs_lag = max(0.0, cs_ws_ms - cs_rest_ms) if cs_ws_ms > 0 else 0.0
+            log(
+                f"[{self.sym}] ⏱ ТЕЛЕМЕТРИЯ ВЫХОДА (Итого: {total_close_ms:.1f} мс | HTTP Gather: {close_gather_ms:.1f} мс):\n"
+                f"      • {self.long_ex}: REST {cl_rest_ms:.1f} мс | WS закрытие {cl_ws_ms:.1f} мс (лаг сокета: +{cl_lag:.1f} мс)\n"
+                f"      • {self.short_ex}: REST {cs_rest_ms:.1f} мс | WS закрытие {cs_ws_ms:.1f} мс (лаг сокета: +{cs_lag:.1f} мс)",
+                level="INFO"
+            )
         finally:
             if self.long_ex in self.orders and hasattr(self.orders[self.long_ex], "unsubscribe_position_update"):
                 self.orders[self.long_ex].unsubscribe_position_update(self.native_long, "LONG")
