@@ -418,8 +418,8 @@ class PositionFSM:
             self._set_state(PositionState.ABORTED)
             return False
             
-        # Проверка жизнеспособности спреда через evaluate_hedge_entry с минимально допустимым порогом
-        min_acceptable_net_spread = float(signal_cfg.get("min_spread_entry", entry_cfg.get("min_spread_entry", 0.0015)))
+        # Проверка жизнеспособности спреда через evaluate_hedge_entry с порогом безубытка (Soft Floor)
+        min_acceptable_net_spread = float(phase2_cfg.get("min_acceptable_net_spread", 0.0000))
         hedge_book = self.engine_res.get("hedge_book")
         price_hedge_live = self.engine_res.get("short_avg_price", 0.0) if is_lead_long else self.engine_res.get("long_avg_price", 0.0)
         
@@ -482,7 +482,7 @@ class PositionFSM:
                 
             try:
                 await self.orders[hedge_ex].place_order(
-                    native_hedge, hedge_side, usd_needed, price_hedge_limit, order_type="LIMIT_IOC", position_side=hedge_pos_side
+                    native_hedge, hedge_side, usd_needed, price_hedge_limit, order_type="LIMIT_IOC", position_side=hedge_pos_side, exact_qty=qty_needed
                 )
             except Exception as e:
                 log(f"[{self.sym}] Ошибка отправки Hedge: {e}", level="WARNING")
@@ -526,7 +526,7 @@ class PositionFSM:
                 log(f"[{self.sym}] Подрезка излишка Lead Leg на {delta_qty:.4f}", level="WARNING")
                 try:
                     await self.orders[lead_ex].place_order(
-                        native_lead, reduce_side, delta_usd, lead_price_actual, order_type="MARKET", position_side=lead_pos_side, reduce_only=True
+                        native_lead, reduce_side, delta_usd, lead_price_actual, order_type="MARKET", position_side=lead_pos_side, reduce_only=True, exact_qty=delta_qty
                     )
                 except Exception as e:
                     log(f"[{self.sym}] Ошибка подрезки Lead Leg: {e}", level="ERROR")

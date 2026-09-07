@@ -23,6 +23,10 @@ class TradingEngine:
         self.max_slippage_ratio = float(signal_cfg["max_slippage_ratio"])
         self.hard_max_slippage = float(signal_cfg["hard_max_slippage"])
         self.min_top_depth_usd = float(signal_cfg.get("min_top_depth_usd", 0.0))
+        self.check_obi_filter = bool(signal_cfg.get("check_obi_filter", True))
+        self.max_adverse_imbalance = float(signal_cfg.get("max_adverse_imbalance", 0.45))
+        self.obi_levels = int(signal_cfg.get("obi_levels", 5))
+        self.exchange_roles = self.cfg.get("trading_rules", {}).get("entry", {}).get("exchange_roles", {})
         self.decay_map = self.cfg["trading_rules"]["exit"]["relative_profit_decay_map"]
         self.extreme_decay_map = self.cfg["trading_rules"]["exit"].get("extreme_profit_decay_map", [
             {"index": 0, "seconds": 0, "target_val": 0.0000},
@@ -98,6 +102,29 @@ class TradingEngine:
             return False, {
                 "reason": f"LOW_SPREAD (Net: {net_spread * 100:.3f}% < {self.spread_entry * 100:.3f}%, Gross: {vwap_spread * 100:.3f}%, Fee: {entry_comm * 100:.3f}%)"
             }
+            
+        # ФИЛЬТР ДАВЛЕНИЯ СТАКАНА HEDGE НОГИ (Order Book Imbalance)
+        if self.check_obi_filter:
+            route_key = f"{long_ex}_{short_ex}"
+            rev_route_key = f"{short_ex}_{long_ex}"
+            role_info = self.exchange_roles.get(route_key) or self.exchange_roles.get(rev_route_key)
+            if role_info:
+                hedge_name = role_info.get("hedge")
+                hedge_book = long_book if long_ex == hedge_name else (short_book if short_ex == hedge_name else None)
+                if hedge_book:
+                    h_bids = hedge_book.get("bids", [])[:self.obi_levels]
+                    h_asks = hedge_book.get("asks", [])[:self.obi_levels]
+                    sum_bids = sum(float(b[1]) for b in h_bids) if h_bids else 0.0
+                    sum_asks = sum(float(a[1]) for a in h_asks) if h_asks else 0.0
+                    total_vol = sum_bids + sum_asks
+                    if total_vol > 0.0:
+                        imbalance = (sum_bids - sum_asks) / total_vol
+                        # Если Hedge идет в Long (покупка из asks), перекос в bids (давление вверх) неблагоприятен
+                        if long_ex == hedge_name and imbalance > self.max_adverse_imbalance:
+                            return False, {"reason": f"ADVERSE_OBI_HEDGE_BUY (Imbalance: {imbalance:+.2f} > +{self.max_adverse_imbalance:.2f})"}
+                        # Если Hedge идет в Short (продажа в bids), перекос в asks (давление вниз) неблагоприятен
+                        if short_ex == hedge_name and imbalance < -self.max_adverse_imbalance:
+                            return False, {"reason": f"ADVERSE_OBI_HEDGE_SELL (Imbalance: {imbalance:+.2f} < -{self.max_adverse_imbalance:.2f})"}
             
         # СИНТЕТИЧЕСКАЯ ПРОВЕРКА ВЫХОДА (Round-Trip Liquidity Check)
         # Опциональный рубильник в конфиге. Симулирует немедленный выход из позиции.

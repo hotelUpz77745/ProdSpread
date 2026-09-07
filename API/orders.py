@@ -18,6 +18,11 @@ def round_by_step(value: float, step_str, rounding=ROUND_HALF_UP) -> str:
     try:
         step = Decimal(str(step_str)).normalize()
         val = Decimal(str(value))
+        if rounding == ROUND_FLOOR:
+            # Protect against floating point imprecision (e.g., 99.99999999999999 -> 100)
+            val += step * Decimal('1e-8')
+        elif rounding == ROUND_CEILING:
+            val -= step * Decimal('1e-8')
         precision = max(0, -step.as_tuple().exponent)
         steps = (val / step).quantize(Decimal('1'), rounding=rounding)
         quantized_val = steps * step
@@ -165,7 +170,11 @@ class BinanceOrder:
         step_size = lot_size_filter.get('stepSize', '1') if lot_size_filter else '1'
         tick_size = price_filter.get('tickSize', '0.01') if price_filter else '0.01'
         
-        raw_qty = size_usd / price
+        exact_qty = kwargs.get("exact_qty")
+        if exact_qty is not None and float(exact_qty) > 0:
+            raw_qty = float(exact_qty)
+        else:
+            raw_qty = size_usd / price
         price_rounding = ROUND_FLOOR if side.upper() == "BUY" else ROUND_CEILING
         qty_str = round_by_step(raw_qty, step_size, rounding=ROUND_FLOOR)
         price_str = round_by_step(price, tick_size, rounding=price_rounding)
@@ -512,7 +521,11 @@ class KucoinOrder:
         tick_size = symbol_data.get('tickSize', 0.1)
         multiplier = float(symbol_data.get('multiplier', 1.0))
         
-        raw_lots = (size_usd / price) / multiplier
+        exact_qty = kwargs.get("exact_qty")
+        if exact_qty is not None and float(exact_qty) > 0:
+            raw_lots = float(exact_qty) / multiplier
+        else:
+            raw_lots = (size_usd / price) / multiplier
         
         price_rounding = ROUND_FLOOR if side.upper() == "BUY" else ROUND_CEILING
         qty_str = round_by_step(raw_lots, lot_size, rounding=ROUND_FLOOR)
@@ -986,7 +999,11 @@ class BitgetOrder:
         volumePlace = int(symbol_data.get('volumePlace', 0))
         pricePlace = int(symbol_data.get('pricePlace', 2))
         
-        raw_qty = (size_usd / price) / sizeMultiplier
+        exact_qty = kwargs.get("exact_qty")
+        if exact_qty is not None and float(exact_qty) > 0:
+            raw_qty = float(exact_qty) / sizeMultiplier
+        else:
+            raw_qty = (size_usd / price) / sizeMultiplier
         price_step = f"1e-{pricePlace}" if pricePlace > 0 else "1"
         vol_step = f"1e-{volumePlace}" if volumePlace > 0 else "1"
         price_rounding = ROUND_FLOOR if side.upper() == "BUY" else ROUND_CEILING

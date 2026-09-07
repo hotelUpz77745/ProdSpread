@@ -104,6 +104,7 @@ class ExecutorProcess:
         self.analytics_map = {}
         self.active_fsm = {}
         self.banned_symbols = {}
+        self.a1_collapse_counts = {}
         self.coin_to_native = {}
         self._running = True
 
@@ -128,6 +129,18 @@ class ExecutorProcess:
             pass
 
     def ban_coin(self, sym: str, reason: str = "", duration_sec: float = None):
+        if "Spread Collapsed" in reason:
+            count = self.a1_collapse_counts.get(sym, 0) + 1
+            self.a1_collapse_counts[sym] = count
+            p2_cfg = self.cfg.get("trading_rules", {}).get("entry", {}).get("phase2_lead_validation", {})
+            if count == 1:
+                duration_sec = float(p2_cfg.get("quarantine_a1_step1_sec", 180))
+            elif count == 2:
+                duration_sec = float(p2_cfg.get("quarantine_a1_step2_sec", 900))
+            else:
+                duration_sec = float(p2_cfg.get("quarantine_a1_step3_sec", 3600))
+            reason = f"{reason} (A1 consecutive collapse #{count})"
+            
         expire_time = (time.time() + duration_sec) if duration_sec else None
         self.banned_symbols[sym] = expire_time
         self._save_banned()
@@ -283,6 +296,7 @@ class ExecutorProcess:
             if net_usd < 0:
                 self.ban_coin(sym, reason=f"Убыточная сделка ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)")
             else:
+                self.a1_collapse_counts.pop(sym, None)
                 log(f"[{sym}] 🎉 Прибыльная сделка ({reason}): Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", level="INFO")
         except Exception as e:
             log(f"[{sym}] Ошибка локального клиринга PnL: {e}", level="ERROR")

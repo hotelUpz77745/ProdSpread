@@ -114,7 +114,11 @@
                 "check_synthetic_exit": true,
                 "check_synthetic_slippage": true,
                 "max_slippage_ratio": 0.5,
-                "hard_max_slippage": 0.015
+                "hard_max_slippage": 0.015,
+                "check_obi_filter": true,
+                "max_adverse_imbalance": 0.45,
+                "obi_levels": 5,
+                "check_obi_filter_desc": "Фильтр давления стакана Hedge-биржи перед выстрелом в Lead. Отсекает вход, если стакан Hedge перекошен против направления хеджа."
             },
             "exchange_roles": {
                 "BINANCE_BITGET": {"lead": "BITGET", "hedge": "BINANCE"},
@@ -140,19 +144,24 @@
             "phase2_lead_validation": {
                 "min_notional_usd": 5.0,
                 "min_notional_usd_desc": "Минимальный налитый объем Lead Leg в долларах (порог minNotional для возможности хеджирования на Binance).",
+                "min_acceptable_net_spread": 0.0000,
+                "min_acceptable_net_spread_desc": "Порог жизнеспособности спреда (Soft Floor). Если чистый спред >= 0.0000, хедж продолжается до уровня безубытка. При падении ниже 0.0000 - Ветка А1.",
                 "max_model_drift_ratio": 0.80,
                 "max_model_drift_ratio_desc": "Максимально допустимый дрейф расчетной цены (80% от входного спреда). При превышении - Ветка А1 (сброс ноги).",
-                "quarantine_model_drift_sec": 3600
+                "quarantine_a1_step1_sec": 180,
+                "quarantine_a1_step2_sec": 900,
+                "quarantine_a1_step3_sec": 3600,
+                "quarantine_a1_desc": "Адаптивный прогрессивный карантин при последовательных сбросах по Ветке А1: 1-й -> 3м, 2-й -> 15м, 3-й+ -> 60м."
             },
             "phase3_hedge_leg": {
                 "min_hedge_fill_rate": 0.75,
                 "min_hedge_fill_rate_desc": "Минимальный суммарный процент налива Hedge Leg для признания связки валидной (75%).",
                 "decay_map": [
-                    {"iter": 0, "decay_rate": 0.50, "timeout_ms": 50},
-                    {"iter": 1, "decay_rate": 0.75, "timeout_ms": 150},
-                    {"iter": 2, "decay_rate": 1.00, "timeout_ms": 300}
+                    {"iter": 0, "decay_rate": 1.00, "timeout_ms": 50},
+                    {"iter": 1, "decay_rate": 0.50, "timeout_ms": 150},
+                    {"iter": 2, "decay_rate": 0.00, "timeout_ms": 300}
                 ],
-                "decay_map_desc": "Итеративная сетка догона Hedge Leg с постепенной уступкой спреда и расширением таймаутов.",
+                "decay_map_desc": "Итеративная сетка догона: iter 0 (полный спред), iter 1 (уступка 50%), iter 2 (дожим по безубытку decay_rate=0.0).",
                 "quarantine_hedge_failed_sec": 1800,
                 "quarantine_hedge_failed_sec_desc": "Карантин связки при сбое хеджирования (< 75% налива)."
             },
