@@ -87,11 +87,12 @@
     },
     "exit": {
       "relative_profit_decay_map": [
-        {"step": 0, "seconds": 0,   "ratio": 0.80},
-        {"step": 1, "seconds": 15,  "ratio": 0.60},
-        {"step": 2, "seconds": 45,  "ratio": 0.40},
-        {"step": 3, "seconds": 120, "ratio": 0.20},
-        {"step": 4, "seconds": 240, "ratio": 0.00}
+        {"step": 0, "seconds": 0,  "ratio": 0.80},
+        {"step": 1, "seconds": 5,  "ratio": 0.50},
+        {"step": 2, "seconds": 15, "ratio": 0.25},
+        {"step": 3, "seconds": 30, "ratio": 0.00},
+        {"step": 4, "seconds": 45, "ratio": -0.20},
+        {"step": 5, "seconds": 60, "ratio": -999.0}
       ]
     }
   }

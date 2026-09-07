@@ -264,5 +264,8 @@ class TradingEngine:
                 if duration_sec >= float(rule["seconds"]):
                     ratio = float(rule.get("ratio", 0.0))
                     idx = int(rule.get("step", 0))
-            target = actual_net_spread_entry * ratio
+            if ratio <= -900.0:
+                target = -999.0
+            else:
+                target = actual_net_spread_entry * ratio
         return target, idx
