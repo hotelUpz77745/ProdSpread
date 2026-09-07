@@ -1029,6 +1029,9 @@ class BitgetOrder:
             "clientOid": str(uuid.uuid4())
         }
         
+        if position_side:
+            body["posSide"] = position_side.lower()
+        
         if order_type == "LIMIT_IOC":
             body["orderType"] = "limit"
             body["price"] = price_str
@@ -1049,6 +1052,8 @@ class BitgetOrder:
             'ACCESS-PASSPHRASE': self.api_passphrase,
             'Content-Type': 'application/json'
         }
+        
+        print(f"BITGET DEBUG REQUEST: {body_str}")
         
         url = f"https://api.bitget.com{endpoint}"
         async with self.session.post(url, headers=headers, data=body_str) as resp:
