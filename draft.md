@@ -41,7 +41,7 @@ await asyncio.sleep(self.cfg["EXECUTION_PAUSE"]) нужно дергать ме�
 
 
 
-async def _wait_for_fill_confirmation(
+<!-- async def _wait_for_fill_confirmation(
     self, req_long_qty: float, req_short_qty: float
 ) -> Tuple[Dict[str, float], Dict[str, float], float, float]:
     """
@@ -77,4 +77,4 @@ async def _wait_for_fill_confirmation(
 
         await asyncio.sleep(self.fill_confirm_poll_interval)
 
-    return self.long_pos, self.short_pos, l_rate, s_rate
+    return self.long_pos, self.short_pos, l_rate, s_rate -->

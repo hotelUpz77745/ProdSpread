@@ -1,8 +1,17 @@
-# 🧠 Архитектура HFT Спредера (Mental Map v5.1)
+# 🧠 Архитектура HFT Спредера (Mental Map v6.0 - Transition to Hybrid/Limit Execution)
 
-Проект представляет собой промышленный высокочастотный арбитражный комплекс (Hedge/Spread), торгующий синтетический межбиржевой спред между криптобиржами в режиме **Hedge Mode**. Бот написан на асинхронном Python (`asyncio`), использует `@njit` (`Numba`) для микросекундной фильтрации стаканов и архитектуру изолированных процессов с приватными WebSocket-стримами данных и горячими REST-сессиями исполнения.
-
-В версии **v5.1** архитектура сфокусирована на **ультранизкой задержке (Ultra-Low Latency HFT, < 30 мс)**: прямой параллельный рыночный вход (`MARKET`) через постоянные прогретые TCP/TLS keepalive REST-сессии, нативные приватные WebSocket-стримы позиций (`/contract/positionAll` на Kucoin, `ACCOUNT_UPDATE` на Binance, приватный WS на Bitget), адаптивный контроль качества входа (`min_spread_entry` + `extreme_profit_decay_map`) и мгновенный 1-Shot Kill-Switch при рассинхроне.
+> [!WARNING]
+> **СТАТУС ТЕКУЩЕЙ АРХИТЕКТУРЫ (РЫНОЧНЫЙ ВХОД TAKER-TAKER): СИСТЕМА НЕРАБОЧАЯ В БОЕВЫХ УСЛОВИЯХ**
+> В версии **v6.0** инженерный низкоуровневый фундамент доведен до совершенства:
+> - Внедрена **реактивная шина на `asyncio.Event`** во все приватные WebSocket-стримы (Binance, KuCoin, Bitget), устранившая 15.6 мс джиттер системного таймера Windows и снизившая время пробуждения `PositionFSM` до $< 0.1$ мс.
+> - Поддерживается параллельный прогретый REST RTT **25–30 мс** до биржевых серверов в Токио.
+> - Внедрена гранулярная пошаговая телеметрия в реальном времени (RTT REST отдельно по ногам, время HTTP gather, задержка WS push).
+> 
+> **Однако торговая стратегия чистого рыночного входа в обе ноги (`order_execution_type: "MARKET"`) признана полностью нежизнеспособной:**
+> 1. **Иллюзия глубины:** На альткоинах объем на Best Bid/Ask составляет всего $5–$20. Поиск уровней с объемом $200 ныряет глубоко в стакан, рассчитывая мнимый спред, тогда как реальный `MARKET`-ордер сносит тонкие уровни и фиксирует отрицательный спред на входе.
+> 2. **Математический тупик комиссий:** Четыре taker-комиссии (вход + выход обеих ног = 0.24%) вместе с неизбежным проскальзыванием 0.2–0.4% делают удержание позиции убыточным при любых рыночных колебаниях.
+> 
+> **Вердикт:** Инфраструктура v6.0 служит высокоскоростным транспортом, а сам алгоритм исполнения заморожен как `DEPRECATED` и ожидает глобального рефакторинга (Maker-Taker / лимитная постановка / жесткий фильтр Top-1 ликвидности).
 
 ---
 
@@ -31,14 +40,16 @@
 │               (CORE/executor_process.py)               │
 │  • Pre-warmed Persistent TCP/TLS REST Sessions         │
 │    (Keepalive Loop каждые 45с с фейк-ордерами warmup)  │
-│  • Position FSM (Finite State Machine per Position)    │
-│  • Direct Fast MARKET Order Dispatch (asyncio.gather)  │
+│  • Position FSM (Reactive Finite State Machine)        │
+│  • Reactive Event Bus (asyncio.Event per symbol/side)  │
+│    [Zero OS Timer Sleep Jitter: FSM wakeup < 0.1 ms]   │
+│  • Granular Timing Telemetry (REST RTT + WS Push Lag)  │
+│  • Direct Fast Order Dispatch (asyncio.gather)         │
 │  • Real-Time Private WS Position Streams:              │
 │      - Binance: ACCOUNT_UPDATE (мгновенный кэш)        │
 │      - Kucoin: /contract/positionAll & tradeOrders     │
 │      - Bitget: v2 Private Positions Channel            │
 │  • Actual Entry Spread Validation (min_spread_entry)   │
-│  • Reactive Fill/Close Verification via WS (5–20 ms)   │
 │  • 1-Shot HFT Market Kill-Switch (emergency unwind)    │
 │  • Instant 0ms PnL Calculation (analytics.py)          │
 │  • Automated Margin & Leverage Setup (leverage_setter) │
@@ -60,15 +71,25 @@
   - Поддерживает две карты деградации: `profit_decay_map` (основная) и `extreme_profit_decay_map` (аварийная).
 
 ### 2. Execution & FSM Engine (`CORE/executor_process.py` + `CORE/position_fsm.py`)
+- **Реактивная шина событий (Reactive Event Bus v6.0):**
+  - Во всех приватных сокетах (`API/BINANCE/ws_private_binance.py`, `API/KUCOIN/ws_private_kucoin.py`, `API/BITGET/ws_private_bitget.py`) внедрены реестры `_update_events[(symbol, side)] = asyncio.Event()`.
+  - При получении пуша об изменении позиции или исполнении сделки сокет мгновенно дергает `_notify(symbol, side)`, пробуждая ожидающие корутины в микросекунды ($< 0.1$ мс).
+  - В `PositionFSM` методы `_wait_for_fill_confirmation` и `_wait_for_close_confirmation` переведены на предикатные циклы с пробуждением по первому завершенному событию (`asyncio.wait(..., return_when=FIRST_COMPLETED)`). Полностью ликвидирован системный джиттер Windows-таймеров (15.6 мс) от вызовов `asyncio.sleep()`.
+  - Подписка на события регистрируется **до** выстрела ордеров (защита от гонок), а отписка гарантируется блоком `finally`.
+- **Гранулярная телеметрия латентности:**
+  - В моменты входа (`run_open`) и выхода (`run_close`) замеряется и логируется пошаговый профиль времени:
+    - Чистый REST RTT по каждой ноге отдельно (`orders[ex].place_order`);
+    - Время параллельного сбора HTTP ответов (`asyncio.gather`);
+    - Точный тайминг прихода WebSocket-пуша подтверждения налива/обнуления по каждой бирже;
+    - Чистый лаг сокета относительно HTTP ответа.
 - **Прогретые REST-сессии (`API/orders.py`):** 
   - Высокоскоростная прямая отправка ордеров через нативный HTTP REST по прогретым соединениям.
-  - Фоновый цикл `_keepalive_loop()` раз в 45 сек (настраивается в `network_settings.rest_keepalive_interval_sec`) шлет фейковые невалидные ордера (`warmup`), удерживая открытыми постоянные TCP/TLS сокеты к серверам бирж в Токио.
-  - Защита `idle_warmup_threshold_sec`: если бот недавно торговал, фейковые запросы не отправляются, сокет уже горячий.
-  - Латентность параллельной отправки обеих ног в бою: **`26–29 мс`**!
+  - Фоновый цикл `_keepalive_loop()` раз в 45 сек шлет фейковые невалидные ордера (`warmup`), удерживая открытыми постоянные TCP/TLS сокеты к серверам бирж в Токио.
+  - Латентность параллельной отправки обеих ног в бою: **`25–30 мс`**!
 - **Приватные стримы позиций (`ws_private_*.py`):**
-  - **Kucoin**: подписан на официальный топик `/contract/positionAll` + сохраняет цены исполнения сделок из `tradeOrders` в `last_close_prices`. При `currentQty == 0` позиция мгновенно сбрасывается в 0.0. Скорость подтверждения закрытия: **`5.6 мс`**!
-  - **Binance**: мгновенно ловит `ACCOUNT_UPDATE` и обнуляет кэш. Скорость: **`5–10 мс`**.
-  - **Bitget**: слушает канал позиций и `fill` ордеров. Скорость: **`50–60 мс`**.
+  - **Kucoin**: подписан на топик `/contract/positionAll` + кэш `last_close_prices` из `tradeOrders`. Скорость закрытия: **`5–15 мс`**.
+  - **Binance**: мгновенно ловит `ACCOUNT_UPDATE` и обнуляет кэш. Скорость: **`5–25 мс`**.
+  - **Bitget**: слушает канал позиций и `fill` ордеров. Внутренний диспатч биржи занимает **`50–70 мс`**.
 - **Контроль фактического спреда входа (`min_spread_entry`):**
   - Сразу после налива ордеров FSM берет фактические цены исполнения $P_{\text{long}}$ и $P_{\text{short}}$ из стримов и рассчитывает чистый факт спреда с учетом комиссий:
     $$\text{Actual Net Spread} = \frac{P_{\text{short}} - P_{\text{long}}}{P_{\text{long}}} - (\text{Fee}_{\text{long}} + \text{Fee}_{\text{short}})$$
