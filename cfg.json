@@ -113,8 +113,8 @@
                 "max_desync_ms_desc": "Пороги рассинхрона стаканов (мс) для каждой связки. Настроены индивидуально под скорость стримов бирж.",
                 "check_synthetic_exit": true,
                 "check_synthetic_slippage": true,
-                "max_slippage_ratio": 0.5,
-                "hard_max_slippage": 0.015,
+                "max_slippage_ratio": 0.35,
+                "hard_max_slippage": 0.008,
                 "check_obi_filter": true,
                 "max_adverse_imbalance": 0.45,
                 "obi_levels": 5,
@@ -150,27 +150,27 @@
             "phase2_lead_validation": {
                 "min_notional_usd": 6.0,
                 "min_notional_usd_desc": "Минимальный налитый объем Lead Leg в долларах (порог minNotional для возможности хеджирования на Binance).",
-                "min_acceptable_net_spread": 0.0000,
-                "min_acceptable_net_spread_desc": "Порог жизнеспособности спреда (Soft Floor). Если чистый спред >= 0.0000, хедж продолжается до уровня безубытка. При падении ниже 0.0000 - Ветка А1.",
+                "min_acceptable_net_spread": 0.0010,
+                "min_acceptable_net_spread_desc": "Порог жизнеспособности спреда (Soft Floor). Минимальный суммарный чистый спред связки после комиссий для разрешения хеджа. Если < 0.0010 (10 bps), срабатывает Ветка А1 (сброс ноги).",
                 "max_model_drift_ratio": 0.80,
                 "max_model_drift_ratio_desc": "Максимально допустимый дрейф расчетной цены (80% от входного спреда). При превышении - Ветка А1 (сброс ноги).",
-                "quarantine_a1_step1_sec": 180,
-                "quarantine_a1_step2_sec": 900,
+                "quarantine_a1_step1_sec": 3600,
+                "quarantine_a1_step2_sec": 3600,
                 "quarantine_a1_step3_sec": 3600,
-                "quarantine_a1_desc": "Адаптивный прогрессивный карантин при последовательных сбросах по Ветке А1: 1-й -> 3м, 2-й -> 15м, 3-й+ -> 60м."
+                "quarantine_a1_desc": "Карантин при сбросе по Ветке А1 (фикса 1 час)."
             },
             "phase3_hedge_leg": {
                 "min_hedge_fill_rate": 0.75,
-                "min_hedge_fill_rate_desc": "Минимальный суммарный процент налива Hedge Leg для признания связки валидной (75%).",
+                "min_hedge_fill_rate_desc": "Минимальный суммарный процент налива Hedge Leg относительно фактически налитого объема Lead-ноги для признания связки валидной (75%).",
                 "decay_map": [
                     {
                         "iter": 0,
-                        "decay_rate": 1.00,
+                        "decay_rate": 0.60,
                         "timeout_ms": 50
                     },
                     {
                         "iter": 1,
-                        "decay_rate": 0.50,
+                        "decay_rate": 0.30,
                         "timeout_ms": 150
                     },
                     {
@@ -179,7 +179,7 @@
                         "timeout_ms": 300
                     }
                 ],
-                "decay_map_desc": "Итеративная сетка догона: iter 0 (полный спред), iter 1 (уступка 50%), iter 2 (дожим по безубытку decay_rate=0.0).",
+                "decay_map_desc": "Итеративная сетка догона: iter 0 (уступка 40% спреда для надежного забора), iter 1 (уступка 70%), iter 2 (дожим по минимальному порогу спреда).",
                 "quarantine_hedge_failed_sec": 1800,
                 "quarantine_hedge_failed_sec_desc": "Карантин связки при сбое хеджирования (< 75% налива)."
             },
@@ -246,11 +246,16 @@
                 },
                 {
                     "index": 1,
-                    "seconds": 60,
+                    "seconds": 10,
+                    "target_val": -0.0005
+                },
+                {
+                    "index": 2,
+                    "seconds": 20,
                     "target_val": -999.0
                 }
             ],
-            "extreme_profit_decay_map_desc": "Экстремальная карта выхода при плохом фактическом входе (факт <= min_spread_entry). Шаг 0: выход в 0. Шаг 1: через 60 сек выход по любой цене."
+            "extreme_profit_decay_map_desc": "Экстремальная карта выхода при слабом фактическом входе (факт <= min_spread_entry). Шаг 0: безубыток. Шаг 1: через 10 сек уступка -0.05%. Шаг 2: через 20 сек принудительный выход по рынку."
         },
         "ban_rules": {
             "is_active": true,
