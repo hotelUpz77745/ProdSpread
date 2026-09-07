@@ -12,14 +12,14 @@ import hashlib
 import base64
 import uuid
 import json
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, ROUND_FLOOR, ROUND_CEILING
 
-def round_by_step(value: float, step_str) -> str:
+def round_by_step(value: float, step_str, rounding=ROUND_HALF_UP) -> str:
     try:
         step = Decimal(str(step_str)).normalize()
         val = Decimal(str(value))
         precision = max(0, -step.as_tuple().exponent)
-        steps = (val / step).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+        steps = (val / step).quantize(Decimal('1'), rounding=rounding)
         quantized_val = steps * step
         return f"{quantized_val:.{precision}f}"
     except Exception:
@@ -166,8 +166,9 @@ class BinanceOrder:
         tick_size = price_filter.get('tickSize', '0.01') if price_filter else '0.01'
         
         raw_qty = size_usd / price
-        qty_str = round_by_step(raw_qty, step_size)
-        price_str = round_by_step(price, tick_size)
+        price_rounding = ROUND_FLOOR if side.upper() == "BUY" else ROUND_CEILING
+        qty_str = round_by_step(raw_qty, step_size, rounding=ROUND_FLOOR)
+        price_str = round_by_step(price, tick_size, rounding=price_rounding)
         
         if float(qty_str) <= 0:
             raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_qty={raw_qty}, step_size={step_size}).")
@@ -513,8 +514,9 @@ class KucoinOrder:
         
         raw_lots = (size_usd / price) / multiplier
         
-        qty_str = round_by_step(raw_lots, lot_size)
-        price_str = round_by_step(price, tick_size)
+        price_rounding = ROUND_FLOOR if side.upper() == "BUY" else ROUND_CEILING
+        qty_str = round_by_step(raw_lots, lot_size, rounding=ROUND_FLOOR)
+        price_str = round_by_step(price, tick_size, rounding=price_rounding)
         
         if float(qty_str) <= 0:
             raise ValueError(f"[{symbol}] Calculated order size is 0 after rounding (raw_lots={raw_lots}, lot_size={lot_size}, multiplier={multiplier}).")
@@ -985,8 +987,11 @@ class BitgetOrder:
         pricePlace = int(symbol_data.get('pricePlace', 2))
         
         raw_qty = (size_usd / price) / sizeMultiplier
-        qty_str = f"{raw_qty:.{volumePlace}f}"
-        price_str = f"{price:.{pricePlace}f}"
+        price_step = f"1e-{pricePlace}" if pricePlace > 0 else "1"
+        vol_step = f"1e-{volumePlace}" if volumePlace > 0 else "1"
+        price_rounding = ROUND_FLOOR if side.upper() == "BUY" else ROUND_CEILING
+        qty_str = round_by_step(raw_qty, vol_step, rounding=ROUND_FLOOR)
+        price_str = round_by_step(price, price_step, rounding=price_rounding)
         
         if float(qty_str) <= 0:
             raise ValueError(f"[{symbol}] Calculated order size is 0")
