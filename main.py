@@ -433,6 +433,10 @@ class Main:
                                             # Выдержка подтверждена - сбрасываем ключ
                                             self._signal_first_seen.pop(sig_key, None)
                                             
+                                        roles_cfg = self.cfg["trading_rules"]["entry"]["exchange_roles"].get(route, {})
+                                        hedge_ex_name = roles_cfg.get("hedge", long_ex if short_ex == roles_cfg.get("lead") else short_ex)
+                                        hedge_book_snap = self.books.get(hedge_ex_name, {}).get(sym, {})
+                                        
                                         self.pm.lock_for_entry(long_ex, short_ex, sym, engine_res)
                                         # Отправляем команду на открытие в Executor Process
                                         if self.executor_writer:
@@ -441,7 +445,8 @@ class Main:
                                                 "route": route,
                                                 "long_ex": long_ex,
                                                 "short_ex": short_ex,
-                                                "engine_res": engine_res
+                                                "engine_res": engine_res,
+                                                "hedge_book": hedge_book_snap
                                             }))
                                         break
                                     else:

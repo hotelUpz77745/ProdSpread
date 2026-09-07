@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, Tuple
 from c_log import log
 from CORE.ipc_socket import async_write_msg
 from API.orders import InsufficientMarginError
+from CORE.trading_engine import TradingEngine
 
 
 class PositionState(str, Enum):
@@ -58,6 +59,7 @@ class PositionFSM:
         self.native_short = self.coin_to_native[sym][short_ex] if sym in self.coin_to_native and short_ex in self.coin_to_native[sym] else sym
 
         self.state = PositionState.IDLE
+        self.engine = TradingEngine(self.cfg, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
         entry_cfg = self.cfg["trading_rules"]["entry"]
         lead_cfg = entry_cfg.get("phase1_lead_leg", entry_cfg)
         hedge_cfg = entry_cfg.get("phase3_hedge_leg", entry_cfg)
@@ -416,20 +418,27 @@ class PositionFSM:
             self._set_state(PositionState.ABORTED)
             return False
             
-        if is_lead_long:
-            drift = max(0.0, lead_price_actual - price_lead_calc)
-        else:
-            drift = max(0.0, price_lead_calc - lead_price_actual)
-            
-        spread_entry = float(signal_cfg.get("spread_entry", entry_cfg.get("spread_entry", 0.008)))
-        model_drift_ratio = drift / (price_lead_calc * spread_entry)
+        # Проверка жизнеспособности спреда через evaluate_hedge_entry с минимально допустимым порогом
+        min_acceptable_net_spread = float(signal_cfg.get("min_spread_entry", entry_cfg.get("min_spread_entry", 0.0015)))
+        hedge_book = self.engine_res.get("hedge_book")
+        price_hedge_live = self.engine_res.get("short_avg_price", 0.0) if is_lead_long else self.engine_res.get("long_avg_price", 0.0)
         
-        max_drift = float(phase2_cfg.get("max_model_drift_ratio", entry_cfg.get("max_model_drift_ratio", 0.80)))
-        if model_drift_ratio > max_drift:
+        is_viable, viable_eval = self.engine.evaluate_hedge_entry(
+            hedge_book=hedge_book,
+            lead_direction=lead_side,
+            lead_price=lead_price_actual,
+            lead_qty=lead_qty_actual,
+            target_net_spread=min_acceptable_net_spread,
+            lead_ex=lead_ex,
+            hedge_ex=hedge_ex,
+            live_price_fallback=price_hedge_live
+        )
+        
+        if not is_viable:
             drift_quarantine_sec = float(phase2_cfg.get("quarantine_model_drift_sec", quarantine_cfg.get("model_drift", 3600)))
-            log(f"[{self.sym}] Ветка А1 (Model Drift): Отклонение {model_drift_ratio*100:.1f}% > {max_drift*100:.1f}%. Сброс ноги.", level="WARNING")
+            log(f"[{self.sym}] Ветка А1 (Spread Collapsed): Невозможно захеджировать с мин. спредом {min_acceptable_net_spread*100:.2f}%. {viable_eval.get('reason')}. Сброс ноги.", level="WARNING")
             await self._emergency_unwind_single(lead_ex, native_lead, lead_qty_actual, lead_price_actual, lead_side, lead_pos_side)
-            self.ban_coin_cb(self.sym, reason="Model Drift", duration_sec=drift_quarantine_sec)
+            self.ban_coin_cb(self.sym, reason="Spread Collapsed", duration_sec=drift_quarantine_sec)
             self._set_state(PositionState.ABORTED)
             return False
             
@@ -439,37 +448,33 @@ class PositionFSM:
         hedge_decay_map = phase3_cfg.get("decay_map", entry_cfg.get("hedge_decay_map", [{"iter": 0, "decay_rate": 1.0, "timeout_ms": 300}]))
         hedge_qty_actual = 0.0
         req_hedge_qty = lead_qty_actual # Мы хотим налить ровно столько, сколько налили в Lead
-        
-        drift_lead = (lead_price_actual - price_lead_calc) / price_lead_calc if is_lead_long else (price_lead_calc - lead_price_actual) / price_lead_calc
-        price_hedge_live = self.engine_res.get("short_avg_price", 0.0) if is_lead_long else self.engine_res.get("long_avg_price", 0.0)
+        spread_entry = float(signal_cfg.get("spread_entry", entry_cfg.get("spread_entry", 0.008)))
         
         for step in hedge_decay_map:
             decay_rate = float(step.get("decay_rate", 1.0))
             timeout_ms = int(step.get("timeout_ms", 300))
             
-            concession = max(0.0, (spread_entry - max(0.0, drift_lead)) * decay_rate)
+            # Таргет спреда для текущей итерации дожима
+            target_step_spread = max(min_acceptable_net_spread, spread_entry * decay_rate)
             
-            
-            min_acceptable_net_spread = float(signal_cfg.get("min_spread_entry", entry_cfg.get("min_spread_entry", 0.0015)))
-            entry_fee_l = float(self.cfg["trading_risks"][self.long_ex.lower()]["taker_fee"])
-            entry_fee_s = float(self.cfg["trading_risks"][self.short_ex.lower()]["taker_fee"])
-            entry_comm = entry_fee_l + entry_fee_s
-            
-            if is_lead_long: # Hedge is SELL -> Limit Bid
-                # P_min_allowed = P_lead_actual_long * (1 + min_acceptable_net_spread + Fees)
-                p_min_allowed = lead_price_actual * (1 + min_acceptable_net_spread + entry_comm)
-                price_hedge_limit = max(price_hedge_live * (1 - concession), p_min_allowed)
-            else:            # Hedge is BUY -> Limit Ask
-                # P_max_allowed = P_lead_actual_short / (1 + min_acceptable_net_spread + Fees)
-                p_max_allowed = lead_price_actual / (1 + min_acceptable_net_spread + entry_comm)
-                price_hedge_limit = min(price_hedge_live * (1 + concession), p_max_allowed)
-                
             qty_needed = req_hedge_qty - hedge_qty_actual
             if qty_needed <= 0.001:
                 break
                 
+            is_step_valid, hedge_eval = self.engine.evaluate_hedge_entry(
+                hedge_book=hedge_book,
+                lead_direction=lead_side,
+                lead_price=lead_price_actual,
+                lead_qty=qty_needed,
+                target_net_spread=target_step_spread,
+                lead_ex=lead_ex,
+                hedge_ex=hedge_ex,
+                live_price_fallback=price_hedge_live
+            )
+            
+            price_hedge_limit = hedge_eval["order_price"]
             usd_needed = qty_needed * price_hedge_limit
-            log(f"[{self.sym}] Phase 3 (Iter {step.get('iter')}): Hedge LIMIT_IOC | Qty: {qty_needed:.4f} | P: {price_hedge_limit:.6f}", level="INFO")
+            log(f"[{self.sym}] Phase 3 (Iter {step.get('iter')}): Hedge LIMIT_IOC | Qty: {qty_needed:.4f} | P: {price_hedge_limit:.6f} | Net: {hedge_eval.get('net_spread', 0.0)*100:+.3f}% (Target: {target_step_spread*100:+.3f}%)", level="INFO")
             
             ev_hedge = None
             if hedge_ex in self.orders and hasattr(self.orders[hedge_ex], "subscribe_position_update"):

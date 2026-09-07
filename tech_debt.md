@@ -140,48 +140,37 @@
 Из ответа и приватного сокета извлекаются точные фактические значения: $Q_{\text{lead}}$, $P_{\text{lead\_actual}}$.
 
 * **Защита minNotional:**
-* Проверка номинала: $\text{Notional}_{\text{usd}} = Q_{\text{lead}} \cdot P_{\text{lead\_actual}}$.
-* Если $\text{Notional}_{\text{usd}} < \text{minNotional}_{\text{hedge}}$ (менее $5 на Binance): сброс Lead Leg по рынку, карантин `hedge_failed`, выход.
+  * Проверка номинала: $\text{Notional}_{\text{usd}} = Q_{\text{lead}} \cdot P_{\text{lead\_actual}}$.
+  * Если $\text{Notional}_{\text{usd}} < \text{minNotional}_{\text{hedge}}$ (менее $5 на Binance): сброс Lead Leg по рынку, карантин `hedge_failed`, выход.
 
-
-* **Ветка А1 (Фильтр отклонения от теоретической модели):**
-* Расчет расхождения фактической цены налива относительно синтетической расчетной цены модели:
-
-$$\text{Model Drift Ratio} = \frac{\vert{}P_{\text{lead\_actual}} - P_{\text{lead\_calc\_vwap}}\vert{}}{P_{\text{lead\_calc\_vwap}} \cdot \text{spread\_entry}}$$
-
-
-* Если $\text{Model Drift Ratio} > \text{max\_model\_drift\_ratio}$ (более $80\%$ расчетного спреда съедено уже на первой ноге):
-1. Немедленная ликвидация ноги Lead встречным `MARKET`-ордером.
-2. Помещение монеты в карантин на `model_drift` (3600 сек).
-3. Статус `ABORTED_DRIFT`.
-
-
-
-
+* **Ветка А1 (Оценка жизнеспособности через `evaluate_hedge_entry`):**
+  * Сразу после налива ноги 1 вызывается метод `evaluate_hedge_entry` с минимально допустимым порогом `min_spread_entry` (0.15%):
+    $$\text{vwap\_spread} = \frac{P_{\text{short}} - P_{\text{long}}}{P_{\text{long}}}$$
+    $$\text{net\_spread} = \text{vwap\_spread} - (F_{\text{lead}} + F_{\text{hedge}})$$
+  * Если стакан на Binance уже улетел и $\text{net\_spread} < \text{min\_spread\_entry}$:
+    1. Немедленная ликвидация ноги Lead встречным `MARKET`-ордером.
+    2. Помещение монеты в карантин на `model_drift` (3600 сек).
+    3. Статус `ABORTED_SPREAD_COLLAPSED`.
 
 ---
 
 #### Фаза 3: Дожим сильной ноги (Ветка А2)
 
-Если отклонение в пределах нормы, запускается цикл подтягивания Hedge Leg (Binance) по `hedge_decay_map` (до 3 итераций):
+Если спред жизнеспособен, запускается цикл подтягивания Hedge Leg (Binance) по `hedge_decay_map` (до 3 итераций):
 
 * Для каждой попытки $i \in [0, 1, 2]$:
-1. Вычисляется доступный буфер уступки спреда:
-
-$$\text{Concession} = (\text{spread\_entry} - \text{drift}_{\text{lead}}) \cdot \text{decay\_rate}_i$$
-
-
-2. Лимитная цена ордера рассчитывается от **актуального живого стакана Binance** ($P_{\text{hedge\_live}}$), гарантируя чистый спред:
-* Если Hedge = BUY: $P_{\text{limit}} = P_{\text{hedge\_live\_ask}} \cdot (1 + \text{Concession})$
-* Если Hedge = SELL: $P_{\text{limit}} = P_{\text{hedge\_live\_bid}} \cdot (1 - \text{Concession})$
-
-
-3. Отправка `LIMIT_IOC` на объем $Q_{\text{needed}} = Q_{\text{lead\_actual}} - Q_{\text{hedge\_filled}}$.
-4. Ожидание ответа с таймаутом `timeout_ms`.
-5. Если нога налита на $100\%$: цикл прерывается, статус `ACTIVE_HEDGED`.
-6. Если нога отклонена или налита частично: переход к следующей ступени карты.
-
-
+  1. Вычисляется целевой спред: $\text{Target}_{\text{net}} = \max(\text{min\_spread\_entry},\ \text{spread\_entry} \cdot \text{decay\_rate}_i)$.
+  2. Вызывается `evaluate_hedge_entry`, гарантирующий безопасную лимитную цену:
+     * **Hedge = SELL (Lead = LONG):**
+       $$P_{\text{limit\_floor}} = P_{\text{lead}} \cdot (1 + \text{Target}_{\text{net}} + F_{\text{total}})$$
+       $$P_{\text{order}} = \max(P_{\text{deepest\_bid}},\ P_{\text{limit\_floor}})$$
+     * **Hedge = BUY (Lead = SHORT):**
+       $$P_{\text{limit\_ceiling}} = \frac{P_{\text{lead}}}{1 + \text{Target}_{\text{net}} + F_{\text{total}}}$$
+       $$P_{\text{order}} = \min(P_{\text{deepest\_ask}},\ P_{\text{limit\_ceiling}})$$
+  3. Отправка `LIMIT_IOC` строго по безопасной цене $P_{\text{order}}$ на объем $Q_{\text{needed}} = Q_{\text{lead\_actual}} - Q_{\text{hedge\_filled}}$.
+  4. Ожидание ответа с таймаутом `timeout_ms`.
+  5. Если нога налита на $100\%$: цикл прерывается, статус `ACTIVE_HEDGED`.
+  6. Если нога отклонена или налита частично: переход к следующей ступени карты.
 
 ---
 

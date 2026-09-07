@@ -174,6 +174,8 @@ class ExecutorProcess:
         long_ex = data["long_ex"]
         short_ex = data["short_ex"]
         engine_res = data["engine_res"]
+        if "hedge_book" in data and "hedge_book" not in engine_res:
+            engine_res["hedge_book"] = data["hedge_book"]
 
         fsm = PositionFSM(
             sym=sym,

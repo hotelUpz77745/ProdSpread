@@ -3,7 +3,7 @@
 # ROLE: Оценка входа и выхода из позиций.
 # ============================================================
 
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 from CORE.math_core import OrderbookUtils
 
 class TradingEngine:
@@ -140,6 +140,102 @@ class TradingEngine:
             "long_ask_offset": long_ask_offset,
             "short_bid_offset": short_bid_offset
         }
+
+    def evaluate_hedge_entry(
+        self,
+        hedge_book: Optional[Dict[str, Any]],
+        lead_direction: str,  # "BUY" (Lead Long) or "SELL" (Lead Short)
+        lead_price: float,
+        lead_qty: float,
+        target_net_spread: float,
+        lead_ex: str,
+        hedge_ex: str,
+        live_price_fallback: float = 0.0
+    ) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Оценка возможности входа/дожима Hedge-ноги с зафиксированной ценой Lead-ноги.
+        Использует ровно ту же формулу, что и evaluate_entry:
+            vwap_spread = (short_price - long_price) / long_price
+            net_spread = vwap_spread - (lead_fee + hedge_fee)
+        
+        lead_direction: 'BUY' (Lead открыл Long) или 'SELL' (Lead открыл Short).
+        """
+        lead_fee = self._get_fee(lead_ex)
+        hedge_fee = self._get_fee(hedge_ex)
+        total_fees = lead_fee + hedge_fee
+        hedge_vol = self._get_vol_discount_entry(hedge_ex)
+
+        if lead_direction == "BUY":
+            # Lead встал в Long -> Hedge обязан встать в Short (Sell по bids)
+            bids = hedge_book.get("bids", []) if isinstance(hedge_book, dict) else []
+            if bids:
+                vwap_bid, deep_price = OrderbookUtils.calculate_vwap_and_deepest_price(bids, lead_qty, hedge_vol)
+            elif live_price_fallback > 0.0:
+                vwap_bid = live_price_fallback
+                deep_price = live_price_fallback
+            else:
+                return False, {"reason": "EMPTY_HEDGE_BIDS"}
+
+            if vwap_bid <= 0.0:
+                return False, {"reason": "INSUFFICIENT_HEDGE_LIQUIDITY"}
+
+            gross_spread = (vwap_bid - lead_price) / lead_price
+            net_spread = gross_spread - total_fees
+
+            # Порог цены: ниже продавать нельзя, иначе чистый спред упадет ниже target_net_spread
+            limit_floor = lead_price * (1.0 + target_net_spread + total_fees)
+            order_price = max(deep_price, limit_floor)
+
+            is_valid = (net_spread >= target_net_spread) and (vwap_bid >= limit_floor)
+
+            return is_valid, {
+                "side": "SELL",
+                "vwap_price": vwap_bid,
+                "deep_price": deep_price,
+                "limit_floor": limit_floor,
+                "order_price": order_price,
+                "net_spread": net_spread,
+                "gross_spread": gross_spread,
+                "target_net_spread": target_net_spread,
+                "total_fees": total_fees,
+                "reason": "OK" if is_valid else f"NET_SPREAD_LOW (Net:{net_spread*100:+.3f}% < Target:{target_net_spread*100:+.3f}%, VWAP:{vwap_bid:.6f} < Floor:{limit_floor:.6f})"
+            }
+
+        else:
+            # Lead встал в Short -> Hedge обязан встать в Long (Buy по asks)
+            asks = hedge_book.get("asks", []) if isinstance(hedge_book, dict) else []
+            if asks:
+                vwap_ask, deep_price = OrderbookUtils.calculate_vwap_and_deepest_price(asks, lead_qty, hedge_vol)
+            elif live_price_fallback > 0.0:
+                vwap_ask = live_price_fallback
+                deep_price = live_price_fallback
+            else:
+                return False, {"reason": "EMPTY_HEDGE_ASKS"}
+
+            if vwap_ask <= 0.0:
+                return False, {"reason": "INSUFFICIENT_HEDGE_LIQUIDITY"}
+
+            gross_spread = (lead_price - vwap_ask) / vwap_ask
+            net_spread = gross_spread - total_fees
+
+            # Порог цены: выше покупать нельзя, иначе чистый спред упадет ниже target_net_spread
+            limit_ceiling = lead_price / (1.0 + target_net_spread + total_fees)
+            order_price = min(deep_price, limit_ceiling)
+
+            is_valid = (net_spread >= target_net_spread) and (vwap_ask <= limit_ceiling)
+
+            return is_valid, {
+                "side": "BUY",
+                "vwap_price": vwap_ask,
+                "deep_price": deep_price,
+                "limit_ceiling": limit_ceiling,
+                "order_price": order_price,
+                "net_spread": net_spread,
+                "gross_spread": gross_spread,
+                "target_net_spread": target_net_spread,
+                "total_fees": total_fees,
+                "reason": "OK" if is_valid else f"NET_SPREAD_LOW (Net:{net_spread*100:+.3f}% < Target:{target_net_spread*100:+.3f}%, VWAP:{vwap_ask:.6f} > Ceiling:{limit_ceiling:.6f})"
+            }
 
     def evaluate_exit(self, 
                       long_book: Dict[str, Any], 

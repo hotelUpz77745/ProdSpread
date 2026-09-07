@@ -132,12 +132,13 @@
                      │
                      ├── Фаза 2: Валидация налива Lead Leg
                      │     └─ Проверка minNotional (напр. > 5$)
-                     │     └─ Проверка Model Drift Ratio (уход цены от синтетической модели)
-                     │     └─ Если уход > 80% -> 1-Shot Market Kill-Switch (Сброс ноги)
+                     │     └─ Оценка спреда через evaluate_hedge_entry с порогом min_spread_entry
+                     │     └─ Если чистый спред < min_spread_entry -> 1-Shot Market Kill-Switch (Сброс ноги, Ветка А1)
                      │
                      ├── Фаза 3: Дожим сильной ноги (Hedge Leg)
-                     │     └─ Итеративный заброс LIMIT_IOC ордеров с уступкой спреда
-                     │     └─ До 3 попыток по карте hedge_decay_map
+                     │     └─ Итеративный заброс LIMIT_IOC по безопасной цене evaluate_hedge_entry
+                     │     └─ Строгие ценовые границы: limit_floor (SELL) / limit_ceiling (BUY)
+                     │     └─ До 3 попыток по карте hedge_decay_map с контролем target_net_spread
                      │
                      ├── Фаза 4: Выравнивание дельты
                      │     └─ Если недолив < 25%: MARKET reduce_only подрезка излишка Lead Leg

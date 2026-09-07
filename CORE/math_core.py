@@ -61,6 +61,34 @@ def calc_vwap_qty_jit(book_array: np.ndarray, target_qty: float, volatility_disc
     return total_usd / target_qty
 
 @njit(fastmath=True, cache=True)
+def calc_vwap_and_deepest_price_jit(book_array: np.ndarray, target_qty: float, volatility_discount: float):
+    """
+    Calculates VWAP and deepest touched price for absorbing target_qty.
+    Returns (vwap_price, deepest_price). If insufficient volume, returns (0.0, 0.0).
+    """
+    total_usd = 0.0
+    needed_qty = target_qty
+    deepest_price = 0.0
+    
+    for i in range(book_array.shape[0]):
+        price = book_array[i, 0]
+        qty = book_array[i, 1] * volatility_discount
+        deepest_price = price
+        
+        if needed_qty >= qty:
+            total_usd += price * qty
+            needed_qty -= qty
+        else:
+            total_usd += price * needed_qty
+            needed_qty = 0.0
+            break
+            
+    if needed_qty > 0.0 or target_qty == 0.0:
+        return 0.0, 0.0
+        
+    return total_usd / target_qty, deepest_price
+
+@njit(fastmath=True, cache=True)
 def calc_execution_qty_limit_jit(book_array: np.ndarray, target_qty: float, limit_price: float, is_buy: bool, volatility_discount: float):
     """
     Calculates the filled quantity and VWAP price constrained by a limit price.
@@ -114,6 +142,13 @@ class OrderbookUtils:
         if arr.shape[0] == 0:
             return 0.0
         return calc_vwap_qty_jit(arr, target_qty, volatility_discount)
+
+    @staticmethod
+    def calculate_vwap_and_deepest_price(book_side: List[Any], target_qty: float, volatility_discount: float = 1.0) -> tuple:
+        arr = np.array(book_side, dtype=np.float64)
+        if arr.shape[0] == 0:
+            return 0.0, 0.0
+        return calc_vwap_and_deepest_price_jit(arr, target_qty, volatility_discount)
 
     @staticmethod
     def calculate_execution_by_qty_and_limit(book_side: List[Any], target_qty: float, limit_price: float, is_buy: bool, volatility_discount: float) -> tuple:
