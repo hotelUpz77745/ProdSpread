@@ -192,6 +192,8 @@ class PositionFSM:
             )
             for t in pending:
                 t.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
             if ev_long:
                 ev_long.clear()
@@ -279,6 +281,8 @@ class PositionFSM:
             )
             for t in pending:
                 t.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
             if ev_long:
                 ev_long.clear()
