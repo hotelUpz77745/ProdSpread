@@ -48,10 +48,10 @@ class Main:
         
         # Configs
         self.entry_desync_limit = self.cfg["trading_rules"]["entry"]["max_desync_ms"]
-        self.exit_desync_limit  = self.cfg["trading_rules"]["exit"].get("max_desync_ms")
+        self.exit_desync_limit  = self.cfg["trading_rules"]["exit"]["max_desync_ms"]
         self.top_n_candidates   = self.cfg["trading_rules"]["entry"]["top_n_candidates"]
-        self.min_signal_dwell_ms = float(self.cfg["trading_rules"]["entry"].get("min_signal_dwell_ms", 0.0))
-        self.min_top_depth_usd = float(self.cfg["trading_rules"]["entry"].get("min_top_depth_usd", 0.0))
+        self.min_signal_dwell_ms = float(self.cfg["trading_rules"]["entry"]["min_signal_dwell_ms"])
+        self.min_top_depth_usd = float(self.cfg["trading_rules"]["entry"]["min_top_depth_usd"])
         self._signal_first_seen = {}
         self.topology_rebuild_interval = self.cfg["topology_rebuild_interval_sec"]
         
@@ -276,7 +276,8 @@ class Main:
                             is_stakan_valid=is_stakan_valid,
                             long_executed_volume_rate=long_rate,
                             short_executed_volume_rate=short_rate,
-                            decay_map=active_decay_map
+                            decay_map=active_decay_map,
+                            actual_net_spread_entry=state["details"].get("actual_net_spread", 0.0)
                         )
                         
                         # Защита от фантомных импульсов на выходе (только для PROFIT_DECAY)

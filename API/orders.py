@@ -176,7 +176,14 @@ class BinanceOrder:
         self.last_activity_ts = time.time()
         timestamp = int(time.time() * 1000)
         pos_side_str = f"&positionSide={position_side.upper()}" if position_side else ""
-        query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=MARKET&quantity={qty_str}&timestamp={timestamp}"
+        
+        if order_type == "LIMIT_IOC":
+            query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type=LIMIT&timeInForce=IOC&quantity={qty_str}&price={price_str}&timestamp={timestamp}"
+        else:
+            query_string = f"symbol={symbol}&side={side.upper()}{pos_side_str}&type={order_type.upper()}&quantity={qty_str}&timestamp={timestamp}"
+            if order_type.upper() == "LIMIT":
+                query_string += f"&price={price_str}&timeInForce=GTC"
+            
         signature = self._generate_signature(query_string)
         
         url = f"https://fapi.binance.com/fapi/v1/order?{query_string}&signature={signature}"
@@ -526,10 +533,19 @@ class KucoinOrder:
             "symbol": symbol,
             "side": side.lower(),
             "size": qty_str,
-            "type": "market",
             "leverage": leverage,
             "marginMode": marginMode
         }
+        
+        if order_type == "LIMIT_IOC":
+            body["type"] = "limit"
+            body["price"] = price_str
+            body["timeInForce"] = "IOC"
+        elif order_type.upper() == "LIMIT":
+            body["type"] = "limit"
+            body["price"] = price_str
+        else:
+            body["type"] = order_type.lower()
             
         if position_side:
             body["positionSide"] = position_side.upper()
@@ -988,14 +1004,15 @@ class BitgetOrder:
             elif p_side == "SHORT" and side.upper() == "BUY":
                 is_close = True
 
-        # Bitget v2 API: place-order с tradeSide="close" возвращает 22002.
-        # Для закрытия используем специальный эндпоинт close-positions.
-        if is_close and position_side:
+        # Bitget v2 API: Для полного закрытия используем специальный эндпоинт close-positions.
+        # Для частичной подрезки (reduce_only=True) отправляем обычный ордер с tradeSide="close".
+        reduce_only = kwargs.get("reduce_only", False)
+        if is_close and position_side and not reduce_only:
             hold = position_side.upper()
             if hold in ("LONG", "SHORT"):
                 return await self._close_position(symbol, hold.lower())
 
-        trade_side = "open"
+        trade_side = "close" if is_close else "open"
 
         mm = self.margin_settings["margin_type"].lower()
         if mm == "cross":
@@ -1009,9 +1026,18 @@ class BitgetOrder:
             "size": qty_str,
             "side": side.lower(),
             "tradeSide": trade_side,
-            "orderType": "market",
             "clientOid": str(uuid.uuid4())
         }
+        
+        if order_type == "LIMIT_IOC":
+            body["orderType"] = "limit"
+            body["price"] = price_str
+            body["force"] = "ioc"
+        elif order_type.upper() == "LIMIT":
+            body["orderType"] = "limit"
+            body["price"] = price_str
+        else:
+            body["orderType"] = order_type.lower()
             
         body_str = json.dumps(body)
         signature = self._generate_signature(now, "POST", endpoint, body_str)

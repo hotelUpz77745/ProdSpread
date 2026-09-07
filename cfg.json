@@ -92,8 +92,25 @@
     },
     "trading_rules": {
         "entry": {
-            "order_execution_type": "MARKET",
-            "order_execution_type_desc": "Allowed values: MARKET (IOC and LIMIT_GTC removed)",
+            "order_execution_type": "ASYMMETRIC_LIMIT_IOC",
+            "order_execution_type_desc": "Allowed values: MARKET, ASYMMETRIC_LIMIT_IOC",
+            "exchange_roles": {
+                "BINANCE_BITGET": {"lead": "BITGET", "hedge": "BINANCE"},
+                "BINANCE_KUCOIN": {"lead": "KUCOIN", "hedge": "BINANCE"}
+            },
+            "lead_max_slippage_pct": 0.0005,
+            "max_model_drift_ratio": 0.80,
+            "min_hedge_fill_rate": 0.75,
+            "hedge_decay_map": [
+                {"iter": 0, "decay_rate": 0.50, "timeout_ms": 50},
+                {"iter": 1, "decay_rate": 0.75, "timeout_ms": 150},
+                {"iter": 2, "decay_rate": 1.00, "timeout_ms": 300}
+            ],
+            "quarantine_durations_sec": {
+                "zero_fill": 300,
+                "model_drift": 3600,
+                "hedge_failed": 1800
+            },
             "max_desync_ms": {
                 "BINANCE_KUCOIN": 125,
                 "BINANCE_BITGET": 200,
@@ -146,42 +163,12 @@
                 "OKX_BITGET": 1.800
             },
             "close_confirm_timeout_sec_desc": "Max seconds to poll WS cache for zero-size position confirmation on exit. Configured per exchange pair.",
-            "profit_decay_map": [
-                {
-                    "index": 0,
-                    "seconds": 0,
-                    "target_val": 0.0045
-                },
-                {
-                    "index": 1,
-                    "seconds": 15,
-                    "target_val": 0.0035
-                },
-                {
-                    "index": 2,
-                    "seconds": 60,
-                    "target_val": 0.0025
-                },
-                {
-                    "index": 3,
-                    "seconds": 180,
-                    "target_val": 0.0010
-                },
-                {
-                    "index": 4,
-                    "seconds": 300,
-                    "target_val": 0.0000
-                },
-                {
-                    "index": 5,
-                    "seconds": 780,
-                    "target_val": -0.0010
-                },
-                {
-                    "index": 6,
-                    "seconds": 1260,
-                    "target_val": -999.0
-                }
+            "relative_profit_decay_map": [
+                {"step": 0, "seconds": 0,   "ratio": 0.80},
+                {"step": 1, "seconds": 15,  "ratio": 0.60},
+                {"step": 2, "seconds": 45,  "ratio": 0.40},
+                {"step": 3, "seconds": 120, "ratio": 0.20},
+                {"step": 4, "seconds": 240, "ratio": 0.00}
             ],
             "extreme_profit_decay_map": [
                 {

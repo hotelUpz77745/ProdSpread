@@ -21,7 +21,7 @@ class TradingEngine:
         self.check_synthetic_slippage = bool(self.cfg["trading_rules"]["entry"]["check_synthetic_slippage"])
         self.max_slippage_ratio = float(self.cfg["trading_rules"]["entry"]["max_slippage_ratio"])
         self.hard_max_slippage = float(self.cfg["trading_rules"]["entry"]["hard_max_slippage"])
-        self.decay_map = self.cfg["trading_rules"]["exit"]["profit_decay_map"]
+        self.decay_map = self.cfg["trading_rules"]["exit"]["relative_profit_decay_map"]
         self.extreme_decay_map = self.cfg["trading_rules"]["exit"].get("extreme_profit_decay_map", [
             {"index": 0, "seconds": 0, "target_val": 0.0000},
             {"index": 1, "seconds": 60, "target_val": -999.0}
@@ -153,9 +153,10 @@ class TradingEngine:
                       is_stakan_valid: bool = True,
                       long_executed_volume_rate: float = 1.0,
                       short_executed_volume_rate: float = 1.0,
-                      decay_map: list = None) -> Tuple[bool, Dict[str, Any]]:
+                      decay_map: list = None,
+                      actual_net_spread_entry: float = 0.0) -> Tuple[bool, Dict[str, Any]]:
         
-        target_val, exit_level_index = self.get_exit_target_val(duration_sec, decay_map=decay_map)
+        target_val, exit_level_index = self.get_exit_target_val(duration_sec, actual_net_spread_entry, decay_map=decay_map)
         is_ttl = target_val <= -999.0
         reported_target = None if is_ttl else target_val
         
@@ -247,12 +248,21 @@ class TradingEngine:
             "short_executed_volume_rate": short_executed_volume_rate
         }
 
-    def get_exit_target_val(self, duration_sec: float, decay_map: list = None) -> Tuple[float, int]:
+    def get_exit_target_val(self, duration_sec: float, actual_net_spread_entry: float = 0.0, decay_map: list = None) -> Tuple[float, int]:
         m = decay_map if decay_map is not None else self.decay_map
-        target = m[0]["target_val"]
-        idx = int(m[0]["index"])
-        for rule in m:
-            if duration_sec >= float(rule["seconds"]):
-                target = float(rule["target_val"])
-                idx = int(rule["index"])
+        if "target_val" in m[0]:
+            target = m[0]["target_val"]
+            idx = int(m[0].get("index", m[0].get("step", 0)))
+            for rule in m:
+                if duration_sec >= float(rule["seconds"]):
+                    target = float(rule["target_val"])
+                    idx = int(rule.get("index", rule.get("step", 0)))
+        else:
+            ratio = m[0].get("ratio", 0.0)
+            idx = int(m[0].get("step", 0))
+            for rule in m:
+                if duration_sec >= float(rule["seconds"]):
+                    ratio = float(rule.get("ratio", 0.0))
+                    idx = int(rule.get("step", 0))
+            target = actual_net_spread_entry * ratio
         return target, idx

@@ -305,188 +305,267 @@ class PositionFSM:
 
     async def run_open(self) -> bool:
         """
-        Запуск пайплайна открытия позиции (Market-Only):
-        IDLE -> SUBMITTING (MARKET via WS) -> VERIFYING_FILL -> ACTIVE_HEDGED / EMERGENCY_UNWIND / ABORTED
+        Запуск пайплайна открытия позиции (ASYMMETRIC_LIMIT_IOC):
+        IDLE -> SUBMITTING (Lead Leg) -> VERIFYING_FILL -> ACTIVE_HEDGED / EMERGENCY_UNWIND / ABORTED
         """
         self._set_state(PositionState.SUBMITTING)
-        spread_val = self.engine_res.get("net_spread", self.engine_res.get("vwap_spread", 0.0))
-        gross_val = self.engine_res.get("vwap_spread", 0.0)
-        log(f"[{self.sym}] Открываем: LONG {self.long_ex} | SHORT {self.short_ex} | Net Spread: {spread_val * 100:.2f}% (Gross: {gross_val * 100:.2f}%, Режим: MARKET)", level="INFO")
-
-        # 1. Расчет цен и объемов
-        size_long_usd = float(self.cfg["trading_risks"][self.long_ex.lower()]["trade_size_usd"])
-        size_short_usd = float(self.cfg["trading_risks"][self.short_ex.lower()]["trade_size_usd"])
-        price_long = self.engine_res.get("long_avg_price", 0.0)
-        price_short = self.engine_res.get("short_avg_price", 0.0)
-
-        # 2. Pre-flight Validation (проверка шага лота, спецификаций и цен ДО выстрела)
-        try:
-            if self.long_ex in self.orders and hasattr(self.orders[self.long_ex], "check_order_size"):
-                self.orders[self.long_ex].check_order_size(self.native_long, size_long_usd, price_long)
-            if self.short_ex in self.orders and hasattr(self.orders[self.short_ex], "check_order_size"):
-                self.orders[self.short_ex].check_order_size(self.native_short, size_short_usd, price_short)
-        except Exception as pre_err:
-            log(f"[{self.sym}] ⛔ Pre-flight Validation Rejected: {pre_err}", level="WARNING")
+        
+        entry_cfg = self.cfg["trading_rules"]["entry"]
+        roles_cfg = entry_cfg["exchange_roles"].get(self.route)
+        if not roles_cfg:
+            log(f"[{self.sym}] ⛔ Нет ролей для связки {self.route} (ASYMMETRIC_LIMIT_IOC невозможен).", level="WARNING")
             self._set_state(PositionState.IDLE)
             return False
-
-        # 3. Отправка рыночных ордеров в параллель с реактивной шиной
-        self._set_state(PositionState.VERIFYING_FILL)
-        req_long_qty = self.engine_res.get("long_qty", 0.0)
-        req_short_qty = self.engine_res.get("short_qty", 0.0)
-
-        # Регистрация реактивных подписок ДО отправки ордеров (Защита от Race Condition)
-        ev_long = None
-        ev_short = None
-        if self.long_ex in self.orders and hasattr(self.orders[self.long_ex], "subscribe_position_update"):
-            ev_long = self.orders[self.long_ex].subscribe_position_update(self.native_long, "LONG")
-        if self.short_ex in self.orders and hasattr(self.orders[self.short_ex], "subscribe_position_update"):
-            ev_short = self.orders[self.short_ex].subscribe_position_update(self.native_short, "SHORT")
-
-        t_shot_start = time.perf_counter()
-        latencies: Dict[str, float] = {}
-
-        async def timed_order(ex: str, symbol: str, side: str, size_usd: float, price: float, order_type: str, position_side: str):
-            t0 = time.perf_counter()
-            try:
-                res = await self.orders[ex].place_order(
-                    symbol, side, size_usd, price, order_type=order_type, position_side=position_side
-                )
-                latencies[ex] = (time.perf_counter() - t0) * 1000.0
-                return res
-            except Exception as err:
-                latencies[ex] = (time.perf_counter() - t0) * 1000.0
-                raise err
-
+            
+        lead_ex = roles_cfg["lead"]
+        hedge_ex = roles_cfg["hedge"]
+        
+        # Mapping to long/short roles
+        is_lead_long = (lead_ex == self.long_ex)
+        native_lead = self.native_long if is_lead_long else self.native_short
+        native_hedge = self.native_short if is_lead_long else self.native_long
+        
+        lead_side = "BUY" if is_lead_long else "SELL"
+        hedge_side = "SELL" if is_lead_long else "BUY"
+        
+        lead_pos_side = "LONG" if is_lead_long else "SHORT"
+        hedge_pos_side = "SHORT" if is_lead_long else "LONG"
+        
+        spread_val = self.engine_res.get("net_spread", self.engine_res.get("vwap_spread", 0.0))
+        gross_val = self.engine_res.get("vwap_spread", 0.0)
+        
+        log(f"[{self.sym}] Открываем (ASYMMETRIC_LIMIT_IOC): Lead={lead_ex} | Hedge={hedge_ex} | Net Spread: {spread_val * 100:.2f}%", level="INFO")
+        
+        size_long_usd = float(self.cfg["trading_risks"][self.long_ex.lower()]["trade_size_usd"])
+        size_short_usd = float(self.cfg["trading_risks"][self.short_ex.lower()]["trade_size_usd"])
+        
+        size_lead_usd = size_long_usd if is_lead_long else size_short_usd
+        price_lead_calc = self.engine_res.get("long_avg_price", 0.0) if is_lead_long else self.engine_res.get("short_avg_price", 0.0)
+        
+        lead_max_slip = float(entry_cfg.get("lead_max_slippage_pct", 0.0005))
+        if is_lead_long:
+            price_lead_limit = price_lead_calc * (1 + lead_max_slip)
+        else:
+            price_lead_limit = price_lead_calc * (1 - lead_max_slip)
+            
+        # =========================================================================
+        # PHASE 1: Выстрел в Lead Leg
+        # =========================================================================
+        ev_lead = None
+        if lead_ex in self.orders and hasattr(self.orders[lead_ex], "subscribe_position_update"):
+            ev_lead = self.orders[lead_ex].subscribe_position_update(native_lead, lead_pos_side)
+            
         try:
-            # Запускаем ожидание налива СРАЗУ в момент отправки ордеров
-            wait_task = asyncio.create_task(self._wait_for_fill_confirmation(req_long_qty, req_short_qty, ev_long, ev_short))
-
-            tasks = []
-            if self.long_ex in self.orders:
-                tasks.append(timed_order(
-                    self.long_ex, self.native_long, "BUY", size_long_usd, price_long, "MARKET", "LONG"
-                ))
-            if self.short_ex in self.orders:
-                tasks.append(timed_order(
-                    self.short_ex, self.native_short, "SELL", size_short_usd, price_short, "MARKET", "SHORT"
-                ))
-
-            has_submit_error = False
-            gather_ms = 0.0
-            if tasks:
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                gather_ms = (time.perf_counter() - t_shot_start) * 1000.0
-                for res in results:
-                    if isinstance(res, Exception):
-                        has_submit_error = True
-                        log(f"[{self.sym}] 🚨 Ошибка входа! Рассинхрон ног: {res}.", level="ERROR")
-                        if isinstance(res, InsufficientMarginError):
-                            self.ban_coin_cb(self.sym, reason="Недостаточно маржи (Margin Error)", duration_sec=86400)
-                        else:
-                            self.ban_coin_cb(self.sym, reason=str(res), duration_sec=3600)
-                        break
-
-            if has_submit_error:
-                wait_task.cancel()
-                # Немедленно отменяем открытые ордера по успевшей ноге
-                cancel_tasks = []
-                if self.long_ex in self.orders:
-                    cancel_tasks.append(self.orders[self.long_ex].cancel_all_orders(self.native_long))
-                if self.short_ex in self.orders:
-                    cancel_tasks.append(self.orders[self.short_ex].cancel_all_orders(self.native_short))
-                if cancel_tasks:
-                    await asyncio.gather(*cancel_tasks, return_exceptions=True)
-
-                # Контрольный REST GET и дозакрытие остатков перед выходом
-                await self._emergency_unwind()
-                return False
-
-            # Ожидаем завершения подтверждения налива (которое шло параллельно отправке)
-            self.long_pos, self.short_pos, l_rate, s_rate = await wait_task
-            total_fill_ms = (time.perf_counter() - t_shot_start) * 1000.0
-            l_rest_ms = latencies.get(self.long_ex, 0.0)
-            s_rest_ms = latencies.get(self.short_ex, 0.0)
-            l_ws_ms = self.ws_fill_timings.get(self.long_ex, 0.0)
-            s_ws_ms = self.ws_fill_timings.get(self.short_ex, 0.0)
-            l_lag = max(0.0, l_ws_ms - l_rest_ms) if l_ws_ms > 0 else 0.0
-            s_lag = max(0.0, s_ws_ms - s_rest_ms) if s_ws_ms > 0 else 0.0
-            log(
-                f"[{self.sym}] ⏱ ТЕЛЕМЕТРИЯ ВХОДА (Итого: {total_fill_ms:.1f} мс | HTTP Gather: {gather_ms:.1f} мс):\n"
-                f"      • {self.long_ex}: REST {l_rest_ms:.1f} мс | WS подтверждение {l_ws_ms:.1f} мс (лаг сокета: +{l_lag:.1f} мс)\n"
-                f"      • {self.short_ex}: REST {s_rest_ms:.1f} мс | WS подтверждение {s_ws_ms:.1f} мс (лаг сокета: +{s_lag:.1f} мс)",
-                level="INFO"
+            log(f"[{self.sym}] Phase 1: Sending LIMIT_IOC to Lead ({lead_ex}) | Price: {price_lead_limit:.6f}", level="INFO")
+            await self.orders[lead_ex].place_order(
+                native_lead, lead_side, size_lead_usd, price_lead_limit, order_type="LIMIT_IOC", position_side=lead_pos_side
             )
-        finally:
-            if self.long_ex in self.orders and hasattr(self.orders[self.long_ex], "unsubscribe_position_update"):
-                self.orders[self.long_ex].unsubscribe_position_update(self.native_long, "LONG")
-            if self.short_ex in self.orders and hasattr(self.orders[self.short_ex], "unsubscribe_position_update"):
-                self.orders[self.short_ex].unsubscribe_position_update(self.native_short, "SHORT")
-        l_size = self.long_pos.get("size", 0.0)
-        s_size = self.short_pos.get("size", 0.0)
+        except Exception as e:
+            log(f"[{self.sym}] 🚨 Ошибка входа Lead Leg: {e}.", level="ERROR")
+            if hasattr(self.orders[lead_ex], "unsubscribe_position_update"):
+                self.orders[lead_ex].unsubscribe_position_update(native_lead, lead_pos_side)
+            self.ban_coin_cb(self.sym, reason=str(e), duration_sec=3600)
+            return False
+            
+        req_lead_qty = self.engine_res.get("long_qty", 0.0) if is_lead_long else self.engine_res.get("short_qty", 0.0)
+        
+        # Ожидание налива с таймаутом (используем тот же wait, но только для одной ноги)
+        self._set_state(PositionState.VERIFYING_FILL)
+        lead_pos, _, lead_rate, _ = await self._wait_for_fill_confirmation(
+            req_lead_qty if is_lead_long else 0.0,
+            req_lead_qty if not is_lead_long else 0.0,
+            ev_long=ev_lead if is_lead_long else None,
+            ev_short=ev_lead if not is_lead_long else None
+        )
+        if hasattr(self.orders[lead_ex], "unsubscribe_position_update"):
+            self.orders[lead_ex].unsubscribe_position_update(native_lead, lead_pos_side)
+            
+        lead_qty_actual = lead_pos.get("size", 0.0) if is_lead_long else self.short_pos.get("size", 0.0)
+        lead_price_actual = lead_pos.get("price", 0.0) if is_lead_long else self.short_pos.get("price", 0.0)
+        
+        if lead_qty_actual <= 0.0:
+            log(f"[{self.sym}] Ветка Б (Zero Fill): Lead Leg не налился. Карантин 5 мин.", level="WARNING")
+            self.ban_coin_cb(self.sym, reason="Zero Fill (Lead Leg)", duration_sec=float(entry_cfg["quarantine_durations_sec"].get("zero_fill", 300)))
+            self._set_state(PositionState.ABORTED)
+            return False
+            
+        # =========================================================================
+        # PHASE 2: Validation (Branch A)
+        # =========================================================================
+        notional_usd = lead_qty_actual * lead_price_actual
+        if notional_usd < 5.0: # Binance minNotional is typically 5
+            log(f"[{self.sym}] Lead Notional < 5$ ({notional_usd:.2f}$). Сброс ноги, карантин.", level="WARNING")
+            await self._emergency_unwind_single(lead_ex, native_lead, lead_qty_actual, lead_price_actual, lead_side, lead_pos_side)
+            self.ban_coin_cb(self.sym, reason="Min Notional Failed", duration_sec=float(entry_cfg["quarantine_durations_sec"].get("hedge_failed", 1800)))
+            self._set_state(PositionState.ABORTED)
+            return False
+            
+        drift = abs(lead_price_actual - price_lead_calc)
+        model_drift_ratio = drift / (price_lead_calc * entry_cfg.get("spread_entry", 0.008))
+        
+        max_drift = float(entry_cfg.get("max_model_drift_ratio", 0.80))
+        if model_drift_ratio > max_drift:
+            log(f"[{self.sym}] Ветка А1 (Model Drift): Отклонение {model_drift_ratio*100:.1f}% > {max_drift*100:.1f}%. Сброс ноги.", level="WARNING")
+            await self._emergency_unwind_single(lead_ex, native_lead, lead_qty_actual, lead_price_actual, lead_side, lead_pos_side)
+            self.ban_coin_cb(self.sym, reason="Model Drift", duration_sec=float(entry_cfg["quarantine_durations_sec"].get("model_drift", 3600)))
+            self._set_state(PositionState.ABORTED)
+            return False
+            
+        # =========================================================================
+        # PHASE 3: Hedge Leg (Branch A2)
+        # =========================================================================
+        hedge_decay_map = entry_cfg.get("hedge_decay_map", [{"iter": 0, "decay_rate": 1.0, "timeout_ms": 300}])
+        hedge_qty_actual = 0.0
+        req_hedge_qty = lead_qty_actual # Мы хотим налить ровно столько, сколько налили в Lead
+        
+        spread_entry = float(entry_cfg.get("spread_entry", 0.008))
+        drift_lead = (lead_price_actual - price_lead_calc) / price_lead_calc if is_lead_long else (price_lead_calc - lead_price_actual) / price_lead_calc
+        
+        price_hedge_live = self.engine_res.get("short_avg_price", 0.0) if is_lead_long else self.engine_res.get("long_avg_price", 0.0)
+        
+        for step in hedge_decay_map:
+            decay_rate = float(step.get("decay_rate", 1.0))
+            timeout_ms = int(step.get("timeout_ms", 300))
+            
+            concession = max(0.0, (spread_entry - max(0.0, drift_lead)) * decay_rate)
+            
+            if is_lead_long: # Hedge is SELL -> Limit Bid = Live Bid * (1 - Concession)
+                price_hedge_limit = price_hedge_live * (1 - concession)
+            else:            # Hedge is BUY -> Limit Ask = Live Ask * (1 + Concession)
+                price_hedge_limit = price_hedge_live * (1 + concession)
+                
+            qty_needed = req_hedge_qty - hedge_qty_actual
+            if qty_needed <= 0.001:
+                break
+                
+            usd_needed = qty_needed * price_hedge_limit
+            log(f"[{self.sym}] Phase 3 (Iter {step.get('iter')}): Hedge LIMIT_IOC | Qty: {qty_needed:.4f} | P: {price_hedge_limit:.6f}", level="INFO")
+            
+            ev_hedge = None
+            if hedge_ex in self.orders and hasattr(self.orders[hedge_ex], "subscribe_position_update"):
+                ev_hedge = self.orders[hedge_ex].subscribe_position_update(native_hedge, hedge_pos_side)
+                
+            try:
+                await self.orders[hedge_ex].place_order(
+                    native_hedge, hedge_side, usd_needed, price_hedge_limit, order_type="LIMIT_IOC", position_side=hedge_pos_side
+                )
+            except Exception as e:
+                log(f"[{self.sym}] Ошибка отправки Hedge: {e}", level="WARNING")
+                if hasattr(self.orders[hedge_ex], "unsubscribe_position_update"):
+                    self.orders[hedge_ex].unsubscribe_position_update(native_hedge, hedge_pos_side)
+                continue
+                
+            # Ждем с таймаутом текущей итерации
+            _old_timeout = self.fill_confirm_timeout
+            self.fill_confirm_timeout = timeout_ms / 1000.0
+            
+            _, hedge_pos, l_rate, s_rate = await self._wait_for_fill_confirmation(
+                req_hedge_qty if not is_lead_long else 0.0,
+                req_hedge_qty if is_lead_long else 0.0,
+                ev_long=ev_hedge if not is_lead_long else None,
+                ev_short=ev_hedge if is_lead_long else None
+            )
+            self.fill_confirm_timeout = _old_timeout
+            
+            if hasattr(self.orders[hedge_ex], "unsubscribe_position_update"):
+                self.orders[hedge_ex].unsubscribe_position_update(native_hedge, hedge_pos_side)
+                
+            hedge_qty_actual = self.long_pos.get("size", 0.0) if not is_lead_long else self.short_pos.get("size", 0.0)
+            
+            if hedge_qty_actual >= req_hedge_qty * 0.99:
+                break
+                
+        # =========================================================================
+        # PHASE 4: Resolution
+        # =========================================================================
+        hedge_fill_rate = hedge_qty_actual / req_hedge_qty if req_hedge_qty > 0 else 0.0
+        min_hedge_rate = float(entry_cfg.get("min_hedge_fill_rate", 0.75))
+        
+        if hedge_fill_rate >= min_hedge_rate:
+            log(f"[{self.sym}] Ветка А3: Частичный/Полный налив Hedge ({hedge_fill_rate*100:.1f}%). Выравнивание объема.", level="INFO")
+            delta_qty = lead_qty_actual - hedge_qty_actual
+            if delta_qty > 0.01: # Подрезаем излишек Lead Leg (MARKET reduceOnly=True)
+                delta_usd = delta_qty * lead_price_actual
+                reduce_side = "SELL" if is_lead_long else "BUY"
+                log(f"[{self.sym}] Подрезка излишка Lead Leg на {delta_qty:.4f}", level="WARNING")
+                try:
+                    await self.orders[lead_ex].place_order(
+                        native_lead, reduce_side, delta_usd, lead_price_actual, order_type="MARKET", position_side=lead_pos_side, reduce_only=True
+                    )
+                except Exception as e:
+                    log(f"[{self.sym}] Ошибка подрезки Lead Leg: {e}", level="ERROR")
+            
+            self._finalize_open(
+                hedge_qty_actual if not is_lead_long else lead_qty_actual,
+                hedge_qty_actual if is_lead_long else lead_qty_actual,
+                lead_price_actual if is_lead_long else self.long_pos.get("price", 0.0),
+                lead_price_actual if not is_lead_long else self.short_pos.get("price", 0.0)
+            )
+            return True
+        else:
+            log(f"[{self.sym}] Ветка А4 (Hedge Failed): Налив {hedge_fill_rate*100:.1f}% < {min_hedge_rate*100:.1f}%. Полный сброс.", level="WARNING")
+            await self._emergency_unwind()
+            self.ban_coin_cb(self.sym, reason="Hedge Failed", duration_sec=float(entry_cfg["quarantine_durations_sec"].get("hedge_failed", 1800)))
+            self._set_state(PositionState.ABORTED)
+            return False
 
+    async def _emergency_unwind_single(self, ex: str, native_sym: str, qty: float, price: float, side: str, pos_side: str):
+        self._set_state(PositionState.EMERGENCY_UNWIND)
+        usd = qty * price
+        reduce_side = "SELL" if side == "BUY" else "BUY"
+        log(f"[{self.sym}] Мгновенный сброс {ex} ({qty} шт, {usd:.2f}$)...", level="WARNING")
+        try:
+            await self.orders[ex].place_order(native_sym, reduce_side, usd, price, order_type="MARKET", position_side=pos_side)
+        except Exception as e:
+            log(f"[{self.sym}] Ошибка сброса {ex}: {e}", level="ERROR")
+            
+        if self.pm:
+            self.pm.rollback_entry(self.long_ex, self.short_ex, self.sym)
+            
+    def _finalize_open(self, qty_long: float, qty_short: float, p_long: float, p_short: float):
         self.open_time = time.time()
         self.open_time_ms = int(self.open_time * 1000)
-
-        # Расчет фактического спреда при входе на основании реальных цен исполнения
-        p_long = self.long_pos.get("price", 0.0) or self.engine_res.get("long_avg_price", 0.0)
-        p_short = self.short_pos.get("price", 0.0) or self.engine_res.get("short_avg_price", 0.0)
         
         entry_fee_l = float(self.cfg["trading_risks"][self.long_ex.lower()]["taker_fee"])
         entry_fee_s = float(self.cfg["trading_risks"][self.short_ex.lower()]["taker_fee"])
         entry_comm = entry_fee_l + entry_fee_s
         
-        if p_long > 0 and p_short > 0:
-            actual_gross_spread = (p_short - p_long) / p_long
-            actual_net_spread = actual_gross_spread - entry_comm
-        else:
-            actual_gross_spread = self.engine_res.get("vwap_spread", 0.0)
-            actual_net_spread = self.engine_res.get("net_spread", 0.0)
-
-        min_spread_entry = float(self.cfg["trading_rules"]["entry"].get("min_spread_entry", 0.0015))
-        use_extreme_decay = actual_net_spread <= min_spread_entry
-
+        actual_gross_spread = (p_short - p_long) / p_long if p_long > 0 else 0.0
+        actual_net_spread = actual_gross_spread - entry_comm
+        
+        # Если было подрезание, всегда используем extreme_decay
+        use_extreme_decay = True
+        
         self.exec_res = {
             "engine_res": self.engine_res,
             "long_ex": self.long_ex,
             "short_ex": self.short_ex,
             "entry_long_price": p_long,
             "entry_short_price": p_short,
-            "actual_long_price": self.long_pos.get("price", 0.0),
-            "actual_short_price": self.short_pos.get("price", 0.0),
+            "actual_long_price": p_long,
+            "actual_short_price": p_short,
             "actual_gross_spread": actual_gross_spread,
             "actual_net_spread": actual_net_spread,
             "use_extreme_decay": use_extreme_decay,
-            "long_executed_volume_rate": l_rate,
-            "short_executed_volume_rate": s_rate,
+            "long_executed_volume_rate": 1.0,
+            "short_executed_volume_rate": 1.0,
             "open_time": self.open_time,
             "open_time_ms": self.open_time_ms
         }
-
-        # Если налило обе ноги в пределах min_fill_rate -> УСПЕШНЫЙ ВХОД
-        if l_rate >= self.min_fill_rate and s_rate >= self.min_fill_rate and l_size > 0 and s_size > 0:
-            self._set_state(PositionState.ACTIVE_HEDGED)
-            if self.pm:
-                self.pm.confirm_entry(self.long_ex, self.short_ex, self.sym, self.exec_res, self.open_time)
+        
+        self._set_state(PositionState.ACTIVE_HEDGED)
+        if self.pm:
+            self.pm.confirm_entry(self.long_ex, self.short_ex, self.sym, self.exec_res, self.open_time)
             
-            decay_mode_str = "⚠️ EXTREME DECAY" if use_extreme_decay else "STANDARD DECAY"
-            log(f"[{self.sym}] 🟢 Позиция успешно открыта! Факт Net Spread: {actual_net_spread*100:.3f}% (Gross: {actual_gross_spread*100:.3f}%, Порог: {min_spread_entry*100:.3f}%) -> {decay_mode_str}", level="INFO")
+        log(f"[{self.sym}] 🟢 Позиция открыта! Факт Net Spread: {actual_net_spread*100:.3f}%", level="INFO")
 
-            if self.writer:
-                asyncio.create_task(async_write_msg(self.writer, "POS_OPENED", {
-                    "route": self.route,
-                    "sym": self.sym,
-                    "exec_res": self.exec_res,
-                    "open_time": self.open_time
-                }))
-            return True
-
-        # Если не налило или налило несимметрично: сворачиваем удочки!
-        # ПЕРЕД ФИНАЛЬНЫМ СБРОСОМ ТОРГОВОЙ ИТЕРАЦИИ:
-        # ОБЯЗАТЕЛЬНЫЙ ТОЧЕЧНЫЙ REST GET-ЗАПРОС ПОСИМВОЛЬНО ПО ОБЕИМ НОГАМ И ДОЗАКРЫТИЕ!
-        log(f"[{self.sym}] Сворачиваем удочки (WS fill rate L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%). Запуск обязательной зачистки через REST...", level="WARNING")
-        await self._emergency_unwind()
-        return False
+        if self.writer:
+            asyncio.create_task(async_write_msg(self.writer, "POS_OPENED", {
+                "route": self.route,
+                "sym": self.sym,
+                "exec_res": self.exec_res,
+                "open_time": self.open_time
+            }))
 
     async def _emergency_unwind(self):
         """
