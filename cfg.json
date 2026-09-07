@@ -121,8 +121,14 @@
                 "check_obi_filter_desc": "Фильтр давления стакана Hedge-биржи перед выстрелом в Lead. Отсекает вход, если стакан Hedge перекошен против направления хеджа."
             },
             "exchange_roles": {
-                "BINANCE_BITGET": {"lead": "BITGET", "hedge": "BINANCE"},
-                "BINANCE_KUCOIN": {"lead": "KUCOIN", "hedge": "BINANCE"}
+                "BINANCE_BITGET": {
+                    "lead": "BITGET",
+                    "hedge": "BINANCE"
+                },
+                "BINANCE_KUCOIN": {
+                    "lead": "KUCOIN",
+                    "hedge": "BINANCE"
+                }
             },
             "exchange_roles_desc": "Маршрутизация ролей: lead = слабая/неликвидная биржа (первый выстрел), hedge = ликвидная биржа (мгновенный догон).",
             "phase1_lead_leg": {
@@ -142,7 +148,7 @@
                 "quarantine_zero_fill_sec_desc": "Карантин монеты при нулевом наливе Lead Leg (Ветка Б)."
             },
             "phase2_lead_validation": {
-                "min_notional_usd": 5.0,
+                "min_notional_usd": 6.0,
                 "min_notional_usd_desc": "Минимальный налитый объем Lead Leg в долларах (порог minNotional для возможности хеджирования на Binance).",
                 "min_acceptable_net_spread": 0.0000,
                 "min_acceptable_net_spread_desc": "Порог жизнеспособности спреда (Soft Floor). Если чистый спред >= 0.0000, хедж продолжается до уровня безубытка. При падении ниже 0.0000 - Ветка А1.",
@@ -157,9 +163,21 @@
                 "min_hedge_fill_rate": 0.75,
                 "min_hedge_fill_rate_desc": "Минимальный суммарный процент налива Hedge Leg для признания связки валидной (75%).",
                 "decay_map": [
-                    {"iter": 0, "decay_rate": 1.00, "timeout_ms": 50},
-                    {"iter": 1, "decay_rate": 0.50, "timeout_ms": 150},
-                    {"iter": 2, "decay_rate": 0.00, "timeout_ms": 300}
+                    {
+                        "iter": 0,
+                        "decay_rate": 1.00,
+                        "timeout_ms": 50
+                    },
+                    {
+                        "iter": 1,
+                        "decay_rate": 0.50,
+                        "timeout_ms": 150
+                    },
+                    {
+                        "iter": 2,
+                        "decay_rate": 0.00,
+                        "timeout_ms": 300
+                    }
                 ],
                 "decay_map_desc": "Итеративная сетка догона: iter 0 (полный спред), iter 1 (уступка 50%), iter 2 (дожим по безубытку decay_rate=0.0).",
                 "quarantine_hedge_failed_sec": 1800,
@@ -189,12 +207,36 @@
             },
             "close_confirm_timeout_sec_desc": "Max seconds to poll WS cache for zero-size position confirmation on exit. Configured per exchange pair.",
             "relative_profit_decay_map": [
-                {"step": 0, "seconds": 0,  "ratio": 0.80},
-                {"step": 1, "seconds": 5,  "ratio": 0.50},
-                {"step": 2, "seconds": 15, "ratio": 0.25},
-                {"step": 3, "seconds": 30, "ratio": 0.00},
-                {"step": 4, "seconds": 45, "ratio": -0.20},
-                {"step": 5, "seconds": 60, "ratio": -999.0}
+                {
+                    "step": 0,
+                    "seconds": 0,
+                    "ratio": 0.80
+                },
+                {
+                    "step": 1,
+                    "seconds": 5,
+                    "ratio": 0.50
+                },
+                {
+                    "step": 2,
+                    "seconds": 15,
+                    "ratio": 0.25
+                },
+                {
+                    "step": 3,
+                    "seconds": 30,
+                    "ratio": 0.00
+                },
+                {
+                    "step": 4,
+                    "seconds": 45,
+                    "ratio": -0.20
+                },
+                {
+                    "step": 5,
+                    "seconds": 60,
+                    "ratio": -999.0
+                }
             ],
             "extreme_profit_decay_map": [
                 {
