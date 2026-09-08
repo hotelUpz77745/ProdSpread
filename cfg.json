@@ -132,8 +132,8 @@
             },
             "exchange_roles_desc": "Маршрутизация ролей: lead = слабая/неликвидная биржа (первый выстрел), hedge = ликвидная биржа (мгновенный догон).",
             "phase1_lead_leg": {
-                "max_slippage_pct": 0.0005,
-                "max_slippage_pct_desc": "Запас цены для LIMIT_IOC выстрела от лучшего аска/бида (0.05%).",
+                "max_slippage_pct": 0.0010,
+                "max_slippage_pct_desc": "Запас цены для LIMIT_IOC выстрела от лучшего аска/бида (0.10%).",
                 "fill_confirm_timeout_sec": {
                     "BINANCE_KUCOIN": 0.600,
                     "BINANCE_BITGET": 0.600,
