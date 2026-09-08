@@ -211,7 +211,7 @@ class TradingEngine:
 
             # Порог цены: ниже продавать нельзя, иначе чистый спред упадет ниже target_net_spread
             limit_floor = lead_price * (1.0 + target_net_spread + total_fees)
-            order_price = max(deep_price, limit_floor)
+            order_price = limit_floor
 
             is_valid = (net_spread >= target_net_spread) and (vwap_bid >= limit_floor)
 
@@ -247,7 +247,7 @@ class TradingEngine:
 
             # Порог цены: выше покупать нельзя, иначе чистый спред упадет ниже target_net_spread
             limit_ceiling = lead_price / (1.0 + target_net_spread + total_fees)
-            order_price = min(deep_price, limit_ceiling)
+            order_price = limit_ceiling
 
             is_valid = (net_spread >= target_net_spread) and (vwap_ask <= limit_ceiling)
 

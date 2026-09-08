@@ -165,14 +165,18 @@ class PositionFSM:
             now = time.perf_counter()
             elapsed_now_ms = (now - start_time) * 1000.0
 
-            if l_rate >= self.min_fill_rate and self.ws_fill_timings.get(self.long_ex, 0.0) == 0.0:
+            if req_long_qty > 0 and l_rate >= self.min_fill_rate and self.ws_fill_timings.get(self.long_ex, 0.0) == 0.0:
                 self.ws_fill_timings[self.long_ex] = elapsed_now_ms
-            if s_rate >= self.min_fill_rate and self.ws_fill_timings.get(self.short_ex, 0.0) == 0.0:
+            if req_short_qty > 0 and s_rate >= self.min_fill_rate and self.ws_fill_timings.get(self.short_ex, 0.0) == 0.0:
                 self.ws_fill_timings[self.short_ex] = elapsed_now_ms
 
-            # Предикат готовности обеих ног
-            if l_rate >= self.min_fill_rate and s_rate >= self.min_fill_rate:
-                log(f"[{self.sym}] 🚀 Обе ноги подтверждены реактивно за {elapsed_now_ms:.2f} мс (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
+            # Предикат готовности: проверяем только запрашиваемые ноги (> 0)
+            l_ok = (l_rate >= self.min_fill_rate) if req_long_qty > 0 else True
+            s_ok = (s_rate >= self.min_fill_rate) if req_short_qty > 0 else True
+
+            if l_ok and s_ok:
+                leg_desc = "Обе ноги" if (req_long_qty > 0 and req_short_qty > 0) else ("Lead" if self.state == PositionState.VERIFYING_FILL else "Hedge")
+                log(f"[{self.sym}] 🚀 {leg_desc} подтвержден(ы) реактивно за {elapsed_now_ms:.2f} мс (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
                 break
 
             remaining = deadline - now
@@ -385,7 +389,7 @@ class PositionFSM:
         
         # Ожидание налива с таймаутом (используем тот же wait, но только для одной ноги)
         self._set_state(PositionState.VERIFYING_FILL)
-        lead_pos, _, lead_rate, _ = await self._wait_for_fill_confirmation(
+        l_pos, s_pos, l_rate, s_rate = await self._wait_for_fill_confirmation(
             req_lead_qty if is_lead_long else 0.0,
             req_lead_qty if not is_lead_long else 0.0,
             ev_long=ev_lead if is_lead_long else None,
@@ -394,8 +398,12 @@ class PositionFSM:
         if hasattr(self.orders[lead_ex], "unsubscribe_position_update"):
             self.orders[lead_ex].unsubscribe_position_update(native_lead, lead_pos_side)
             
-        lead_qty_actual = lead_pos.get("size", 0.0) if is_lead_long else self.short_pos.get("size", 0.0)
-        lead_price_actual = lead_pos.get("price", 0.0) if is_lead_long else self.short_pos.get("price", 0.0)
+        lead_pos = l_pos if is_lead_long else s_pos
+        lead_qty_actual = lead_pos.get("size", 0.0)
+        lead_price_actual = lead_pos.get("price", 0.0)
+        lead_rate_actual = l_rate if is_lead_long else s_rate
+
+        log(f"[{self.sym}] Phase 1: Факт налива Lead ({lead_ex}): {lead_qty_actual:.4f}/{req_lead_qty:.4f} ({lead_rate_actual*100:.1f}%) @ {lead_price_actual:.6f}", level="INFO")
         
         if lead_qty_actual <= 0.0:
             zero_fill_sec = float(phase1_cfg.get("quarantine_zero_fill_sec", quarantine_cfg.get("zero_fill", 300)))
@@ -474,7 +482,7 @@ class PositionFSM:
             
             price_hedge_limit = hedge_eval["order_price"]
             usd_needed = qty_needed * price_hedge_limit
-            log(f"[{self.sym}] Phase 3 (Iter {step.get('iter')}): Hedge LIMIT_IOC | Qty: {qty_needed:.4f} | P: {price_hedge_limit:.6f} | Net: {hedge_eval.get('net_spread', 0.0)*100:+.3f}% (Target: {target_step_spread*100:+.3f}%)", level="INFO")
+            log(f"[{self.sym}] Phase 3 (Iter {step.get('iter')}): Hedge LIMIT_IOC | Qty: {qty_needed:.4f} | Limit: {price_hedge_limit:.6f} (SnapVWAP: {hedge_eval.get('vwap_price', 0.0):.6f}) | Net: {hedge_eval.get('net_spread', 0.0)*100:+.3f}% (Target: {target_step_spread*100:+.3f}%)", level="INFO")
             
             ev_hedge = None
             if hedge_ex in self.orders and hasattr(self.orders[hedge_ex], "subscribe_position_update"):
@@ -494,7 +502,7 @@ class PositionFSM:
             _old_timeout = self.fill_confirm_timeout
             self.fill_confirm_timeout = timeout_ms / 1000.0
             
-            _, hedge_pos, l_rate, s_rate = await self._wait_for_fill_confirmation(
+            l_pos, s_pos, l_rate, s_rate = await self._wait_for_fill_confirmation(
                 req_hedge_qty if not is_lead_long else 0.0,
                 req_hedge_qty if is_lead_long else 0.0,
                 ev_long=ev_hedge if not is_lead_long else None,
@@ -505,7 +513,10 @@ class PositionFSM:
             if hasattr(self.orders[hedge_ex], "unsubscribe_position_update"):
                 self.orders[hedge_ex].unsubscribe_position_update(native_hedge, hedge_pos_side)
                 
-            hedge_qty_actual = self.long_pos.get("size", 0.0) if not is_lead_long else self.short_pos.get("size", 0.0)
+            hedge_pos = l_pos if not is_lead_long else s_pos
+            hedge_qty_actual = hedge_pos.get("size", 0.0)
+            hedge_rate_actual = (hedge_qty_actual / req_hedge_qty * 100.0) if req_hedge_qty > 0 else 0.0
+            log(f"[{self.sym}] Phase 3 (Iter {step.get('iter')}): Факт налива Hedge ({hedge_ex}): {hedge_qty_actual:.4f}/{req_hedge_qty:.4f} ({hedge_rate_actual:.1f}%)", level="INFO")
             
             if hedge_qty_actual >= req_hedge_qty * 0.99:
                 break

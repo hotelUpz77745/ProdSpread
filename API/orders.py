@@ -207,8 +207,14 @@ class BinanceOrder:
                 log(f"[BinanceOrder] API Error: {msg}", level="ERROR")
                 if "Margin is insufficient" in msg or "Balance insufficient" in msg:
                     raise InsufficientMarginError(msg)
-                raise Exception(f"Binance API Error: {msg}")
             log(f"[BinanceOrder] Ордер исполнен: {data}", level="INFO")
+            status = data.get("status", "")
+            cum_qty = float(data.get("cumQty", 0.0)) or float(data.get("executedQty", 0.0))
+            if status in ("FILLED", "PARTIALLY_FILLED") and cum_qty > 0 and self.position_stream:
+                avg_p = float(data.get("avgPrice", 0.0)) or price
+                pos_s = (position_side or ("LONG" if side.upper() == "BUY" else "SHORT")).upper()
+                self.position_stream.positions.setdefault(symbol, {})[pos_s] = {"size": cum_qty, "price": avg_p}
+                self.position_stream._notify(symbol, pos_s)
             return data
 
     async def cancel_all_orders(self, symbol: str):
