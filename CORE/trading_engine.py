@@ -18,14 +18,18 @@ class TradingEngine:
         # Читаем параметры фильтра сигналов из signal_filters (с fallback на flat entry)
         signal_cfg = self.cfg["trading_rules"]["entry"].get("signal_filters", self.cfg["trading_rules"]["entry"])
         self.spread_entry = float(signal_cfg["spread_entry"])
-        self.check_synthetic_exit = bool(signal_cfg["check_synthetic_exit"])
-        self.check_synthetic_slippage = bool(signal_cfg["check_synthetic_slippage"])
-        self.max_slippage_ratio = float(signal_cfg["max_slippage_ratio"])
-        self.hard_max_slippage = float(signal_cfg["hard_max_slippage"])
+        synth_cfg = signal_cfg.get("synthetic_exit", {})
+        self.check_synthetic_exit = bool(synth_cfg.get("enabled", True))
+        self.check_synthetic_slippage = bool(synth_cfg.get("check_slippage", True))
+        self.max_slippage_ratio = float(synth_cfg.get("max_slippage_ratio", 0.65))
+        self.hard_max_slippage = float(synth_cfg.get("hard_max_slippage", 0.008))
+        
+        obi_cfg = signal_cfg.get("orderbook_imbalance", {})
+        self.check_obi_filter = bool(obi_cfg.get("enabled", True))
+        self.max_adverse_imbalance = float(obi_cfg.get("max_adverse_imbalance", 0.55))
+        self.obi_levels = int(obi_cfg.get("depth_levels", 5))
+        
         self.min_top_depth_usd = float(signal_cfg.get("min_top_depth_usd", 0.0))
-        self.check_obi_filter = bool(signal_cfg.get("check_obi_filter", True))
-        self.max_adverse_imbalance = float(signal_cfg.get("max_adverse_imbalance", 0.45))
-        self.obi_levels = int(signal_cfg.get("obi_levels", 5))
         self.exchange_roles = self.cfg.get("trading_rules", {}).get("entry", {}).get("exchange_roles", {})
         self.decay_map = self.cfg["trading_rules"]["exit"]["relative_profit_decay_map"]
         self.extreme_decay_map = self.cfg["trading_rules"]["exit"].get("extreme_profit_decay_map", [

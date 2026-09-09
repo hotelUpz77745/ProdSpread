@@ -766,13 +766,15 @@ class PositionFSM:
             tasks = []
             if long_qty > 0 and self.long_ex in self.orders:
                 size_usd = long_qty * price_long
+                o_type = "MARKET" if reason == "TTL_EXPIRED" else "LIMIT_IOC"
                 tasks.append(timed_close_order(
-                    self.long_ex, self.native_long, "SELL", size_usd, price_long, "MARKET", "LONG"
+                    self.long_ex, self.native_long, "SELL", size_usd, price_long, o_type, "LONG"
                 ))
             if short_qty > 0 and self.short_ex in self.orders:
                 size_usd = short_qty * price_short
+                o_type = "MARKET" if reason == "TTL_EXPIRED" else "LIMIT_IOC"
                 tasks.append(timed_close_order(
-                    self.short_ex, self.native_short, "BUY", size_usd, price_short, "MARKET", "SHORT"
+                    self.short_ex, self.native_short, "BUY", size_usd, price_short, o_type, "SHORT"
                 ))
 
             close_gather_ms = 0.0

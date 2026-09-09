@@ -95,8 +95,6 @@
             "order_execution_type": "ASYMMETRIC_LIMIT_IOC",
             "signal_filters": {
                 "spread_entry": 0.008,
-                "min_spread_entry": 0.0015,
-                "min_spread_entry_desc": "Минимально допустимый фактический чистый спред при входе. Если факт <= min_spread_entry, активируется extreme_profit_decay_map.",
                 "min_top_depth_usd": 200.0,
                 "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
                 "min_signal_dwell_ms": 0,
@@ -111,14 +109,19 @@
                     "OKX_BITGET": 200
                 },
                 "max_desync_ms_desc": "Пороги рассинхрона стаканов (мс) для каждой связки. Настроены индивидуально под скорость стримов бирж.",
-                "check_synthetic_exit": true,
-                "check_synthetic_slippage": true,
-                "max_slippage_ratio": 0.35,
-                "hard_max_slippage": 0.008,
-                "check_obi_filter": true,
-                "max_adverse_imbalance": 0.45,
-                "obi_levels": 5,
-                "check_obi_filter_desc": "Фильтр давления стакана Hedge-биржи перед выстрелом в Lead. Отсекает вход, если стакан Hedge перекошен против направления хеджа."
+                "orderbook_imbalance": {
+                    "enabled": true,
+                    "max_adverse_imbalance": 0.55,
+                    "depth_levels": 5,
+                    "desc": "Фильтр давления стакана Hedge-биржи перед выстрелом в Lead. Отсекает вход, если стакан Hedge перекошен против направления хеджа."
+                },
+                "synthetic_exit": {
+                    "enabled": true,
+                    "check_slippage": true,
+                    "max_slippage_ratio": 0.65,
+                    "hard_max_slippage": 0.008,
+                    "desc": "Симуляция немедленного закрытия. Защита от входа в спреды, где обратный bid/ask спред съест большую часть расчетной прибыли."
+                }
             },
             "exchange_roles": {
                 "BINANCE_BITGET": {
@@ -144,20 +147,22 @@
                 },
                 "fill_confirm_timeout_sec_desc": "Макс. время ожидания налива слабой ноги через WS-события или кэш.",
                 "fill_confirm_poll_interval_sec": 0.0,
-                "quarantine_zero_fill_sec": 300,
+                "quarantine_zero_fill_sec": 10,
                 "quarantine_zero_fill_sec_desc": "Карантин монеты при нулевом наливе Lead Leg (Ветка Б)."
             },
             "phase2_lead_validation": {
-                "min_notional_usd": 6.0,
+                "min_notional_usd": 5.1,
                 "min_notional_usd_desc": "Минимальный налитый объем Lead Leg в долларах (порог minNotional для возможности хеджирования на Binance).",
                 "min_acceptable_net_spread": 0.0010,
                 "min_acceptable_net_spread_desc": "Порог жизнеспособности спреда (Soft Floor). Минимальный суммарный чистый спред связки после комиссий для разрешения хеджа. Если < 0.0010 (10 bps), срабатывает Ветка А1 (сброс ноги).",
                 "max_model_drift_ratio": 0.80,
                 "max_model_drift_ratio_desc": "Максимально допустимый дрейф расчетной цены (80% от входного спреда). При превышении - Ветка А1 (сброс ноги).",
-                "quarantine_a1_step1_sec": 3600,
-                "quarantine_a1_step2_sec": 3600,
-                "quarantine_a1_step3_sec": 3600,
-                "quarantine_a1_desc": "Карантин при сбросе по Ветке А1 (фикса 1 час)."
+                "quarantine_a1_step1_sec": 120,
+                "quarantine_a1_step2_sec": 120,
+                "quarantine_a1_step3_sec": 120,
+                "quarantine_a1_desc": "Карантин при сбросе по Ветке А1 (фикса 1 час).",
+                "quarantine_model_drift_sec": 120,
+                "quarantine_model_drift_sec_desc": "Карантин при сбросе по дрейфу (1 час)."
             },
             "phase3_hedge_leg": {
                 "min_hedge_fill_rate": 0.75,
@@ -166,12 +171,12 @@
                     {
                         "iter": 0,
                         "decay_rate": 0.60,
-                        "timeout_ms": 50
+                        "timeout_ms": 150
                     },
                     {
                         "iter": 1,
                         "decay_rate": 0.30,
-                        "timeout_ms": 150
+                        "timeout_ms": 250
                     },
                     {
                         "iter": 2,
@@ -255,7 +260,9 @@
                     "target_val": -999.0
                 }
             ],
-            "extreme_profit_decay_map_desc": "Экстремальная карта выхода при слабом фактическом входе (факт <= min_spread_entry). Шаг 0: безубыток. Шаг 1: через 10 сек уступка -0.05%. Шаг 2: через 20 сек принудительный выход по рынку."
+            "extreme_profit_decay_map_desc": "Экстремальная карта выхода при слабом фактическом входе (факт <= min_spread_entry). Шаг 0: безубыток. Шаг 1: через 10 сек уступка -0.05%. Шаг 2: через 20 сек принудительный выход по рынку.",
+            "min_spread_entry": 0.0015,
+            "min_spread_entry_desc": "Минимально допустимый фактический чистый спред при входе. Если факт <= min_spread_entry, активируется extreme_profit_decay_map."
         },
         "ban_rules": {
             "is_active": true,
