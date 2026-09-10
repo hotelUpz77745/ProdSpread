@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: CORE/math_core.py
-# ROLE: Математическое ядро, расчет сигналов, спредов и комиссий.
+# ROLE: Mathematical core, signal evaluation, spreads and fee calculations.
 # ============================================================
 import numpy as np
 from numba import njit
@@ -160,9 +160,9 @@ class OrderbookUtils:
     @staticmethod
     def find_first_qualified_level(levels: List[Any], min_usd: float, is_ask: bool) -> tuple:
         """
-        Находит первый уровень в стакане с объемом >= min_usd.
-        Возвращает (index, price, usd_volume).
-        Если подходящий уровень не найден, возвращает (-1, np.inf if is_ask else 0.0, 0.0).
+        Finds first orderbook level with volume >= min_usd.
+        Returns (index, price, usd_volume).
+        If not found, returns (-1, np.inf if is_ask else 0.0, 0.0).
         """
         if not levels:
             return -1, np.inf if is_ask else 0.0, 0.0
@@ -181,10 +181,10 @@ class OrderbookUtils:
 @njit(fastmath=True, cache=True)
 def pre_calculate_orderbook(prices: np.ndarray, active_routes: np.ndarray, top_n: int, min_top_depth_usd: float = 0.0) -> np.ndarray:
     """
-    Рассчитывает математический спред для всех активных связок (до 21),
-    сортирует их по убыванию спреда и возвращает топ N кандидатов.
-    Если prices имеет 4 колонки: [ask_p, ask_usd, bid_p, bid_usd],
-    отсекает связки с объемом первого уровня ниже min_top_depth_usd.
+    Calculates mathematical spread for all active routes (up to 21),
+    sorts descending by spread and returns top N candidates.
+    If prices has 4 columns: [ask_p, ask_usd, bid_p, bid_usd],
+    filters out routes with top volume below min_top_depth_usd.
     """
     M = active_routes.shape[0]
     out = np.zeros((M, 5), dtype=np.float64)
@@ -223,13 +223,13 @@ def pre_calculate_orderbook(prices: np.ndarray, active_routes: np.ndarray, top_n
             out[i, 4] = 0.0
             continue
             
-        # Направление 1: Long ex1, Short ex2 (покупаем ask1, продаем bid2)
+        # Direction 1: Long ex1, Short ex2 (buy ask1, sell bid2)
         if min_top_depth_usd > 0.0 and (ask1_usd < min_top_depth_usd or bid2_usd < min_top_depth_usd):
             spread_1 = -999.0
         else:
             spread_1 = (bid2 - ask1) / bid2 * 100.0
             
-        # Направление 2: Long ex2, Short ex1 (покупаем ask2, продаем bid1)
+        # Direction 2: Long ex2, Short ex1 (buy ask2, sell bid1)
         if min_top_depth_usd > 0.0 and (ask2_usd < min_top_depth_usd or bid1_usd < min_top_depth_usd):
             spread_2 = -999.0
         else:
@@ -256,7 +256,7 @@ def pre_calculate_orderbook(prices: np.ndarray, active_routes: np.ndarray, top_n
             out[i, 3] = ask2      
             out[i, 4] = bid1      
             
-    # Сортировка пузырьком по убыванию спреда
+    # Bubble sort descending by spread
     for i in range(M):
         for j in range(0, M - i - 1):
             if out[j, 2] < out[j + 1, 2]:

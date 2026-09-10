@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: CORE/ipc_socket.py
-# ROLE: Утилиты для асинхронного межпроцессного взаимодействия через TCP.
+# ROLE: Utilities for async inter-process communication via TCP.
 # ============================================================
 
 import asyncio
@@ -8,7 +8,7 @@ import pickle
 import struct
 
 async def async_write_msg(writer: asyncio.StreamWriter, msg_type: str, payload: dict):
-    """Сериализует и отправляет сообщение с 4-байтным заголовком длины."""
+    """Serializes and sends message with 4-byte length prefix."""
     try:
         data = pickle.dumps((msg_type, payload))
         header = struct.pack("!I", len(data))
@@ -17,11 +17,11 @@ async def async_write_msg(writer: asyncio.StreamWriter, msg_type: str, payload: 
     except Exception as e:
         import traceback
         from c_log import log
-        log(f"[IPC] Ошибка отправки сообщения {msg_type}: {e}", level="ERROR")
+        log(f"[IPC] Error sending message {msg_type}: {e}", level="ERROR")
 
 
 async def async_read_msg(reader: asyncio.StreamReader):
-    """Читает 4-байтный заголовок, затем полезную нагрузку и десериализует её."""
+    """Reads 4-byte header, then payload and deserializes it."""
     try:
         header = await reader.readexactly(4)
         length = struct.unpack("!I", header)[0]

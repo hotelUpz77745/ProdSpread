@@ -19,9 +19,8 @@ def normalize_symbol(raw: str) -> Optional[str]:
     sym = raw.strip().upper()
     if not sym:
         return None
-    for ch in sym:
-        if "А" <= ch <= "Я" or "а" <= ch <= "я":
-            return None
+    if not sym.isascii():
+        return None
     if not _SYMBOL_REGEX.match(sym):
         return None
     return sym
@@ -94,11 +93,11 @@ class BinancePositionStream:
         # Track positions by symbol
         self.positions: Dict[str, Dict[str, Any]] = {}
         self.last_close_prices: Dict[str, float] = {}
-        # Реестр реактивных слушателей: (symbol, side) -> asyncio.Event
+        # Reactive listener registry: (symbol, side) -> asyncio.Event
         self._update_events: Dict[Tuple[str, str], asyncio.Event] = {}
 
     def subscribe_update(self, symbol: str, side: str) -> asyncio.Event:
-        """Регистрирует или возвращает Event ДО отправки ордера."""
+        """Registers or returns Event BEFORE submitting order."""
         sym = normalize_symbol(symbol) or symbol.strip().upper()
         s = side.strip().upper()
         key = (sym, s)
@@ -109,13 +108,13 @@ class BinancePositionStream:
         return ev
 
     def unsubscribe_update(self, symbol: str, side: str) -> None:
-        """Гарантированная очистка реестра во избежание утечек памяти."""
+        """Guaranteed registry cleanup to avoid memory leaks."""
         sym = normalize_symbol(symbol) or symbol.strip().upper()
         s = side.strip().upper()
         self._update_events.pop((sym, s), None)
 
     def _notify(self, symbol: str, side: str) -> None:
-        """Мгновенно будит FSM при обновлении позиции по (symbol, side)."""
+        """Instantly awakens FSM on position update for (symbol, side)."""
         sym = normalize_symbol(symbol) or symbol.strip().upper()
         s = side.strip().upper()
         ev = self._update_events.get((sym, s))

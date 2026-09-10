@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: API/settlement.py
-# ROLE: Сбор фактического биржевого PnL и комиссий после закрытия позиций.
+# ROLE: Actual exchange PnL and fee settlement after position close.
 # ============================================================
 
 import asyncio
@@ -53,10 +53,10 @@ class ExchangeSettlement:
 
     async def get_binance_trade_pnl(self, symbol: str, start_time_ms: int, position_side: str = None) -> Dict[str, Any]:
         """
-        Запрашивает фактические трейды по символу на Binance начиная с start_time_ms.
-        Возвращает:
-          - realized_pnl: чистый PnL по трейдам закрытия (USDT)
-          - commission: суммарная списанная комиссия (USDT)
+        Fetches actual trades for symbol on Binance from start_time_ms.
+        Returns:
+          - realized_pnl: net realized PnL on close trades (USDT)
+          - commission: total commission incurred (USDT)
           - net_pnl: realized_pnl - commission (USDT)
         """
         if not self.binance_key or not self.binance_secret:
@@ -65,7 +65,7 @@ class ExchangeSettlement:
         try:
             session = await self._get_session()
             timestamp = int(time.time() * 1000)
-            # Запрашиваем с небольшим запасом -500мс
+            # Query with -500ms margin
             query_start = max(0, start_time_ms - 500)
             query_string = f"symbol={symbol}&startTime={query_start}&recvWindow=10000&timestamp={timestamp}"
             signature = hmac.new(self.binance_secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
@@ -137,8 +137,8 @@ class ExchangeSettlement:
 
     async def get_kucoin_position_pnl(self, symbol: str, start_time_ms: int) -> Dict[str, Any]:
         """
-        Запрашивает историю закрытых позиций на KuCoin (/api/v1/history-positions).
-        На KuCoin поле `pnl` УЖЕ включает в себя все торговые комиссии.
+        Queries closed position history on KuCoin (/api/v1/history-positions).
+        On KuCoin the `pnl` field ALREADY accounts for trading fees.
         """
         if not self.kucoin_key or not self.kucoin_secret:
             return {"realized_pnl": 0.0, "commission": 0.0, "net_pnl": 0.0}
@@ -188,7 +188,7 @@ class ExchangeSettlement:
                         err = await resp.text()
                         log(f"[Settlement] Kucoin history-positions error ({resp.status}): {err}", level="WARNING")
                         
-                # Если позиция не найдена, ждем 2 сек и повторяем (история Kucoin часто запаздывает)
+                # If position not found, wait 2s and retry (Kucoin history lag)
                 await asyncio.sleep(2.0)
                 
         except Exception as e:
@@ -203,8 +203,8 @@ class ExchangeSettlement:
 
     async def get_bitget_position_pnl(self, symbol: str, start_time_ms: int) -> Dict[str, Any]:
         """
-        Запрашивает историю закрытых позиций на Bitget (/api/v2/mix/position/history-position).
-        Поле `netProfit` на Bitget УЖЕ включает в себя комиссии и фандинг.
+        Queries closed position history on Bitget (/api/v2/mix/position/history-position).
+        The `netProfit` field on Bitget ALREADY includes fees and funding.
         """
         if not self.bitget_key or not self.bitget_secret:
             return {"realized_pnl": 0.0, "commission": 0.0, "net_pnl": 0.0}
@@ -264,8 +264,8 @@ class ExchangeSettlement:
                            total_investment_usd: float,
                            delay_sec: float = 1.8) -> Dict[str, Any]:
         """
-        Главный метод клиринга: ждет delay_sec, запрашивает биржи и возвращает
-        точный суммарный биржевой Net PnL и Net Yield в процентах.
+        Main clearing method: waits delay_sec, queries exchanges and returns
+        exact aggregate exchange Net PnL and Net Yield percentage.
         """
         if delay_sec > 0:
             await asyncio.sleep(delay_sec)
@@ -319,5 +319,5 @@ class ExchangeSettlement:
             "is_profit": total_net_pnl_usd >= 0.0
         }
 
-        log(f"[{sym}] 🏛️ Биржевой клиринг: LONG {long_ex} (In: {long_open_p:.6f}, Out: {long_close_p:.6f}, Net: {long_net_usd:+.4f}$) | SHORT {short_ex} (In: {short_open_p:.6f}, Out: {short_close_p:.6f}, Net: {short_net_usd:+.4f}$) | Total Net: {total_net_pnl_usd:+.4f}$ ({net_yield_pct*100:+.3f}%) | Fees: {total_comm_usd:.4f}$", level="INFO")
+        log(f"[{sym}] Exchange settlement: LONG {long_ex} (In: {long_open_p:.6f}, Out: {long_close_p:.6f}, Net: {long_net_usd:+.4f}$) | SHORT {short_ex} (In: {short_open_p:.6f}, Out: {short_close_p:.6f}, Net: {short_net_usd:+.4f}$) | Total Net: {total_net_pnl_usd:+.4f}$ ({net_yield_pct*100:+.3f}%) | Fees: {total_comm_usd:.4f}$", level="INFO")
         return res

@@ -39,11 +39,11 @@ class KucoinPositionStream:
         # Track positions by symbol
         self.positions: Dict[str, Dict[str, Any]] = {}
         self.last_close_prices: Dict[str, float] = {}
-        # Реестр реактивных слушателей: (symbol, side) -> asyncio.Event
+        # Reactive listener registry: (symbol, side) -> asyncio.Event
         self._update_events: Dict[Tuple[str, str], asyncio.Event] = {}
 
     def subscribe_update(self, symbol: str, side: str) -> asyncio.Event:
-        """Регистрирует или возвращает Event ДО отправки ордера."""
+        """Registers or returns Event BEFORE submitting order."""
         sym = symbol.strip().upper()
         s = side.strip().upper()
         key = (sym, s)
@@ -54,13 +54,13 @@ class KucoinPositionStream:
         return ev
 
     def unsubscribe_update(self, symbol: str, side: str) -> None:
-        """Очистка реестра слушателей."""
+        """Cleans listener registry."""
         sym = symbol.strip().upper()
         s = side.strip().upper()
         self._update_events.pop((sym, s), None)
 
     def _notify(self, symbol: str, side: str) -> None:
-        """Мгновенно будит FSM при обновлении позиции по (symbol, side)."""
+        """Instantly awakens FSM on position update for (symbol, side)."""
         sym = symbol.strip().upper()
         s = side.strip().upper()
         ev = self._update_events.get((sym, s))

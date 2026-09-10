@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: c_log.py
-# ROLE: Система логирования (кастомный логгер).
+# ROLE: Logging system (custom logger).
 # ============================================================
 
 from __future__ import annotations
@@ -69,14 +69,13 @@ def calc_max_bytes(avg_len: int, lines: int) -> int:
 
 class UnlockedRotatingFileHandler(RotatingFileHandler):
     """
-    Кастомный RotatingFileHandler, который не держит файл постоянно открытым.
-    Каждая запись (emit) открывает, пишет и закрывает файл.
-    Это снимает жесткую блокировку Windows, позволяя удалять/переименовывать логи.
+    Custom RotatingFileHandler that does not hold file lock continuously.
+    Each emit opens, writes and closes the file, eliminating Windows file lock issues.
     """
 
     def __init__(self, filename, mode='a', maxBytes=0, backupCount=0, encoding=None):
         super().__init__(filename, mode, maxBytes, backupCount, encoding, delay=True)
-        self.stream = None  # Принудительно отключаем постоянный стрим
+        self.stream = None  # Explicitly disable persistent stream
 
     def _open(self):
         return None
@@ -111,10 +110,10 @@ class UnlockedRotatingFileHandler(RotatingFileHandler):
 
 class UnifiedLogger:
     """
-    Универсальный логгер:
+    Universal logger:
     - logging + RotatingFileHandler
-    - decorator для методов
-    - совместим с async / sync
+    - method decorator
+    - async / sync compatible
     """
 
     def __init__(
@@ -132,9 +131,9 @@ class UnifiedLogger:
 
         logger = logging.getLogger(name)
         logger.setLevel(logging.DEBUG)
-        logger.propagate = False  # Не всплывать в root
+        logger.propagate = False  # Do not propagate to root
 
-        # Handler добавляем ТОЛЬКО если его ещё нет
+        # Add handler ONLY if not already present
         if not logger.handlers:
             formatter = logging.Formatter(
                 "%(asctime)s | %(levelname)s | %(context)s | %(message)s",
@@ -142,11 +141,11 @@ class UnifiedLogger:
             )
 
             if LOG_TO_FILE:
-                # Общий лог-файл для всех модулей
+                # Common log file for all modules
                 all_log_path = os.path.join(log_dir, "all.log")
                 all_handler = UnlockedRotatingFileHandler(
                     all_log_path,
-                    maxBytes=max_bytes * 5,  # В 5 раз больше, так как он общий
+                    maxBytes=max_bytes * 5,  # 5x size as it is shared
                     backupCount=1,
                     encoding="utf-8",
                 )
@@ -201,8 +200,8 @@ class UnifiedLogger:
 
     def total_exception_decor(self, func, context: Optional[Any] = None):
         """
-        Ловит ВСЕ исключения, логирует контекст,
-        НЕ крашит приложение.
+        Catches ALL exceptions, logs context,
+        does NOT crash application.
         """
         if getattr(func, "_is_wrapped", False):
             return func
@@ -275,7 +274,7 @@ class UnifiedLogger:
 from consts import SYMBOLS_GLOBAL_WHITELIST
 import concurrent.futures
 
-# Глобальный экземпляр
+# Global instance
 _global_logger = UnifiedLogger("SYSTEM")
 _log_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 _log_pid = os.getpid()

@@ -1,9 +1,9 @@
 # ============================================================
 # FILE: API/BINANCE/stakan.py
-# ROLE: Подключение к WebSocket Binance для получения данных стакана.
+# ROLE: Binance WebSocket connection for order book data.
 # STREAM: <symbol>@depth5@100ms
 # NOTE: Single responsibility: ONLY order book data.
-# TODO: в разработке
+# TODO: In development
 # ============================================================
 
 from __future__ import annotations

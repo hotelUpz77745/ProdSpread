@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: CORE/leverage_setter.py
-# ROLE: Массовая установка плеча и типа маржи для бирж с кэшированием
+# ROLE: Bulk leverage and margin type configuration with caching
 # ============================================================
 import asyncio
 import os
@@ -10,9 +10,9 @@ from CORE.utils import log
 
 class LeverageSetter:
     """
-    Класс для массовой установки плеча и типа маржи для общих символов.
-    Кеширует успешные результаты в CACHE/leverage_cache.json для избежания
-    лимитов API бирж при перезапусках.
+    Class for bulk leverage and margin mode configuration for common symbols.
+    Caches successful results to CACHE/leverage_cache.json to avoid
+    exchange rate limits on restarts.
     """
     def __init__(self, cfg, orders, coin_to_native):
         self.cfg = cfg
@@ -29,7 +29,7 @@ class LeverageSetter:
                 with open(self.cache_path, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception as e:
-                log(f"[LeverageSetter] Ошибка загрузки кэша: {e}", level="WARNING")
+                log(f"[LeverageSetter] Error loading cache: {e}", level="WARNING")
         return {}
 
     def _save_cache(self) -> None:
@@ -37,16 +37,16 @@ class LeverageSetter:
             with open(self.cache_path, "w", encoding="utf-8") as f:
                 json.dump(self._cache, f, indent=4)
         except Exception as e:
-            log(f"[LeverageSetter] Ошибка сохранения кэша: {e}", level="ERROR")
+            log(f"[LeverageSetter] Error saving cache: {e}", level="ERROR")
 
     async def setup(self):
         if not self.cfg["setup_margin_leverage"]:
-            log("[LeverageSetter] Настройка плеча/маржи отключена в конфиге.", level="INFO")
+            log("[LeverageSetter] Leverage/margin setup disabled in config.", level="INFO")
             return
 
-        log("[LeverageSetter] Запуск настройки маржи и плечей...", level="INFO")
+        log("[LeverageSetter] Starting margin and leverage configuration...", level="INFO")
         
-        # Собираем уникальные символы для каждой активной биржи
+        # Collect unique symbols for each active exchange
         symbols_per_exchange: Dict[str, Set[str]] = {
             "BINANCE": set(),
             "KUCOIN": set(),
@@ -61,7 +61,7 @@ class LeverageSetter:
                     
         new_settings_applied = False
         
-        # Отправляем запросы по каждой бирже
+        # Dispatch requests per exchange
         for ex_name, symbols in symbols_per_exchange.items():
             if not symbols:
                 continue
@@ -71,7 +71,7 @@ class LeverageSetter:
             target_margin = ex_settings["margin_type"]
             order_adapter = self.orders[ex_name]
                 
-            # Инициализируем кэш для биржи если нет
+            # Initialize cache for exchange if absent
             if ex_name not in self._cache:
                 self._cache[ex_name] = {}
                 
@@ -79,16 +79,16 @@ class LeverageSetter:
             for sym in symbols:
                 cached_data = self._cache[ex_name].get(sym, {})
                 
-                # Если в кэше уже есть настройки и они совпадают с таргетом - пропускаем
+                # Skip if cache already matches target settings
                 if cached_data.get("leverage") == target_leverage and cached_data.get("margin_type") == target_margin:
                     continue
                     
-                # Добавляем таску
+                # Add task
                 tasks.append(self._apply_settings(order_adapter, ex_name, sym, target_leverage, target_margin))
                 
             if tasks:
-                log(f"[LeverageSetter] [{ex_name}] Настройка {len(tasks)} новых символов (lev: {target_leverage}, type: {target_margin})...", level="INFO")
-                # Запускаем батчами, чтобы не словить рейт-лимиты
+                log(f"[LeverageSetter] [{ex_name}] Configuring {len(tasks)} symbols (lev: {target_leverage}, type: {target_margin})...", level="INFO")
+                # Run in batches to respect rate limits
                 batch_size = 10
                 for i in range(0, len(tasks), batch_size):
                     batch = tasks[i:i+batch_size]
@@ -102,11 +102,11 @@ class LeverageSetter:
                                 "margin_type": target_margin
                             }
                             new_settings_applied = True
-                    await asyncio.sleep(0.5) # Пауза между батчами
+                    await asyncio.sleep(0.5) # Pause between batches
                     
         if new_settings_applied:
             self._save_cache()
-            log("[LeverageSetter] Новые настройки успешно сохранены в кэш.", level="INFO")
+            log("[LeverageSetter] New settings saved to cache.", level="INFO")
             
     async def _apply_settings(self, adapter, ex_name: str, sym: str, leverage: int, margin_type: str):
         try:
@@ -120,5 +120,5 @@ class LeverageSetter:
             err = str(e).lower()
             if "no need to change" in err or "margin type cannot be changed" in err:
                 return True, sym
-            log(f"[LeverageSetter] [{ex_name}] Ошибка настройки {sym}: {e}", level="WARNING")
+            log(f"[LeverageSetter] [{ex_name}] Error configuring {sym}: {e}", level="WARNING")
             return False, sym

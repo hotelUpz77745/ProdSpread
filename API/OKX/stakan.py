@@ -3,7 +3,7 @@
 # ROLE: OKX Futures (SWAP) order book TOP levels via WS (aiohttp)
 # CHANNEL: books5  (top 5 per side)
 # NOTE: Single responsibility: ONLY order book data.
-# TODO: в разработке
+# TODO: In development
 # ============================================================
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: utils.py
-# ROLE: Вспомогательные утилиты, асинхронные таймеры.
+# ROLE: Helper utilities, async timers.
 # ============================================================
 from datetime import datetime
 import pytz

@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: CORE/position_manager.py
-# ROLE: Менеджер позиций, управление семафорами и блокировками связок.
+# ROLE: Position manager, semaphore and route lock orchestration.
 # ============================================================
 # ============================================================
 import json
@@ -13,19 +13,19 @@ class PositionManager:
         self.exchanges = exchanges
         self.route_names = route_names
         
-        # Лимиты из конфига (default 1 если не указано)
+        # Limits from config (default 1 if unspecified)
         self.max_pos = {}
         for ex in self.exchanges:
             risk_cfg = self.cfg["trading_risks"][ex.lower()]
             self.max_pos[ex] = risk_cfg["max_positions"]
             
-        # Состояние по биржам: сколько активно и сколько в ожидании (pending)
+        # State per exchange: active and pending counts
         self.exchange_state = {ex: {"current": 0, "pending": 0} for ex in self.exchanges}
         
-        # Состояние по связкам: locked == True означает, что на эту связку нельзя входить
+        # State per route: locked == True means route entry is barred
         self.route_state = {route: {"is_locked": False} for route in self.route_names}
         
-        # Состояние позиций: route -> symbol -> state
+        # Position state: route -> symbol -> state
         self.positions = {route: {} for route in self.route_names}
         for route in self.route_names:
             for sym in active_symbols:
@@ -46,7 +46,7 @@ class PositionManager:
                     continue
                 for sym, state in sym_map.items():
                     if sym in self.positions[route] and state.get("current_position"):
-                        # Защита от старых/кривых стейтов - сбрасываем pending_action, если был крэш
+                        # Protection against stale states - reset pending_action if crashed
                         state["pending_action"] = None
                         self.positions[route][sym] = state
                         
@@ -69,8 +69,8 @@ class PositionManager:
 
     def _update_locks(self):
         """
-        Пересчитывает состояние замков для всех связок на основе занятости бирж.
-        Связка блокируется, если любая из её бирж достигла лимита max_positions (current + pending >= max).
+        Recalculates lock states for all routes based on exchange utilization.
+        A route is locked if either exchange reached max_positions limit (current + pending >= max).
         """
         for route in self.route_names:
             ex1, ex2 = route.split('_')
@@ -88,18 +88,18 @@ class PositionManager:
         if route not in self.route_state:
             return False
             
-        # Проверяем, не заблокирована ли связка
+        # Check if route is locked
         if self.route_state[route]["is_locked"]:
             return False
             
-        # Строгая проверка лимита бирж: current + pending не должен превышать max_positions
+        # Strict exchange limit check: current + pending must not exceed max_positions
         ex1_used = self.exchange_state[long_ex]["current"] + self.exchange_state[long_ex]["pending"]
         ex2_used = self.exchange_state[short_ex]["current"] + self.exchange_state[short_ex]["pending"]
         if ex1_used >= self.max_pos[long_ex] or ex2_used >= self.max_pos[short_ex]:
             return False
 
-        # Глобальная проверка символа по ВСЕМ маршрутам:
-        # монета не должна быть открыта ни на одной из связок, и по ней не должно быть активных действий
+        # Global symbol check across ALL routes:
+        # coin must not be open on any route, and have no pending actions
         for r in self.route_names:
             st = self.positions[r].get(sym)
             if st and (st["current_position"] or st["pending_action"] is not None):
@@ -170,7 +170,7 @@ class PositionManager:
         if not state:
             return
             
-        # Если позиция еще была в стадии OPEN (аварийный сброс ноги при входе)
+        # If position was still in OPEN stage (emergency leg unwind during entry)
         if state["pending_action"] == "OPEN":
             long_ex, short_ex = route.split('_')
             self.rollback_entry(long_ex, short_ex, sym)
@@ -201,8 +201,8 @@ class PositionManager:
 
     def get_open_positions(self):
         """
-        Возвращает список всех позиций (route, sym, state), 
-        которые сейчас открыты и не в процессе выхода.
+        Returns list of all positions (route, sym, state)
+        currently active and not in exit process.
         """
         res = []
         for route, sym_map in self.positions.items():

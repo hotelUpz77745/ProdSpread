@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: analytics.py
-# ROLE: Сбор и анализ данных о торговле, расчет PnL (мульти-биржа).
+# ROLE: Trade data collection, analytics and multi-exchange PnL calculation.
 # ============================================================
 import os
 import time
@@ -71,7 +71,7 @@ class TradeAnalytics:
 
     def record_close(self, long_price_close: float, short_price_close: float, spread_out: float, slippage_out: float = 0.0, long_executed_usd: float = None, short_executed_usd: float = None) -> Dict[str, Any]:
         if not self.active_trade:
-            # Fallback для позиций, закрываемых после перезапуска бота
+            # Fallback for positions closed after bot restart
             self.active_trade = {
                 "route": "UNKNOWN",
                 "direction": "LONG_SHORT",
@@ -155,13 +155,13 @@ class TradeAnalytics:
         
         readable = (
             f"=========================================\n"
-            f"Сделка #{self.trade_counter} ({t_in['direction']})\n"
-            f"Связка: {t_in['route']}\n"
-            f"Время: {dt_open} -> {dt_close} ({duration_str})\n"
-            f"Вход | {long_ex}: {t_in['long_price_in']:.6f} | {short_ex}: {t_in['short_price_in']:.6f} | Спред: {trade_obj['Spread_In']:.4f}\n"
-            f"Выход| {long_ex}: {long_price_close:.6f} | {short_ex}: {short_price_close:.6f} | Спред: {spread_out:.4f}\n"
+            f"Trade #{self.trade_counter} ({t_in['direction']})\n"
+            f"Route: {t_in['route']}\n"
+            f"Time: {dt_open} -> {dt_close} ({duration_str})\n"
+            f"Entry | {long_ex}: {t_in['long_price_in']:.6f} | {short_ex}: {t_in['short_price_in']:.6f} | Spread: {trade_obj['Spread_In']:.4f}\n"
+            f"Exit  | {long_ex}: {long_price_close:.6f} | {short_ex}: {short_price_close:.6f} | Spread: {spread_out:.4f}\n"
             f"PnL USD: {long_ex} {long_pnl_usd:+.4f}$ | {short_ex} {short_pnl_usd:+.4f}$\n"
-            f"Комиссии: {trade_obj['Total_Fee_USD']:.4f} USD\n"
+            f"Fees: {trade_obj['Total_Fee_USD']:.4f} USD\n"
             f"P&L: {net_pnl_usd:+.4f} USD ({net_pnl*100:+.3f}%)\n"
             f"Cumulative PnL: {self.cumulative_pnl_usd:+.4f}$\n"
             f"=========================================\n\n"
@@ -182,7 +182,7 @@ class TradeAnalytics:
                 with open(self.readable_path, "a", encoding="utf-8") as f:
                     f.write(readable)
                     
-                log(f"[ANALYTICS] [{self.symbol}] Сделка #{self.trade_counter} ({t_in['route']}) сохранена. Net PnL: {net_pnl_usd:+.4f} USD.", level="INFO")
+                log(f"[ANALYTICS] [{self.symbol}] Trade #{self.trade_counter} ({t_in['route']}) saved. Net PnL: {net_pnl_usd:+.4f} USD.", level="INFO")
 
             _analytics_executor.submit(_io_tasks)
         except Exception as e:
@@ -214,8 +214,8 @@ def _recalc_total_pnl_from_disk() -> float:
 
 def update_total_balance(cfg: dict, is_startup: bool = False, extra_pnl: float = 0.0) -> float:
     """
-    Молниеносный расчет баланса O(1) из in-memory кэша.
-    Сброс total_balance.json и отчетов выполняется асинхронно в фоне без блокировки торгового цикла.
+    Ultra-fast O(1) balance calculation from in-memory cache.
+    Async flush of total_balance.json and reports without blocking trading loop.
     """
     global _cached_base_total, _cached_cumulative_pnl, _balance_initialized
     try:
@@ -238,7 +238,7 @@ def update_total_balance(cfg: dict, is_startup: bool = False, extra_pnl: float =
         prefix = "Initial Total balance" if is_startup else "Total balance updated"
         log(f"{prefix}: {total:.2f} USD (Base: {base_total:.2f}, PnL: {total_pnl:.2f})", level="INFO")
 
-        # Неблокирующий сброс на диск в фоновом пуле потоков
+        # Non-blocking disk flush in background threadpool
         def _write_balance_task():
             try:
                 payload = {
@@ -262,7 +262,7 @@ def update_total_balance(cfg: dict, is_startup: bool = False, extra_pnl: float =
 
 def generate_global_report(log_dir: str = "logs/analytics"):
     if not os.path.exists(log_dir):
-        print(f"Директория {log_dir} не найдена.")
+        print(f"Directory {log_dir} not found.")
         return
 
     all_trades = []
@@ -281,7 +281,7 @@ def generate_global_report(log_dir: str = "logs/analytics"):
                 pass
 
     if not all_trades:
-        print("Нет данных для глобального отчета (все файлы пусты или отсутствуют).")
+        print("No data for global report (files empty or missing).")
         return
 
     df = pd.DataFrame(all_trades)
@@ -343,7 +343,7 @@ def generate_global_report(log_dir: str = "logs/analytics"):
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(report)
         
-    print(f"Глобальный отчет сохранен в {report_path}")
+    print(f"Global report saved to {report_path}")
     
     # Chart
     plt.figure(figsize=(12, 6))
@@ -357,13 +357,13 @@ def generate_global_report(log_dir: str = "logs/analytics"):
     chart_path = os.path.join(log_dir, "global_chart.png")
     plt.savefig(chart_path)
     plt.close()
-    print(f"Глобальный график сохранен в {chart_path}")
+    print(f"Global chart saved to {chart_path}")
 
 if __name__ == "__main__":
     import sys
     try:
-        print("Запуск генерации глобального отчета...")
+        print("Generating global report...")
         generate_global_report()
     except Exception as e:
-        print(f"Ошибка генерации отчета: {e}")
+        print(f"Report generation error: {e}")
         sys.exit(1)

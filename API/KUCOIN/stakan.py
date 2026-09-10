@@ -1,9 +1,9 @@
 # ============================================================
 # FILE: API/KUCOIN/stakan.py
-# ROLE: Подключение к WebSocket Kucoin для получения данных стакана.
+# ROLE: Kucoin WebSocket connection for order book data.
 # STREAM: /contractMarket/level2Depth5:{symbol}
 # NOTE: Single responsibility: ONLY order book data.
-# TODO: в разработке
+# TODO: In development
 # ============================================================
 
 from __future__ import annotations

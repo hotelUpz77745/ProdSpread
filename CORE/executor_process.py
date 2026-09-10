@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: CORE/executor_process.py
-# ROLE: Независимый процесс исполнения ордеров, приватных вебсокетов и клиринга PnL.
+# ROLE: Independent order execution process, private websockets, and PnL clearing.
 # ============================================================
 
 import asyncio
@@ -145,9 +145,9 @@ class ExecutorProcess:
         self.banned_symbols[sym] = expire_time
         self._save_banned()
         if expire_time:
-            log(f"[{sym}] ⏱ Монета помещена в карантин на {int(duration_sec)} сек. Причина: {reason}", level="WARNING")
+            log(f"[{sym}] Quarantine for {int(duration_sec)}s. Reason: {reason}", level="WARNING")
         else:
-            log(f"[{sym}] 🚫 Монета заблокирована ({reason}).", level="WARNING")
+            log(f"[{sym}] Symbol banned ({reason}).", level="WARNING")
         # Notify Market Process
         if self.writer:
             asyncio.create_task(async_write_msg(self.writer, "BAN_UPDATE", {"symbol": sym, "expire_time": expire_time}))
@@ -165,14 +165,14 @@ class ExecutorProcess:
         self.orders["KUCOIN"].start()
         self.orders["BITGET"].start()
         
-        # Гарантированный прогрев REST сессий (TCP/TLS keepalive) ДО старта торговли
+        # Warm up REST sessions (TCP/TLS keepalive) BEFORE trading starts
         warmup_tasks = []
         for ex in ("BINANCE", "BITGET", "KUCOIN"):
             if ex in self.orders and hasattr(self.orders[ex], "warmup"):
                 warmup_tasks.append(self.orders[ex].warmup())
         if warmup_tasks:
             await asyncio.gather(*warmup_tasks, return_exceptions=True)
-            log("[ExecutorProcess] 🔥 Все REST торговые сессии (TCP/TLS keepalive) прогреты ДО старта торговли.", level="INFO")
+            log("[ExecutorProcess] All REST trading sessions (TCP/TLS keepalive) warmed up BEFORE trading.", level="INFO")
         
         if os.environ.get("BINANCE_API_KEY"):
             asyncio.create_task(self.binance_pos_stream.start())
@@ -227,7 +227,7 @@ class ExecutorProcess:
 
         fsm = self.active_fsm.get(sym)
         if not fsm:
-            # Восстановление FSM для позиций, подгруженных из стейта после перезапуска бота
+            # Restore FSM for positions loaded from state after bot restart
             state = self.pm.positions.get(route, {}).get(sym, {})
             details = state.get("details", {})
             long_ex = details.get("long_ex") or route.split('_')[0]
@@ -264,7 +264,7 @@ class ExecutorProcess:
                                      exit_long_price: float, exit_short_price: float,
                                      actual_long_usd: float, actual_short_usd: float,
                                      exit_res: dict = None, reason: str = ""):
-        """Моментальный локальный расчет PnL за 0 мс по реальным ценам исполнения."""
+        """Instant local PnL calculation in 0ms using actual execution prices."""
         try:
             if sym not in self.analytics_map:
                 self.analytics_map[sym] = TradeAnalytics(sym, self.cfg["trading_risks"])
@@ -290,23 +290,23 @@ class ExecutorProcess:
             net_usd = trade_obj.get("Net_PnL_USD", 0.0) if trade_obj else 0.0
             net_yield = trade_obj.get("Net_PnL", 0.0) if trade_obj else 0.0
 
-            # Моментальное обновление total_balance.json в памяти (O(1))
+            # Instant in-memory update of total_balance.json (O(1))
             update_total_balance(self.cfg, extra_pnl=net_usd)
 
             if net_usd < 0:
                 ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
-                self.ban_coin(sym, reason=f"Убыточная сделка ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", duration_sec=float(ban_q["loss_trade"]))
+                self.ban_coin(sym, reason=f"Loss trade ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", duration_sec=float(ban_q["loss_trade"]))
             else:
                 self.a1_collapse_counts.pop(sym, None)
-                log(f"[{sym}] 🎉 Прибыльная сделка ({reason}): Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", level="INFO")
+                log(f"[{sym}] Profitable trade ({reason}): Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", level="INFO")
         except Exception as e:
-            log(f"[{sym}] Ошибка локального клиринга PnL: {e}", level="ERROR")
+            log(f"[{sym}] Local PnL clearing error: {e}", level="ERROR")
 
     async def run(self):
         await self.init_runtime()
-        log("[ExecutorProcess] Подключение к IPC серверу...", level="INFO")
+        log("[ExecutorProcess] Connecting to IPC server...", level="INFO")
         
-        # Подключаемся к локальному порту
+        # Connect to local port
         for _ in range(10):
             try:
                 self.reader, self.writer = await asyncio.open_connection('127.0.0.1', self.port)
@@ -315,10 +315,10 @@ class ExecutorProcess:
                 await asyncio.sleep(0.5)
                 
         if not self.reader:
-            log("[ExecutorProcess] Не удалось подключиться к IPC серверу.", level="ERROR")
+            log("[ExecutorProcess] Failed to connect to IPC server.", level="ERROR")
             return
             
-        log("[ExecutorProcess] Процесс исполнения ордеров подключен и готов к командам.", level="INFO")
+        log("[ExecutorProcess] Order execution process connected and ready for commands.", level="INFO")
         
         try:
             while self._running:
@@ -335,7 +335,7 @@ class ExecutorProcess:
                             try:
                                 await self.execute_open(data)
                             except Exception as e:
-                                log(f"[ExecutorProcess] Ошибка в execute_open: {e}\n{traceback.format_exc()}", level="ERROR")
+                                log(f"[ExecutorProcess] Error in execute_open: {e}\n{traceback.format_exc()}", level="ERROR")
                                 if self.writer:
                                     asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
                                         "route": data.get("route"),
@@ -350,7 +350,7 @@ class ExecutorProcess:
                             try:
                                 await self.execute_close(data)
                             except Exception as e:
-                                log(f"[ExecutorProcess] Ошибка в execute_close: {e}\n{traceback.format_exc()}", level="ERROR")
+                                log(f"[ExecutorProcess] Error in execute_close: {e}\n{traceback.format_exc()}", level="ERROR")
                                 if self.writer:
                                     asyncio.create_task(async_write_msg(self.writer, "POS_EXIT_FAILED", {
                                         "route": data.get("route"),
@@ -361,12 +361,12 @@ class ExecutorProcess:
                         self._running = False
                         break
                 except EOFError:
-                    log("[ExecutorProcess] IPC соединение разорвано.", level="WARNING")
+                    log("[ExecutorProcess] IPC connection lost.", level="WARNING")
                     break
                 except Exception as e:
-                    log(f"[ExecutorProcess] Ошибка обработки команды: {e}", level="ERROR")
+                    log(f"[ExecutorProcess] Error handling command: {e}", level="ERROR")
         finally:
-            log("[ExecutorProcess] Завершение работы, закрытие сессий...", level="INFO")
+            log("[ExecutorProcess] Shutting down, closing sessions...", level="INFO")
             if self.writer:
                 self.writer.close()
                 await self.writer.wait_closed()
@@ -374,7 +374,7 @@ class ExecutorProcess:
             await SessionManager().close_all()
 
 def run_executor_process(port: int, cfg: dict):
-    """Entrypoint для отдельного процесса multiprocessing."""
+    """Entrypoint for separate multiprocessing process."""
     try:
         executor = ExecutorProcess(port, cfg)
         asyncio.run(executor.run())

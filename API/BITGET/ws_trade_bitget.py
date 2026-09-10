@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: API/BITGET/ws_trade_bitget.py
-# ROLE: Реактивный WebSocket торговый клиент для Bitget Futures V2 WS-API
+# ROLE: Reactive WebSocket trade client for Bitget Futures V2 WS-API
 # ============================================================
 
 import asyncio
@@ -16,9 +16,9 @@ from c_log import log
 
 class BitgetWsTrader:
     """
-    Высокоскоростной реактивный WebSocket клиент для размещения и отмены ордеров
-    на Bitget USDT-M Futures через wss://ws.bitget.com/v2/ws/private.
-    Поддерживает авторизованную горячую сессию через периодические пинги.
+    High-speed reactive WebSocket client for order execution
+    on Bitget USDT-M Futures via wss://ws.bitget.com/v2/ws/private.
+    Maintains authenticated hot session via periodic pings.
     """
     WS_URL = "wss://ws.bitget.com/v2/ws/private"
 
@@ -46,9 +46,9 @@ class BitgetWsTrader:
         self._worker_task = asyncio.create_task(self._connection_loop())
         try:
             await asyncio.wait_for(self._logged_in_event.wait(), timeout=6.0)
-            log("[BitgetWsTrader] WebSocket торговый стрим успешно авторизован и готов.", level="INFO")
+            log("[BitgetWsTrader] WebSocket trade stream authenticated and ready.", level="INFO")
         except asyncio.TimeoutError:
-            log("[BitgetWsTrader] WebSocket стрим авторизуется в фоновом режиме...", level="WARNING")
+            log("[BitgetWsTrader] WebSocket stream authenticating in background...", level="WARNING")
 
     async def close(self):
         self._running = False
@@ -72,11 +72,11 @@ class BitgetWsTrader:
         while self._running:
             try:
                 self._logged_in_event.clear()
-                log(f"[BitgetWsTrader] Подключение к {self.WS_URL}...", level="DEBUG")
+                log(f"[BitgetWsTrader] Connecting to {self.WS_URL}...", level="DEBUG")
                 async with self.session.ws_connect(self.WS_URL, heartbeat=None, max_msg_size=10*1024*1024) as ws:
                     self._ws = ws
 
-                    # 1. Отправляем логин
+                    # 1. Send login
                     now = str(int(time.time()))
                     sign = self._generate_signature(now)
                     login_msg = {
@@ -90,7 +90,7 @@ class BitgetWsTrader:
                     }
                     await ws.send_json(login_msg)
 
-                    # Запускаем фоновый пингер
+                    # Launch background pinger
                     if self._ping_task:
                         self._ping_task.cancel()
                     self._ping_task = asyncio.create_task(self._ping_loop(ws))
@@ -106,28 +106,28 @@ class BitgetWsTrader:
                                 event = data.get("event")
                                 code = data.get("code")
 
-                                # Проверка успешного логина
+                                # Verify successful login
                                 if event == "login":
                                     if code == 0 or code == "0":
                                         self._logged_in_event.set()
-                                        log("[BitgetWsTrader] Успешная авторизация в сокете.", level="DEBUG")
+                                        log("[BitgetWsTrader] Socket authorization successful.", level="DEBUG")
                                     else:
-                                        log(f"[BitgetWsTrader] Ошибка авторизации: {data}", level="ERROR")
+                                        log(f"[BitgetWsTrader] Authorization error: {data}", level="ERROR")
                                     continue
 
-                                # Обработка ответа на trade операцию
+                                # Process trade operation response
                                 op = data.get("op")
                                 event = data.get("event")
                                 req_id = data.get("id")
 
-                                # Проверка по data (list или dict)
+                                # Verify data (list or dict)
                                 d = data.get("data")
                                 if isinstance(d, list) and len(d) > 0:
                                     req_id = req_id or d[0].get("clientOid") or d[0].get("id")
                                 elif isinstance(d, dict):
                                     req_id = req_id or d.get("clientOid") or d.get("id")
 
-                                # Проверка по args (list)
+                                # Verify args (list)
                                 args = data.get("args")
                                 if isinstance(args, list) and len(args) > 0:
                                     req_id = req_id or args[0].get("id")
@@ -144,19 +144,19 @@ class BitgetWsTrader:
                                                 self._pending_requests.pop(pending_id, None)
                                                 break
                             except Exception as parse_err:
-                                log(f"[BitgetWsTrader] Ошибка парсинга сообщения: {parse_err}", level="WARNING")
+                                log(f"[BitgetWsTrader] Message parse error: {parse_err}", level="WARNING")
                         elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                            log(f"[BitgetWsTrader] Сокет закрылся: {msg.type}", level="WARNING")
+                            log(f"[BitgetWsTrader] Socket closed: {msg.type}", level="WARNING")
                             break
             except asyncio.CancelledError:
                 break
             except Exception as conn_err:
-                log(f"[BitgetWsTrader] Ошибка сокета: {conn_err}. Реконнект через {backoff:.1f}с...", level="WARNING")
+                log(f"[BitgetWsTrader] Socket error: {conn_err}. Reconnecting in {backoff:.1f}s...", level="WARNING")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 1.5, 5.0)
 
     async def _ping_loop(self, ws: aiohttp.ClientWebSocketResponse):
-        """Bitget требует отправку строки 'ping' каждые 20-25 секунд."""
+        """Bitget requires string 'ping' every 20-25 seconds."""
         while self._running and not ws.closed:
             try:
                 await asyncio.sleep(20.0)
@@ -169,14 +169,14 @@ class BitgetWsTrader:
 
     async def place_order(self, symbol: str, side: str, qty_str: str, trade_side: str = "open", timeout: float = 3.0) -> dict:
         """
-        Отправляет MARKET ордер через реактивный WebSocket.
-        trade_side: 'open' или 'close'
+        Sends MARKET order via reactive WebSocket.
+        trade_side: 'open' or 'close'
         """
         if not self._logged_in_event.is_set() or not self._ws or self._ws.closed:
             try:
                 await asyncio.wait_for(self._logged_in_event.wait(), timeout=1.5)
             except asyncio.TimeoutError:
-                raise ConnectionError("[BitgetWsTrader] WebSocket стрим не авторизован")
+                raise ConnectionError("[BitgetWsTrader] WebSocket stream not authorized")
 
         req_id = str(uuid.uuid4()).replace("-", "")[:30]
         # Bitget instId: strip _UMCBL if present
@@ -220,7 +220,7 @@ class BitgetWsTrader:
             self._pending_requests.pop(req_id, None)
 
     async def cancel_all_orders(self, symbol: str, timeout: float = 3.0) -> dict:
-        """Отменяет все ордера по символу через WS-API."""
+        """Cancels all orders for symbol via WS-API."""
         if not self._logged_in_event.is_set() or not self._ws or self._ws.closed:
             return {}
 

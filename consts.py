@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: consts.py
-# ROLE: Глобальные константы, загрузка конфигурации и переменных окружения.
+# ROLE: Global constants, configuration and environment variables loader.
 # ============================================================
 import os
 import json

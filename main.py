@@ -1,7 +1,7 @@
 # ============================================================
 # FILE: main.py
-# ROLE: Дирижер (Процесс 1): Сбор стаканов, Discovery, Numba JIT сигналы и деградация профита.
-#       Оркестрирует отдельный процесс исполнения (Процесс 2: ExecutorProcess).
+# ROLE: Conductor (Process 1): Book collection, Discovery, Numba JIT signals and profit decay.
+#       Orchestrates separate execution process (Process 2: ExecutorProcess).
 # ============================================================
 
 import asyncio
@@ -74,7 +74,7 @@ class Main:
         self.route_names = []
         self.active_routes_array = None
         
-        # Троттлинг диагностических логов выхода (раз в 5 секунд на символ)
+        # Throttle diagnostic exit logs (once every 5s per symbol)
         self._exit_log_ts = {}
         
         # IPC to Executor Process
@@ -127,9 +127,9 @@ class Main:
 
     def _get_desync_limit(self, limit_cfg, long_ex: str, short_ex: str) -> Optional[float]:
         """
-        Возвращает лимит max_desync_ms для конкретной связки.
-        Поддерживает как словарь { "BINANCE_KUCOIN": 125, "BINANCE_BITGET": 200 },
-        так и скалярное числовое значение.
+        Returns max_desync_ms threshold for a given route.
+        Supports both dict { "BINANCE_KUCOIN": 125, "BINANCE_BITGET": 200 }
+        and scalar numeric value.
         """
         if isinstance(limit_cfg, dict):
             r1 = f"{long_ex}_{short_ex}"
@@ -144,7 +144,7 @@ class Main:
         return None
 
     async def _handle_ipc_events(self, reader, writer):
-        """Асинхронная вычитка событий и статусов из процесса исполнения."""
+        """Async reader for events and statuses from executor process."""
         self.executor_writer = writer
         try:
             while True:
@@ -173,36 +173,36 @@ class Main:
                     exp = payload["expire_time"]
                     self.banned_symbols[sym] = exp
         except EOFError:
-            log("[MarketProcess] Соединение с Executor разорвано.", level="WARNING")
+            log("[MarketProcess] Connection to Executor closed.", level="WARNING")
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            log(f"[MarketProcess] Ошибка чтения IPC: {e}", level="WARNING")
+            log(f"[MarketProcess] IPC read error: {e}", level="WARNING")
 
     async def run(self):
         log("==================================================", level="INFO")
-        log("🚀 ProdSpread v2 (2-Process HFT Architecture) Запуск!", level="INFO")
+        log("ProdSpread v2 (2-Process HFT Architecture) Startup!", level="INFO")
         log("==================================================", level="INFO")
 
-        # 1. Запуск IPC сервера и процесса исполнения (Executor Process)
+        # 1. Launch IPC server and Executor Process
         self.server = await asyncio.start_server(self._handle_ipc_events, '127.0.0.1', 0)
         port = self.server.sockets[0].getsockname()[1]
-        log(f"[MAIN] Запущен локальный IPC TCP сервер на порту {port}", level="INFO")
+        log(f"[MAIN] Local IPC TCP server listening on port {port}", level="INFO")
 
         self.executor_proc = mp.Process(target=run_executor_process, args=(port, self.cfg), daemon=True)
         self.executor_proc.start()
-        log(f"[MAIN] Executor Process запущен (PID: {self.executor_proc.pid})", level="INFO")
+        log(f"[MAIN] Executor Process launched (PID: {self.executor_proc.pid})", level="INFO")
 
-        # Ждем пока Executor подключится (writer появится)
+        # Wait until Executor connects (writer available)
         while self.executor_writer is None:
             await asyncio.sleep(0.01)
 
-        # 2. Построение топологии
+        # 2. Build topology
         log("Initializing DiscoveryManager...", level="INFO")
         await self.discovery.build_topology(self.banned_symbols)
         
         for r_name, r_count in getattr(self.discovery, "route_symbol_counts", {}).items():
-            log(f"[Topology] 📊 Связка {r_name}: {r_count} общих монет", level="INFO")
+            log(f"[Topology] Route {r_name}: {r_count} common symbols", level="INFO")
             
         active_routes_cfg = self.cfg["active_routes"]
         self.route_names = list(active_routes_cfg.keys())
@@ -215,14 +215,14 @@ class Main:
         active_symbols = list(self.discovery.active_pairs_map.keys())
         self.pm = PositionManager(self.cfg, EXCHANGES, self.route_names, active_symbols)
 
-        # Передаем топологию и роуты в процесс исполнения
+        # Send topology and routes to executor process
         asyncio.create_task(async_write_msg(self.executor_writer, "INIT_TOPOLOGY", {
             "coin_to_native": self.discovery.coin_to_native,
             "routes": self.route_names,
             "active_symbols": active_symbols
         }))
 
-        # 3. Запуск публичных сокетов стаканов
+        # 3. Launch public orderbook streams
         stream_classes = {
             "BINANCE": BinanceStakanStream,
             "KUCOIN": KucoinStakanStream,
@@ -242,7 +242,7 @@ class Main:
         # Initial balance write
         update_total_balance(self.cfg, is_startup=True)
 
-        # 5. Главный вычислительный цикл (Numba JIT: [ask_p, ask_usd, bid_p, bid_usd])
+        # 5. Main calculation loop (Numba JIT: [ask_p, ask_usd, bid_p, bid_usd])
         prices_array = np.full((7, 4), [np.inf, 0.0, 0.0, 0.0], dtype=np.float64)
 
         try:
@@ -285,8 +285,8 @@ class Main:
                             actual_net_spread_entry=state["details"].get("actual_net_spread", 0.0)
                         )
                         
-                        # Защита от фантомных импульсов на выходе (только для PROFIT_DECAY)
-                        # Экстренные выходы (TTL, LOW_FILL_RATE) никогда не блокируются!
+                        # Protection against phantom spikes on exit (only for PROFIT_DECAY)
+                        # Emergency exits (TTL, LOW_FILL_RATE) are never blocked!
                         if is_exit and exit_res.get("reason") == "PROFIT_DECAY":
                             long_ts = self.ts[long_ex].get(sym, 0.0)
                             short_ts = self.ts[short_ex].get(sym, 0.0)
@@ -297,7 +297,7 @@ class Main:
                                     is_exit = False
                                     exit_res["reason"] = f"EXIT_DESYNC_SKIP ({diff_ms:.0f}ms > {limit:.0f}ms)"
                         
-                        # --- ДИАГНОСТИЧЕСКОЕ ЛОГИРОВАНИЕ ВЫХОДА (каждые 5 секунд на символ) ---
+                        # --- DIAGNOSTIC EXIT LOGGING (every 5 seconds per symbol) ---
                         _now_log = time.time()
                         _last_log = self._exit_log_ts.get(sym, 0.0)
                         if _now_log - _last_log >= 5.0:
@@ -319,14 +319,14 @@ class Main:
                             _scp_s = f"{_scp:.6f}" if _scp else "N/A"
                             
                             if is_exit:
-                                log(f"[{sym}] 🔍 EXIT_SIGNAL: net={_net_s} tgt={_tgt_s} spread_out={_spr_s} | "
+                                log(f"[{sym}] EXIT_SIGNAL: net={_net_s} tgt={_tgt_s} spread_out={_spr_s} | "
                                     f"L_close={_lcp_s} S_close={_scp_s} (entry L={_elp:.6f} S={_esp:.6f}) | "
                                     f"dur={duration_sec:.0f}s lvl={_lvl} fill=L:{long_rate*100:.0f}%/S:{short_rate*100:.0f}% | {_reason}", level="INFO")
                             else:
                                 _gap = ""
                                 if _net is not None and _tgt is not None:
                                     _gap = f" gap={(_net - _tgt)*100:+.4f}%"
-                                log(f"[{sym}] 🔍 EXIT_HOLD: net={_net_s} tgt={_tgt_s}{_gap} spread_out={_spr_s} | "
+                                log(f"[{sym}] EXIT_HOLD: net={_net_s} tgt={_tgt_s}{_gap} spread_out={_spr_s} | "
                                     f"L_close={_lcp_s} S_close={_scp_s} (entry L={_elp:.6f} S={_esp:.6f}) | "
                                     f"dur={duration_sec:.0f}s lvl={_lvl} fill=L:{long_rate*100:.0f}%/S:{short_rate*100:.0f}% | SKIP: {_reason}", level="INFO")
                         
@@ -337,15 +337,15 @@ class Main:
                             state["details"]["exit_level_index"] = new_level
                             target_val = exit_res.get("target_val")
                             if target_val is None or target_val <= -999.0:
-                                log(f"[{sym}] ⚠️ Деградация профита: Уровень {new_level} (TTL, принудительный выход)", level="WARNING")
+                                log(f"[{sym}] Profit decay: Level {new_level} (TTL forced exit)", level="WARNING")
                             else:
-                                log(f"[{sym}] 📉 Деградация профита: Уровень {new_level}, новый таргет: {target_val * 100:.3f}%", level="INFO")
+                                log(f"[{sym}] Profit decay: Level {new_level}, target: {target_val * 100:.3f}%", level="INFO")
                         
                         if is_exit:
-                            # Чистим троттл-лог при выходе
+                            # Clean throttle log on exit
                             self._exit_log_ts.pop(sym, None)
                             self.pm.lock_for_exit(route, sym)
-                            # Отправляем команду закрытия в Executor Process
+                            # Send close command to Executor Process
                             if self.executor_writer:
                                 asyncio.create_task(async_write_msg(self.executor_writer, "CMD_CLOSE", {
                                     "route": route,
@@ -425,7 +425,7 @@ class Main:
                                     sig_key = (route, sym)
                                     
                                     if is_valid_entry:
-                                        # Проверка выдержки сигнала (Signal Dwell Time)
+                                        # Signal dwell time check
                                         if self.min_signal_dwell_ms > 0:
                                             first_seen = self._signal_first_seen.get(sig_key)
                                             if first_seen is None:
@@ -434,7 +434,7 @@ class Main:
                                             dwell_ms = (now_mono - first_seen) * 1000.0
                                             if dwell_ms < self.min_signal_dwell_ms:
                                                 continue
-                                            # Выдержка подтверждена - сбрасываем ключ
+                                            # Dwell confirmed - reset key
                                             self._signal_first_seen.pop(sig_key, None)
                                             
                                         roles_cfg = self.cfg["trading_rules"]["entry"]["exchange_roles"].get(route, {})
@@ -442,7 +442,7 @@ class Main:
                                         hedge_book_snap = self.books.get(hedge_ex_name, {}).get(sym, {})
                                         
                                         self.pm.lock_for_entry(long_ex, short_ex, sym, engine_res)
-                                        # Отправляем команду на открытие в Executor Process
+                                        # Send open command to Executor Process
                                         if self.executor_writer:
                                             asyncio.create_task(async_write_msg(self.executor_writer, "CMD_OPEN", {
                                                 "sym": sym,
@@ -454,7 +454,7 @@ class Main:
                                             }))
                                         break
                                     else:
-                                        # Сигнал не подтвержден/пропал - сбрасываем таймер
+                                        # Signal unconfirmed/vanished - reset timer
                                         self._signal_first_seen.pop(sig_key, None)
 
                             if len(self._signal_first_seen) > 100:
@@ -466,23 +466,23 @@ class Main:
                 except asyncio.CancelledError:
                     raise
                 except Exception as iter_ex:
-                    log(f"Сбой в цикле (итерация пропущена): {iter_ex}", level="ERROR")
+                    log(f"Calculation loop error (iteration skipped): {iter_ex}", level="ERROR")
                     traceback.print_exc()
                 
                 await asyncio.sleep(self.cfg["MAIN_LOOP_DELAY"])
 
         except KeyboardInterrupt:
-            log("⛔ Остановка по Ctrl+C", level="INFO")
+            log("Stopping via Ctrl+C", level="INFO")
         except Exception as ex:
-            log(f"Сбой выполнения: {ex}", level="ERROR")
+            log(f"Execution error: {ex}", level="ERROR")
             traceback.print_exc()
         finally:
-            log("Завершение работы Market Data Engine...", level="INFO")
+            log("Shutting down Market Data Engine...", level="INFO")
             for stream in self.streams.values():
                 await stream.aclose()
             await self.discovery.aclose()
             
-            # Остановка Executor Process
+            # Stop Executor Process
             if self.executor_writer:
                 try:
                     asyncio.create_task(async_write_msg(self.executor_writer, "SHUTDOWN", None))
@@ -506,13 +506,13 @@ if __name__ == "__main__":
         pass
 
 
-## шпору не трогать!!
+## CHEAT SHEET (DO NOT DELETE)
 # # chmod 600 ssh_key.txt
 # # eval "$(ssh-agent -s)" 
 # # ssh-add ssh_key.txt
 # # git remote set-url origin git@github.com:hotelUpz/uranus_bot.git
 # # source .ssh-autostart.sh
-# В терминале Git Bash, находясь в папке с проектом:
+# In Git Bash terminal inside project directory:
 # source C:/Users/User/Desktop/My_Pro/HP_EliteBook_735_old/WORKSPACE/COMMON/.ssh-autostart.sh
 # chmod 600 /home/kali/Desktop/MyProjects/COMMON/ssh_key.txt
 
@@ -552,4 +552,4 @@ if __name__ == "__main__":
 # }
 
 
-# logs/test_hedge_binance_kucoin.log и logs/test_hedge_binance_bitget.log.
+# logs/test_hedge_binance_kucoin.log and logs/test_hedge_binance_bitget.log.

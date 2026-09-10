@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: API/BINANCE/ws_trade_binance.py
-# ROLE: Реактивный WebSocket торговый клиент для Binance Futures WS-API (v1)
+# ROLE: Reactive WebSocket trade client for Binance Futures WS-API (v1)
 # ============================================================
 
 import asyncio
@@ -16,9 +16,9 @@ from c_log import log
 
 class BinanceWsTrader:
     """
-    Высокоскоростной реактивный WebSocket клиент для размещения и отмены ордеров
-    на Binance USDS-M Futures через wss://ws-fapi.binance.com/ws-fapi/v1.
-    Постоянно поддерживает горячее соединение через WebSocket ping/heartbeat.
+    High-speed reactive WebSocket client for order execution
+    on Binance USDS-M Futures via wss://ws-fapi.binance.com/ws-fapi/v1.
+    Maintains persistent hot session via WebSocket ping/heartbeat.
     """
     WS_URL = "wss://ws-fapi.binance.com/ws-fapi/v1"
 
@@ -44,9 +44,9 @@ class BinanceWsTrader:
         self._worker_task = asyncio.create_task(self._connection_loop())
         try:
             await asyncio.wait_for(self._connected_event.wait(), timeout=5.0)
-            log("[BinanceWsTrader] WebSocket торговый стрим успешно подключен и готов.", level="INFO")
+            log("[BinanceWsTrader] WebSocket trade stream connected and ready.", level="INFO")
         except asyncio.TimeoutError:
-            log("[BinanceWsTrader] WebSocket стрим подключается в фоновом режиме...", level="WARNING")
+            log("[BinanceWsTrader] WebSocket stream connecting in background...", level="WARNING")
 
     async def close(self):
         self._running = False
@@ -61,7 +61,7 @@ class BinanceWsTrader:
             await self.session.close()
 
     def _generate_signature(self, params: dict) -> str:
-        # Сортируем параметры по алфавиту для формирования строки подписи
+        # Sort parameters alphabetically for signature query
         sorted_keys = sorted(params.keys())
         query_str = "&".join(f"{k}={params[k]}" for k in sorted_keys)
         return hmac.new(self.api_secret.encode('utf-8'), query_str.encode('utf-8'), hashlib.sha256).hexdigest()
@@ -71,14 +71,14 @@ class BinanceWsTrader:
         while self._running:
             try:
                 self._connected_event.clear()
-                log(f"[BinanceWsTrader] Подключение к {self.WS_URL}...", level="DEBUG")
+                log(f"[BinanceWsTrader] Connecting to {self.WS_URL}...", level="DEBUG")
                 async with self.session.ws_connect(self.WS_URL, heartbeat=15.0, max_msg_size=10*1024*1024) as ws:
                     self._ws = ws
                     self._connected_event.set()
                     backoff = 0.5
-                    log("[BinanceWsTrader] Соединение установлено.", level="DEBUG")
+                    log("[BinanceWsTrader] Connection established.", level="DEBUG")
 
-                    # Запускаем фоновый пингер для поддержания постоянной горячей сессии
+                    # Launch background pinger for persistent hot session
                     if self._ping_task:
                         self._ping_task.cancel()
                     self._ping_task = asyncio.create_task(self._ping_loop(ws))
@@ -93,19 +93,19 @@ class BinanceWsTrader:
                                     if not fut.done():
                                         fut.set_result(data)
                             except Exception as parse_err:
-                                log(f"[BinanceWsTrader] Ошибка парсинга сообщения: {parse_err}", level="WARNING")
+                                log(f"[BinanceWsTrader] Message parse error: {parse_err}", level="WARNING")
                         elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                            log(f"[BinanceWsTrader] Сокет закрылся: {msg.type}", level="WARNING")
+                            log(f"[BinanceWsTrader] Socket closed: {msg.type}", level="WARNING")
                             break
             except asyncio.CancelledError:
                 break
             except Exception as conn_err:
-                log(f"[BinanceWsTrader] Ошибка сокета: {conn_err}. Реконнект через {backoff:.1f}с...", level="WARNING")
+                log(f"[BinanceWsTrader] Socket error: {conn_err}. Reconnecting in {backoff:.1f}s...", level="WARNING")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 1.5, 5.0)
 
     async def _ping_loop(self, ws: aiohttp.ClientWebSocketResponse):
-        """Отправляет ping-фрейм каждые 15 секунд для поддержания постоянной горячей сессии."""
+        """Sends ping frame every 15 seconds to maintain persistent connection."""
         while self._running and not ws.closed:
             try:
                 await asyncio.sleep(15.0)
@@ -118,15 +118,15 @@ class BinanceWsTrader:
 
     async def place_order(self, symbol: str, side: str, qty_str: str, position_side: Optional[str] = None, timeout: float = 3.0) -> dict:
         """
-        Отправляет MARKET ордер через горячий реактивный WebSocket.
-        Возвращает ответ биржи с информацией об ордере.
+        Sends MARKET order via reactive WebSocket.
+        Returns exchange response with order details.
         """
         if not self._connected_event.is_set() or not self._ws or self._ws.closed:
-            # Ожидание готовности сокета с коротким таймаутом
+            # Await socket readiness with short timeout
             try:
                 await asyncio.wait_for(self._connected_event.wait(), timeout=1.0)
             except asyncio.TimeoutError:
-                raise ConnectionError("[BinanceWsTrader] WebSocket стрим не подключен")
+                raise ConnectionError("[BinanceWsTrader] WebSocket stream not connected")
 
         req_id = str(uuid.uuid4())
         timestamp = int(time.time() * 1000)
@@ -167,7 +167,7 @@ class BinanceWsTrader:
             self._pending_requests.pop(req_id, None)
 
     async def cancel_all_orders(self, symbol: str, timeout: float = 3.0) -> dict:
-        """Отменяет открытые ордера по символу через WS-API."""
+        """Cancels open orders for symbol via WS-API."""
         if not self._connected_event.is_set() or not self._ws or self._ws.closed:
             return {}
 

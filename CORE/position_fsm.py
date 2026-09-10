@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: CORE/position_fsm.py
-# ROLE: FSM жизненного цикла позиции (вход, выход, аварийный сброс)
+# ROLE: Position lifecycle FSM (entry, exit, emergency unwind)
 # ============================================================
 
 import asyncio
@@ -70,12 +70,12 @@ class PositionFSM:
         self.order_policy = entry_cfg["order_execution_type"].upper()
         self.min_fill_rate = float(parallel_cfg["min_hedge_fill_rate"])
 
-        # Карантины из конфигов (без магических констант)
+        # Quarantines from configs (no magic constants)
         self.q_entry_error = float(ban_q["entry_error"])
         self.q_zero_fill = float(ban_q["zero_fill"])
         self.q_single_leg = float(ban_q["single_leg_exposure"])
 
-        # Параметры подтверждения налива из parallel_entry_logic
+        # Fill confirmation parameters from parallel_entry_logic
         timeout_cfg = parallel_cfg["fill_confirm_timeout_sec"]
         pair_key1 = f"{long_ex}_{short_ex}".upper()
         pair_key2 = f"{short_ex}_{long_ex}".upper()
@@ -85,12 +85,12 @@ class PositionFSM:
             self.fill_confirm_timeout = float(timeout_cfg[pair_key2])
         else:
             raise KeyError(
-                f"fill_confirm_timeout_sec не содержит пару {pair_key1} или {pair_key2} в cfg.json"
+                f"fill_confirm_timeout_sec does not contain pair {pair_key1} or {pair_key2} in cfg.json"
             )
 
         self.fill_confirm_poll_interval = float(parallel_cfg["fill_confirm_poll_interval_sec"])
 
-        # Параметры подтверждения закрытия позиции (из секции exit с fallback на entry * 2)
+        # Position close confirmation parameters (from exit section with fallback to entry * 2)
         exit_timeout_cfg = self.cfg["trading_rules"].get("exit", {}).get("close_confirm_timeout_sec")
         if exit_timeout_cfg:
             if isinstance(exit_timeout_cfg, dict):
@@ -107,7 +107,7 @@ class PositionFSM:
         else:
             self.close_confirm_timeout = self.fill_confirm_timeout * 2.0
 
-        # Параметры аварийного сброса (из конфига строго через [''])
+        # Emergency unwind parameters (from config strictly via [''])
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
         self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
         self.unwind_retry_pause = float(unwind_cfg["retry_pause_sec"])
@@ -133,9 +133,9 @@ class PositionFSM:
         ev_short: Optional[asyncio.Event] = None,
     ) -> Tuple[Dict[str, float], Dict[str, float], float, float]:
         """
-        Реактивный опрос локального WS-кэша позиций до подтверждения налива обеих ног (min_fill_rate)
-        или истечения предельного таймаута fill_confirm_timeout_sec.
-        Работает по предикатному Event-driven циклу без джиттера системных таймеров (0.05-0.15 мс).
+        Event-driven reactive polling of local position WS-cache until both legs reach min_fill_rate
+        or fill_confirm_timeout_sec expires.
+        Zero timer jitter (0.05-0.15 ms).
         """
         start_time = time.perf_counter()
         deadline = start_time + self.fill_confirm_timeout
@@ -144,14 +144,14 @@ class PositionFSM:
         self.ws_fill_timings = {self.long_ex: 0.0, self.short_ex: 0.0}
 
         while True:
-            # Безопасное чтение из локального WS-кэша
+            # Safe read from local WS cache
             if self.long_ex in self.orders:
                 try:
                     p_long = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
                     if p_long and p_long.get("size", 0.0) > 0:
                         self.long_pos = p_long
                 except Exception as e:
-                    log(f"[{self.sym}] Ошибка чтения WS-кэша {self.long_ex}: {e}", level="WARNING")
+                    log(f"[{self.sym}] Error reading WS cache {self.long_ex}: {e}", level="WARNING")
 
             if self.short_ex in self.orders:
                 try:
@@ -159,7 +159,7 @@ class PositionFSM:
                     if p_short and p_short.get("size", 0.0) > 0:
                         self.short_pos = p_short
                 except Exception as e:
-                    log(f"[{self.sym}] Ошибка чтения WS-кэша {self.short_ex}: {e}", level="WARNING")
+                    log(f"[{self.sym}] Error reading WS cache {self.short_ex}: {e}", level="WARNING")
 
             l_size = self.long_pos.get("size", 0.0)
             s_size = self.short_pos.get("size", 0.0)
@@ -175,21 +175,21 @@ class PositionFSM:
             if req_short_qty > 0 and s_rate >= self.min_fill_rate and self.ws_fill_timings.get(self.short_ex, 0.0) == 0.0:
                 self.ws_fill_timings[self.short_ex] = elapsed_now_ms
 
-            # Предикат готовности: проверяем только запрашиваемые ноги (> 0)
+            # Readiness predicate: verify requested legs (> 0)
             l_ok = (l_rate >= self.min_fill_rate) if req_long_qty > 0 else True
             s_ok = (s_rate >= self.min_fill_rate) if req_short_qty > 0 else True
 
             if l_ok and s_ok:
-                leg_desc = "Обе ноги" if (req_long_qty > 0 and req_short_qty > 0) else ("Lead" if self.state == PositionState.VERIFYING_FILL else "Hedge")
-                log(f"[{self.sym}] 🚀 {leg_desc} подтвержден(ы) реактивно за {elapsed_now_ms:.2f} мс (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
+                leg_desc = "Both legs" if (req_long_qty > 0 and req_short_qty > 0) else ("Lead" if self.state == PositionState.VERIFYING_FILL else "Hedge")
+                log(f"[{self.sym}] {leg_desc} confirmed reactively in {elapsed_now_ms:.2f} ms (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
                 break
 
             remaining = deadline - now
             if remaining <= 0:
-                log(f"[{self.sym}] ⏱ Таймаут подтверждения налива ({elapsed_now_ms:.1f} мс). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
+                log(f"[{self.sym}] Fill confirmation timeout ({elapsed_now_ms:.1f} ms). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
                 break
 
-            # Если пуш уже успел взвести событие до входа в ожидание
+            # If event was already set before entering wait
             if (ev_long and ev_long.is_set()) or (ev_short and ev_short.is_set()):
                 if ev_long:
                     ev_long.clear()
@@ -197,7 +197,7 @@ class PositionFSM:
                     ev_short.clear()
                 continue
 
-            # Реактивное ожидание пуша от любой ноги с защитным таймаутом
+            # Reactive wait for push event from either leg with protective timeout
             wait_tasks = []
             if ev_long:
                 wait_tasks.append(asyncio.create_task(ev_long.wait()))
@@ -231,9 +231,9 @@ class PositionFSM:
         ev_short: Optional[asyncio.Event] = None,
     ) -> Tuple[bool, float, float]:
         """
-        Реактивный опрос локального WS-кэша позиций до подтверждения обнуления обеих ног (size == 0.0)
-        или истечения предельного таймаута close_confirm_timeout_sec.
-        Возвращает (is_closed, close_price_long, close_price_short).
+        Event-driven reactive polling of local WS cache until both legs are zeroed (size == 0.0)
+        or close_confirm_timeout_sec expires.
+        Returns (is_closed, close_price_long, close_price_short).
         """
         start_time = time.perf_counter()
         deadline = start_time + self.close_confirm_timeout
@@ -255,7 +255,7 @@ class PositionFSM:
                         if p > 0:
                             close_p_long = p
                 except Exception as e:
-                    log(f"[{self.sym}] Ошибка чтения WS-кэша закрытия {self.long_ex}: {e}", level="WARNING")
+                    log(f"[{self.sym}] Error reading WS close cache {self.long_ex}: {e}", level="WARNING")
 
             if self.short_ex in self.orders:
                 try:
@@ -267,7 +267,7 @@ class PositionFSM:
                         if p > 0:
                             close_p_short = p
                 except Exception as e:
-                    log(f"[{self.sym}] Ошибка чтения WS-кэша закрытия {self.short_ex}: {e}", level="WARNING")
+                    log(f"[{self.sym}] Error reading WS close cache {self.short_ex}: {e}", level="WARNING")
 
             now = time.perf_counter()
             elapsed_now_ms = (now - start_time) * 1000.0
@@ -278,12 +278,12 @@ class PositionFSM:
                 self.ws_close_timings[self.short_ex] = elapsed_now_ms
 
             if l_closed and s_closed:
-                log(f"[{self.sym}] 🚀 Обе ноги подтверждены закрытыми реактивно за {elapsed_now_ms:.2f} мс (0.0)", level="INFO")
+                log(f"[{self.sym}] Both legs confirmed closed reactively in {elapsed_now_ms:.2f} ms (0.0)", level="INFO")
                 return True, close_p_long, close_p_short
 
             remaining = deadline - now
             if remaining <= 0:
-                log(f"[{self.sym}] ⏱ Таймаут подтверждения закрытия по WS ({elapsed_now_ms:.1f} мс), переход к контрольной проверке...", level="WARNING")
+                log(f"[{self.sym}] WS close confirmation timeout ({elapsed_now_ms:.1f} ms), falling back to control check...", level="WARNING")
                 return False, close_p_long, close_p_short
 
             if (ev_long and ev_long.is_set()) or (ev_short and ev_short.is_set()):
@@ -320,7 +320,7 @@ class PositionFSM:
 
     async def run_open(self) -> bool:
         """
-        Запуск пайплайна открытия позиции (PARALLEL_LIMIT_IOC):
+        Start position opening pipeline (PARALLEL_LIMIT_IOC):
         IDLE -> SUBMITTING (Both Legs) -> VERIFYING_FILL -> ACTIVE_HEDGED / SINGLE_LEG_EXPOSURE / ABORTED
         """
         self._set_state(PositionState.SUBMITTING)
@@ -329,16 +329,16 @@ class PositionFSM:
         parallel_cfg = entry_cfg.get("parallel_entry_logic", entry_cfg)
         
         spread_val = self.engine_res.get("net_spread", self.engine_res.get("vwap_spread", 0.0))
-        log(f"[{self.sym}] Открываем (PARALLEL_LIMIT_IOC): {self.long_ex} (L) / {self.short_ex} (S) | Net Spread: {spread_val * 100:.2f}%", level="INFO")
+        log(f"[{self.sym}] Opening (PARALLEL_LIMIT_IOC): {self.long_ex} (L) / {self.short_ex} (S) | Net Spread: {spread_val * 100:.2f}%", level="INFO")
         
         size_long_usd = float(self.cfg["trading_risks"][self.long_ex.lower()]["trade_size_usd"])
         size_short_usd = float(self.cfg["trading_risks"][self.short_ex.lower()]["trade_size_usd"])
         
-        # Получаем расчетные цены (текущие лучшие цены или VWAP в зависимости от логики движка)
+        # Calculate prices (current top book or VWAP depending on engine logic)
         price_long_calc = self.engine_res.get("long_avg_price", 0.0)
         price_short_calc = self.engine_res.get("short_avg_price", 0.0)
         
-        # Используем лимиты проскальзывания из конфига (пока берем те же что были для Lead)
+        # Use slippage limits from config
         max_slip = float(parallel_cfg.get("max_slippage_pct", entry_cfg.get("lead_max_slippage_pct", 0.0005)))
         
         price_long_limit = price_long_calc * (1 + max_slip)
@@ -370,7 +370,7 @@ class PositionFSM:
         for i, res in enumerate(results):
             ex_name = self.long_ex if i == 0 else self.short_ex
             if isinstance(res, Exception):
-                log(f"[{self.sym}] 🚨 Ошибка входа ({ex_name}): {res}.", level="ERROR")
+                log(f"[{self.sym}] Entry error ({ex_name}): {res}.", level="ERROR")
                 self.ban_coin_cb(self.sym, reason=str(res), duration_sec=self.q_entry_error)
         
         self._set_state(PositionState.VERIFYING_FILL)
@@ -389,10 +389,10 @@ class PositionFSM:
         l_price = l_pos.get("price", 0.0)
         s_price = s_pos.get("price", 0.0)
         
-        log(f"[{self.sym}] Phase 2: Результаты налива -> LONG: {l_qty:.4f} ({l_rate*100:.1f}%), SHORT: {s_qty:.4f} ({s_rate*100:.1f}%)", level="INFO")
+        log(f"[{self.sym}] Phase 2: Fill results -> LONG: {l_qty:.4f} ({l_rate*100:.1f}%), SHORT: {s_qty:.4f} ({s_rate*100:.1f}%)", level="INFO")
         
         if l_qty <= 0.0 and s_qty <= 0.0:
-            log(f"[{self.sym}] Zero Fill: Ни одна нога не налилась. Карантин {self.q_zero_fill:.0f}с.", level="WARNING")
+            log(f"[{self.sym}] Zero Fill: Neither leg filled. Quarantine {self.q_zero_fill:.0f}s.", level="WARNING")
             self.ban_coin_cb(self.sym, reason="Zero Fill (Both Legs)", duration_sec=self.q_zero_fill)
             self._set_state(PositionState.ABORTED)
             self._notify_pos_failed("ZERO_FILL")
@@ -407,7 +407,7 @@ class PositionFSM:
             s_notional = s_qty * s_price
             ratio = min(l_notional, s_notional) / max(l_notional, s_notional)
             if ratio >= min_hedge_rate:
-                log(f"[{self.sym}] Обе ноги успешно налиты. Сбалансированность {ratio*100:.1f}%. Переход в ACTIVE_HEDGED.", level="INFO")
+                log(f"[{self.sym}] Both legs filled successfully. Balance ratio {ratio*100:.1f}%. State -> ACTIVE_HEDGED.", level="INFO")
                 # TODO: trim excess if needed (for now just finalize)
                 self._finalize_open(l_qty, s_qty, l_price, s_price)
                 return True
@@ -415,7 +415,7 @@ class PositionFSM:
         # SINGLE LEG EXPOSURE
         sle_cfg = self.cfg["trading_rules"]["exit"]["single_leg_exit"]
         if sle_cfg["immediate_market"]:
-            log(f"[{self.sym}] Зависла одна нога. Включен немедленный выход по маркету.", level="WARNING")
+            log(f"[{self.sym}] Single leg exposure detected. Immediate market exit enabled.", level="WARNING")
             if l_qty > 0:
                 await self._emergency_unwind_single(self.long_ex, self.native_long, l_qty, l_price, "BUY", "LONG")
             if s_qty > 0:
@@ -424,16 +424,16 @@ class PositionFSM:
             self._notify_pos_failed("SINGLE_LEG_IMMEDIATE_MARKET")
             return False
 
-        log(f"[{self.sym}] Переход к статической арбитражной обработке одной зависшей ноги (SINGLE_LEG_EXPOSURE).", level="WARNING")
+        log(f"[{self.sym}] Transitioning to SINGLE_LEG_EXPOSURE handling.", level="WARNING")
         self._set_state(PositionState.SINGLE_LEG_EXPOSURE)
         await self._run_single_leg_exposure(l_qty, s_qty, l_price, s_price)
         return False
 
     async def _run_single_leg_exposure(self, l_qty: float, s_qty: float, l_price: float, s_price: float):
         """
-        Чейзинг стакана для выхода из зависшей ноги.
+        Order book chasing for single leg exit.
         """
-        # Определяем зависшую ногу
+        # Determine exposed leg
         if l_qty > 0 and s_qty <= 0.0:
             open_ex = self.long_ex
             native_sym = self.native_long
@@ -453,7 +453,7 @@ class PositionFSM:
             engine_price_key = "short_avg_price"
             ev_leg = self.orders[open_ex].subscribe_position_update(native_sym, "SHORT") if hasattr(self.orders[open_ex], "subscribe_position_update") else None
         else:
-            # Аномалия, сбрасываем обе если нужно
+            # Anomaly: unwind both if needed
             if l_qty > 0:
                 await self._emergency_unwind_single(self.long_ex, self.native_long, l_qty, l_price, "BUY", "LONG")
             if s_qty > 0:
@@ -481,12 +481,12 @@ class PositionFSM:
                 
             if price_slip <= -900.0:
                 # Market fallback
-                log(f"[{self.sym}] Single Leg Fallback: MARKET выход ({open_ex}).", level="WARNING")
+                log(f"[{self.sym}] Single Leg Fallback: MARKET exit ({open_ex}).", level="WARNING")
                 await self._emergency_unwind_single(open_ex, native_sym, qty_rem, entry_price, "BUY" if close_side=="SELL" else "SELL", pos_side)
                 break
                 
-            # Пробуем лимитку
-            # Для чейзинга нужно взять лучшую цену стакана и ухудшить ее на price_slip
+            # Try limit order
+            # For chasing, take best book price adjusted by price_slip
             current_calc_price = self.engine_res.get(engine_price_key, entry_price)
             
             if close_side == "SELL":
@@ -502,12 +502,12 @@ class PositionFSM:
                     native_sym, close_side, usd_needed, limit_price, order_type="LIMIT_IOC", position_side=pos_side, exact_qty=qty_rem, reduce_only=True
                 )
             except Exception as e:
-                log(f"[{self.sym}] Ошибка чейзинга {open_ex}: {e}", level="ERROR")
+                log(f"[{self.sym}] Chasing error on {open_ex}: {e}", level="ERROR")
                 continue
                 
-            await asyncio.sleep(0.5) # Ждем налив лимитки
+            await asyncio.sleep(0.5) # Wait for limit fill
             
-            # Проверяем позицию
+            # Check position
             pos = await self.orders[open_ex].get_position_rest(native_sym, pos_side)
             qty_rem = pos.get("size", 0.0)
             
@@ -522,11 +522,11 @@ class PositionFSM:
         self._set_state(PositionState.EMERGENCY_UNWIND)
         usd = qty * price
         reduce_side = "SELL" if side == "BUY" else "BUY"
-        log(f"[{self.sym}] Мгновенный сброс {ex} ({qty} шт, {usd:.2f}$)...", level="WARNING")
+        log(f"[{self.sym}] Immediate unwind {ex} ({qty} qty, {usd:.2f}$)...", level="WARNING")
         try:
             await self.orders[ex].place_order(native_sym, reduce_side, usd, price, order_type="MARKET", position_side=pos_side)
         except Exception as e:
-            log(f"[{self.sym}] Ошибка сброса {ex}: {e}", level="ERROR")
+            log(f"[{self.sym}] Unwind error on {ex}: {e}", level="ERROR")
             
         self._notify_pos_failed("UNWIND_SINGLE")
 
@@ -562,7 +562,7 @@ class PositionFSM:
         actual_gross_spread = (p_short - p_long) / p_long if p_long > 0 else 0.0
         actual_net_spread = actual_gross_spread - entry_comm
         
-        # Если было подрезание, всегда используем extreme_decay
+        # If trim occurred, always use extreme_decay
         use_extreme_decay = True
         
         self.exec_res = {
@@ -586,7 +586,7 @@ class PositionFSM:
         if self.pm:
             self.pm.confirm_entry(self.long_ex, self.short_ex, self.sym, self.exec_res, self.open_time)
             
-        log(f"[{self.sym}] 🟢 Позиция открыта! Факт Net Spread: {actual_net_spread*100:.3f}%", level="INFO")
+        log(f"[{self.sym}] Position opened! Actual Net Spread: {actual_net_spread*100:.3f}%", level="INFO")
 
         if self.writer:
             asyncio.create_task(async_write_msg(self.writer, "POS_OPENED", {
@@ -598,18 +598,17 @@ class PositionFSM:
 
     async def _emergency_unwind(self):
         """
-        Мгновенный 1-Shot HFT Market Kill-Switch.
-        Поскольку ордера бьют строго MARKET, при сбое входа не крутятся медленные циклы:
-        1. Если одна нога успела налиться, мгновенно выстреливаем 1 встречный MARKET-ордер на ее ликвидацию.
-        2. Подтверждаем обнуление по WS за 15-30 мс (с аварийным REST только при таймауте).
+        Instant 1-Shot HFT Market Kill-Switch.
+        1. If one leg was filled, immediately send 1 counter MARKET order to liquidate it.
+        2. Confirm zero position via WS within 15-30 ms (emergency REST only on timeout).
         """
         self._set_state(PositionState.EMERGENCY_UNWIND)
-        log(f"[{self.sym}] 🚨 Запуск 1-Shot Market Kill-Switch (ликвидация асимметрии входа)...", level="WARNING")
+        log(f"[{self.sym}] Launching 1-Shot Market Kill-Switch (entry asymmetry liquidation)...", level="WARNING")
 
         l_size = self.long_pos.get("size", 0.0)
         s_size = self.short_pos.get("size", 0.0)
 
-        # Контрольное чтение локального WS-кэша
+        # Control read of local WS cache
         if l_size <= 0 and self.long_ex in self.orders:
             p_long = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
             if p_long and p_long.get("size", 0.0) > 0:
@@ -626,7 +625,7 @@ class PositionFSM:
         if l_size > 0 and self.long_ex in self.orders:
             p = self.long_pos.get("price", 0.0) or self.engine_res.get("long_avg_price", 1.0)
             usd = l_size * p
-            log(f"[{self.sym}] ⚡ Мгновенный сброс зависшего лонга ({l_size} шт, {usd:.2f}$) на {self.long_ex}...", level="WARNING")
+            log(f"[{self.sym}] Immediate unwind of exposed long ({l_size} qty, {usd:.2f}$) on {self.long_ex}...", level="WARNING")
             kill_tasks.append(self.orders[self.long_ex].place_order(
                 self.native_long, "SELL", usd, p, order_type="MARKET", position_side="LONG"
             ))
@@ -634,7 +633,7 @@ class PositionFSM:
         if s_size > 0 and self.short_ex in self.orders:
             p = self.short_pos.get("price", 0.0) or self.engine_res.get("short_avg_price", 1.0)
             usd = s_size * p
-            log(f"[{self.sym}] ⚡ Мгновенный сброс зависшего шорта ({s_size} шт, {usd:.2f}$) на {self.short_ex}...", level="WARNING")
+            log(f"[{self.sym}] Immediate unwind of exposed short ({s_size} qty, {usd:.2f}$) on {self.short_ex}...", level="WARNING")
             kill_tasks.append(self.orders[self.short_ex].place_order(
                 self.native_short, "BUY", usd, p, order_type="MARKET", position_side="SHORT"
             ))
@@ -642,7 +641,7 @@ class PositionFSM:
         if kill_tasks:
             await asyncio.gather(*kill_tasks, return_exceptions=True)
 
-        # Быстрая проверка обнуления по WS (до 300 мс)
+        # Fast verification of zero position via WS (up to 300 ms)
         is_flat = False
         t_deadline = time.perf_counter() + 0.3
         while time.perf_counter() < t_deadline:
@@ -662,8 +661,8 @@ class PositionFSM:
             await asyncio.sleep(0.01)
 
         if not is_flat:
-            # Fallback контрольный REST только если сокет не подтвердил за 300 мс
-            log(f"[{self.sym}] WS не подтвердил 0.0 за 300 мс, контрольный запрос через REST...", level="WARNING")
+            # Fallback control REST query only if WS did not confirm within 300 ms
+            log(f"[{self.sym}] WS did not confirm 0.0 within 300 ms, querying REST...", level="WARNING")
             l_check = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0}
             s_check = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT") if self.short_ex in self.orders else {"size": 0.0}
             if l_check.get("size", 0.0) > 0:
@@ -675,24 +674,24 @@ class PositionFSM:
 
         self._set_state(PositionState.ABORTED)
         self._notify_pos_failed("ASYMMETRIC_FILL_UNWOUND")
-        log(f"[{self.sym}] ✅ Асимметрия полностью ликвидирована. Итерация завершена.", level="INFO")
+        log(f"[{self.sym}] Asymmetry fully liquidated. Iteration finished.", level="INFO")
 
     async def run_close(self, exit_res: Dict[str, Any], reason: str = "PROFIT_DECAY") -> bool:
         """
-        Плановое закрытие обеих ног позиции:
+        Planned closure of both legs:
         ACTIVE_HEDGED -> CLOSING -> SETTLED
         """
         self._set_state(PositionState.CLOSING)
-        log(f"[{self.sym}] Закрываем позицию: LONG {self.long_ex} | SHORT {self.short_ex} ({reason})", level="INFO")
+        log(f"[{self.sym}] Closing position: LONG {self.long_ex} | SHORT {self.short_ex} ({reason})", level="INFO")
 
-        # Проверяем фактические объемы в позициях перед закрытием из локального WS-кэша
+        # Check actual position volumes before close from local WS cache
         l_ws = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG") if self.long_ex in self.orders else {}
         s_ws = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT") if self.short_ex in self.orders else {}
 
         long_qty = l_ws.get("size", 0.0) or self.long_pos.get("size", 0.0)
         short_qty = s_ws.get("size", 0.0) or self.short_pos.get("size", 0.0)
 
-        # Если локальный кэш пуст, делаем fallback на REST
+        # If local cache is empty, fallback to REST
         if long_qty <= 0 and self.long_ex in self.orders:
             l_pos = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG")
             long_qty = l_pos.get("size", 0.0)
@@ -703,7 +702,7 @@ class PositionFSM:
         price_long = exit_res.get("long_close_price") or self.exec_res.get("entry_long_price", 1.0)
         price_short = exit_res.get("short_close_price") or self.exec_res.get("entry_short_price", 1.0)
 
-        # 1. Регистрация реактивных событий ДО отправки ордеров закрытия
+        # 1. Register reactive events BEFORE sending close orders
         ev_long = None
         ev_short = None
         if self.long_ex in self.orders and hasattr(self.orders[self.long_ex], "subscribe_position_update"):
@@ -727,7 +726,7 @@ class PositionFSM:
                 raise err
 
         try:
-            # Запуск мониторинга закрытия по WS параллельно с отправкой ордеров
+            # Launch WS close monitoring concurrently with order submission
             close_wait_task = asyncio.create_task(self._wait_for_close_confirmation(ev_long, ev_short))
 
             tasks = []
@@ -749,7 +748,7 @@ class PositionFSM:
                 await asyncio.gather(*tasks, return_exceptions=True)
                 close_gather_ms = (time.perf_counter() - t_close_shot_start) * 1000.0
 
-            # 2. Ожидаем быстрого реактивного подтверждения обнуления по WS (< 0.1 мс)
+            # 2. Await fast reactive zero confirmation via WS (< 0.1 ms)
             is_closed_fast, fast_p_long, fast_p_short = await close_wait_task
             total_close_ms = (time.perf_counter() - t_close_shot_start) * 1000.0
             cl_rest_ms = close_latencies.get(self.long_ex, 0.0)
@@ -759,9 +758,9 @@ class PositionFSM:
             cl_lag = max(0.0, cl_ws_ms - cl_rest_ms) if cl_ws_ms > 0 else 0.0
             cs_lag = max(0.0, cs_ws_ms - cs_rest_ms) if cs_ws_ms > 0 else 0.0
             log(
-                f"[{self.sym}] ⏱ ТЕЛЕМЕТРИЯ ВЫХОДА (Итого: {total_close_ms:.1f} мс | HTTP Gather: {close_gather_ms:.1f} мс):\n"
-                f"      • {self.long_ex}: REST {cl_rest_ms:.1f} мс | WS закрытие {cl_ws_ms:.1f} мс (лаг сокета: +{cl_lag:.1f} мс)\n"
-                f"      • {self.short_ex}: REST {cs_rest_ms:.1f} мс | WS закрытие {cs_ws_ms:.1f} мс (лаг сокета: +{cs_lag:.1f} мс)",
+                f"[{self.sym}] EXIT TELEMETRY (Total: {total_close_ms:.1f} ms | HTTP Gather: {close_gather_ms:.1f} ms):\n"
+                f"      * {self.long_ex}: REST {cl_rest_ms:.1f} ms | WS close {cl_ws_ms:.1f} ms (socket lag: +{cl_lag:.1f} ms)\n"
+                f"      * {self.short_ex}: REST {cs_rest_ms:.1f} ms | WS close {cs_ws_ms:.1f} ms (socket lag: +{cs_lag:.1f} ms)",
                 level="INFO"
             )
         finally:
@@ -771,7 +770,7 @@ class PositionFSM:
                 self.orders[self.short_ex].unsubscribe_position_update(self.native_short, "SHORT")
 
         if is_closed_fast:
-            log(f"[{self.sym}] Позиция полностью ликвидирована на обеих биржах (0.0) через быстрый WS-стрим.", level="INFO")
+            log(f"[{self.sym}] Position fully liquidated on both exchanges (0.0) via fast WS stream.", level="INFO")
             if self.long_ex in self.orders:
                 await self.orders[self.long_ex].cancel_all_orders(self.native_long)
             if self.short_ex in self.orders:
@@ -809,7 +808,7 @@ class PositionFSM:
                 ))
             return True
 
-        # 3. Fallback: Контрольный опрос и подчистка остатков через REST (если WS превысил таймаут)
+        # 3. Fallback: Control query and remnant cleanup via REST (if WS timed out)
         for attempt in range(3):
             await asyncio.sleep(self.unwind_retry_pause)
             l_check = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0}
@@ -819,7 +818,7 @@ class PositionFSM:
             s_rem = s_check.get("size", 0.0)
 
             if l_rem == 0.0 and s_rem == 0.0:
-                log(f"[{self.sym}] Позиция полностью ликвидирована на обеих биржах (0.0).", level="INFO")
+                log(f"[{self.sym}] Position fully liquidated on both exchanges (0.0).", level="INFO")
                 
                 if self.long_ex in self.orders:
                     await self.orders[self.long_ex].cancel_all_orders(self.native_long)
@@ -858,12 +857,12 @@ class PositionFSM:
                 return True
                 
             if attempt == 2:
-                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позицию (run_close) после 3 попыток очистки! Остаток L:{l_rem} S:{s_rem}. Позиция возвращается в очередь на закрытие!", level="ERROR")
+                log(f"[{self.sym}] CRITICAL ERROR: Failed to close position (run_close) after 3 attempts! Remainder L:{l_rem} S:{s_rem}. Re-queuing close!", level="ERROR")
                 self._set_state(PositionState.CLOSING)
                 self._notify_pos_exit_failed()
                 return False
 
-            log(f"[{self.sym}] ⚠️ После закрытия обнаружен остаток: L:{l_rem} S:{s_rem}. Попытка аварийного сброса #{attempt+1}...", level="WARNING")
+            log(f"[{self.sym}] Remainder detected after close: L:{l_rem} S:{s_rem}. Emergency unwind attempt #{attempt+1}...", level="WARNING")
             cleanup_tasks = []
             if l_rem > 0 and self.long_ex in self.orders:
                 p = l_check.get("price", 0.0)

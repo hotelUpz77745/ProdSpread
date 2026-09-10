@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: API/orders.py
-# ROLE: Управление ордерами (создание, отмена, отслеживание).
+# ROLE: Order management (creation, cancellation, tracking).
 # ============================================================
 import aiohttp
 from c_log import log
@@ -48,7 +48,7 @@ class BinanceOrder:
         self.last_activity_ts = 0.0
 
     def start(self):
-        """Запускает фоновые таски. Вызывать ПОСЛЕ старта event loop."""
+        """Launches background tasks. Call AFTER event loop starts."""
         self._bg_task = asyncio.create_task(self._fetch_exchange_info_loop())
         if self.keepalive_interval_sec > 0:
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
@@ -66,7 +66,7 @@ class BinanceOrder:
     async def warmup(self):
         if time.time() - getattr(self, "last_activity_ts", 0.0) < self.idle_warmup_threshold_sec:
             return
-        """Прогрев сессии POST запросом с невалидным символом для удержания TLS/TCP сессии."""
+        """Warm up session via POST query with invalid symbol to maintain TLS/TCP keepalive."""
         try:
             timestamp = int(time.time() * 1000)
             query_string = f"symbol=INVALID_PAIR_WARMUP&side=BUY&type=LIMIT&timeInForce=IOC&quantity=1&price=1&timestamp={timestamp}"
@@ -207,7 +207,7 @@ class BinanceOrder:
                 log(f"[BinanceOrder] API Error: {msg}", level="ERROR")
                 if "Margin is insufficient" in msg or "Balance insufficient" in msg:
                     raise InsufficientMarginError(msg)
-            log(f"[BinanceOrder] Ордер исполнен: {data}", level="INFO")
+            log(f"[BinanceOrder] Order executed: {data}", level="INFO")
             status = data.get("status", "")
             cum_qty = float(data.get("cumQty", 0.0)) or float(data.get("executedQty", 0.0))
             if status in ("FILLED", "PARTIALLY_FILLED") and cum_qty > 0 and self.position_stream:
@@ -230,9 +230,9 @@ class BinanceOrder:
             async with self.session.delete(url, headers=headers) as resp:
                 data = await resp.json()
                 if resp.status == 200 and data.get("code") == 200:
-                    log(f"[BinanceOrder] Отменены все ордера по {symbol}", level="INFO")
+                    log(f"[BinanceOrder] All orders cancelled for {symbol}", level="INFO")
         except Exception as e:
-            log(f"[BinanceOrder] Ошибка отмены ордеров {symbol}: {e}", level="ERROR")
+            log(f"[BinanceOrder] Error cancelling orders {symbol}: {e}", level="ERROR")
 
     async def set_margin_type(self, symbol: str, margin_type: str, **kwargs) -> bool:
         for attempt in range(3):
@@ -252,10 +252,10 @@ class BinanceOrder:
                         continue
                     if data.get("code") == -4046: # No need to change
                         return True
-                    log(f"[BinanceOrder] Ошибка set_margin_type {symbol}: {data}", level="WARNING")
+                    log(f"[BinanceOrder] Error set_margin_type {symbol}: {data}", level="WARNING")
                     return False
             except Exception as e:
-                log(f"[BinanceOrder] Исключение set_margin_type {symbol}: {e}", level="ERROR")
+                log(f"[BinanceOrder] Exception set_margin_type {symbol}: {e}", level="ERROR")
                 return False
         return False
 
@@ -278,10 +278,10 @@ class BinanceOrder:
                     msg = str(data.get("msg", "")).lower()
                     if "no need to change" in msg:
                         return True
-                    log(f"[BinanceOrder] Ошибка set_leverage {symbol}: {data}", level="WARNING")
+                    log(f"[BinanceOrder] Error set_leverage {symbol}: {data}", level="WARNING")
                     return False
             except Exception as e:
-                log(f"[BinanceOrder] Исключение set_leverage {symbol}: {e}", level="ERROR")
+                log(f"[BinanceOrder] Exception set_leverage {symbol}: {e}", level="ERROR")
                 return False
         return False
 
@@ -343,16 +343,16 @@ class BinanceOrder:
             if pos.get("status") == "ok":
                 if pos.get("size", 0.0) > 0:
                     return pos
-                # Если биржа вернула честный 0.0
+                # If exchange returned genuine 0.0
                 if self.position_stream and symbol in self.position_stream.positions:
                     self.position_stream.positions[symbol][side.upper()] = {"size": 0.0, "price": 0.0}
                 return {"size": 0.0, "price": 0.0, "status": "ok"}
-            # Сетевой сбой - ждем и ретраим
+            # Network error - wait and retry
             await asyncio.sleep(retry_delay * (attempt + 1))
 
-        # Если все ретраи упали - берем последнее известное значение из WS
+        # If all retries failed - fallback to last known WS value
         ws_pos = self.get_executed_position(symbol, side)
-        log(f"[BinanceOrder] REST моргнул после {max_retries} ретраев, страховка WS: {ws_pos}", level="WARNING")
+        log(f"[BinanceOrder] REST blinked after {max_retries} retries, fallback WS: {ws_pos}", level="WARNING")
         return {"size": ws_pos.get("size", 0.0), "price": ws_pos.get("price", 0.0), "status": "fallback_ws"}
 
     async def get_active_positions(self) -> list:
@@ -390,7 +390,7 @@ class KucoinOrder:
         self.last_activity_ts = 0.0
 
     def start(self):
-        """Запускает фоновые таски. Вызывать ПОСЛЕ старта event loop."""
+        """Launches background tasks. Call AFTER event loop starts."""
         self._bg_task = asyncio.create_task(self._fetch_exchange_info_loop())
         if self.keepalive_interval_sec > 0:
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
@@ -408,7 +408,7 @@ class KucoinOrder:
     async def warmup(self):
         if time.time() - getattr(self, "last_activity_ts", 0.0) < self.idle_warmup_threshold_sec:
             return
-        """Прогрев сессии POST запросом с невалидным символом для удержания TLS/TCP сессии."""
+        """Warm up session via POST query with invalid symbol to maintain TLS/TCP keepalive."""
         try:
             endpoint = "/api/v1/orders"
             now = str(int(time.time() * 1000))
@@ -600,7 +600,7 @@ class KucoinOrder:
                 if "balance" in msg.lower() or "margin" in msg.lower():
                     raise InsufficientMarginError(msg)
                 raise Exception(f"Kucoin API Error: {msg}")
-            log(f"[KucoinOrder] Ордер исполнен: {data}", level="INFO")
+            log(f"[KucoinOrder] Order executed: {data}", level="INFO")
             return data
 
     async def cancel_all_orders(self, symbol: str):
@@ -626,9 +626,9 @@ class KucoinOrder:
             async with self.session.delete(url, headers=headers) as resp:
                 data = await resp.json()
                 if data.get('code') == '200000':
-                    log(f"[KucoinOrder] Отменены все ордера по {symbol}", level="INFO")
+                    log(f"[KucoinOrder] All orders cancelled for {symbol}", level="INFO")
         except Exception as e:
-            log(f"[KucoinOrder] Ошибка отмены ордеров {symbol}: {e}", level="ERROR")
+            log(f"[KucoinOrder] Error cancelling orders {symbol}: {e}", level="ERROR")
 
     async def get_active_positions(self) -> list:
         if not self.api_key:
@@ -664,9 +664,9 @@ class KucoinOrder:
 
     async def set_margin_type(self, symbol: str, margin_type: str, leverage: int = None) -> bool:
         """
-        Переключает режим маржи для символа.
-        Для ISOLATED: leverage передается в том же запросе (биржа обновляет его сразу).
-        Для CROSS: leverage не передается здесь, он ставится отдельно через changeCrossUserLeverage.
+        Switches margin mode for symbol.
+        For ISOLATED: leverage is passed in same request.
+        For CROSS: leverage set separately via changeCrossUserLeverage.
         """
         for attempt in range(3):
             try:
@@ -699,22 +699,22 @@ class KucoinOrder:
                     if resp.status == 429 or data.get("code") == "429000" or data.get("code") == "400014":
                         await asyncio.sleep(1.0 + attempt * 0.5)
                         continue
-                    log(f"[KucoinOrder] Ошибка set_margin_type {symbol}: {data}", level="WARNING")
+                    log(f"[KucoinOrder] Error set_margin_type {symbol}: {data}", level="WARNING")
                     return False
             except Exception as e:
-                log(f"[KucoinOrder] Исключение set_margin_type {symbol}: {e}", level="ERROR")
+                log(f"[KucoinOrder] Exception set_margin_type {symbol}: {e}", level="ERROR")
                 return False
         return False
         
     async def set_leverage(self, symbol: str, leverage: int, margin_type: str = "CROSS") -> bool:
         """
-        Устанавливает плечо для символа.
+        Sets leverage for symbol.
         - CROSS: POST /api/v2/changeCrossUserLeverage
-        - ISOLATED: плечо уже передано в set_margin_type через changeMarginMode.
-                    Здесь ничего не делаем — возвращаем True.
+        - ISOLATED: leverage already passed in set_margin_type via changeMarginMode.
+                    No-op here - returns True.
         """
         if margin_type.upper() == "ISOLATED":
-            # Для изолированной маржи плечо уже выставлено в set_margin_type
+            # For isolated margin leverage is already set in set_margin_type
             return True
         for attempt in range(3):
             try:
@@ -745,10 +745,10 @@ class KucoinOrder:
                     if resp.status == 429 or data.get("code") == "429000" or data.get("code") == "400014":
                         await asyncio.sleep(1.0 + attempt * 0.5)
                         continue
-                    log(f"[KucoinOrder] Ошибка set_leverage {symbol}: {data}", level="WARNING")
+                    log(f"[KucoinOrder] Error set_leverage {symbol}: {data}", level="WARNING")
                     return False
             except Exception as e:
-                log(f"[KucoinOrder] Исключение set_leverage {symbol}: {e}", level="ERROR")
+                log(f"[KucoinOrder] Exception set_leverage {symbol}: {e}", level="ERROR")
                 return False
         return False
 
@@ -843,7 +843,7 @@ class KucoinOrder:
             await asyncio.sleep(retry_delay * (attempt + 1))
 
         ws_pos = self.get_executed_position(symbol, side)
-        log(f"[KucoinOrder] REST моргнул после {max_retries} ретраев, страховка WS: {ws_pos}", level="WARNING")
+        log(f"[KucoinOrder] REST blinked after {max_retries} retries, fallback WS: {ws_pos}", level="WARNING")
         return {"size": ws_pos.get("size", 0.0), "price": ws_pos.get("price", 0.0), "status": "fallback_ws"}
 
 
@@ -855,7 +855,7 @@ class OkxOrder:
 
     async def place_order(self, symbol: str, side: str, size_usd: float, price: float, order_type: str = "LIMIT", position_side: str = None):
         self.last_activity_ts = __import__("time").time()
-        log(f"[OkxOrder] Виртуальный ордер {side} создан для {symbol}, объем {size_usd} USD", level="DEBUG")
+        log(f"[OkxOrder] Virtual order {side} created for {symbol}, size {size_usd} USD", level="DEBUG")
         await asyncio.sleep(0.005)
         
     async def cancel_all_orders(self, symbol: str):
@@ -909,7 +909,7 @@ class BitgetOrder:
     async def warmup(self):
         if time.time() - getattr(self, "last_activity_ts", 0.0) < self.idle_warmup_threshold_sec:
             return
-        """Прогрев сессии POST запросом с невалидным символом для удержания TLS/TCP сессии."""
+        """Warm up session via POST query with invalid symbol to maintain TLS/TCP keepalive."""
         try:
             if not self.session:
                 from utils import SessionManager
@@ -1032,8 +1032,8 @@ class BitgetOrder:
             elif p_side == "SHORT" and side.upper() == "BUY":
                 is_close = True
 
-        # Bitget v2 API: Для полного закрытия используем специальный эндпоинт close-positions.
-        # Для частичной подрезки (reduce_only=True) отправляем обычный ордер с tradeSide="close".
+        # Bitget v2 API: For full close use close-positions endpoint.
+        # For partial trim (reduce_only=True) use normal order with tradeSide="close".
         reduce_only = kwargs.get("reduce_only", False)
         if is_close and position_side and not reduce_only:
             hold = position_side.upper()
@@ -1095,7 +1095,7 @@ class BitgetOrder:
             return data
 
     async def _close_position(self, symbol: str, hold_side: str):
-        """Закрытие позиции через специальный эндпоинт Bitget close-positions."""
+        """Close position via Bitget close-positions endpoint."""
         endpoint = "/api/v2/mix/order/close-positions"
         now = str(int(time.time() * 1000))
         body = {
@@ -1119,7 +1119,7 @@ class BitgetOrder:
             if data.get('code') != '00000':
                 msg = data.get('msg', str(data))
                 raise Exception(f"Bitget API Error: {data}")
-            log(f"[BitgetOrder] Позиция {symbol} ({hold_side}) закрыта: {data}", level="INFO")
+            log(f"[BitgetOrder] Position {symbol} ({hold_side}) closed: {data}", level="INFO")
             return data
 
     async def cancel_all_orders(self, symbol: str):
@@ -1181,11 +1181,11 @@ class BitgetOrder:
             async with self.session.post(f"https://api.bitget.com{endpoint_cancel}", headers=headers_c, data=body_str) as resp_c:
                 res_c = await resp_c.json()
                 if res_c.get('code') == '00000':
-                    log(f"[BitgetOrder] Отменены ордера по {symbol}: {order_ids}", level="INFO")
+                    log(f"[BitgetOrder] Orders cancelled for {symbol}: {order_ids}", level="INFO")
                 else:
-                    log(f"[BitgetOrder] Ошибка отмены ордеров {symbol}: {res_c}", level="WARNING")
+                    log(f"[BitgetOrder] Error cancelling orders {symbol}: {res_c}", level="WARNING")
         except Exception as e:
-            log(f"[BitgetOrder] Ошибка отмены ордеров {symbol}: {e}", level="ERROR")
+            log(f"[BitgetOrder] Error cancelling orders {symbol}: {e}", level="ERROR")
 
     async def set_margin_type(self, symbol: str, margin_type: str, leverage: int = None) -> bool:
         if not self.api_key:
@@ -1228,10 +1228,10 @@ class BitgetOrder:
                     msg = str(data.get('msg', '')).lower()
                     if "no need to change" in msg or "not changed" in msg or "same" in msg:
                         return True
-                    log(f"[BitgetOrder] Ошибка set_margin_type {symbol}: {data}", level="WARNING")
+                    log(f"[BitgetOrder] Error set_margin_type {symbol}: {data}", level="WARNING")
                     return False
             except Exception as e:
-                log(f"[BitgetOrder] Исключение set_margin_type {symbol}: {e}", level="ERROR")
+                log(f"[BitgetOrder] Exception set_margin_type {symbol}: {e}", level="ERROR")
                 return False
         return False
 
@@ -1272,10 +1272,10 @@ class BitgetOrder:
                     msg = str(data.get('msg', '')).lower()
                     if "no need to change" in msg or "not changed" in msg or "same" in msg:
                         return True
-                    log(f"[BitgetOrder] Ошибка set_leverage {symbol}: {data}", level="WARNING")
+                    log(f"[BitgetOrder] Error set_leverage {symbol}: {data}", level="WARNING")
                     return False
             except Exception as e:
-                log(f"[BitgetOrder] Исключение set_leverage {symbol}: {e}", level="ERROR")
+                log(f"[BitgetOrder] Exception set_leverage {symbol}: {e}", level="ERROR")
                 return False
         return False
 
@@ -1359,7 +1359,7 @@ class BitgetOrder:
             await asyncio.sleep(retry_delay * (attempt + 1))
 
         ws_pos = self.get_executed_position(symbol, side)
-        log(f"[BitgetOrder] REST моргнул после {max_retries} ретраев, страховка WS: {ws_pos}", level="WARNING")
+        log(f"[BitgetOrder] REST blinked after {max_retries} retries, fallback WS: {ws_pos}", level="WARNING")
         return {"size": ws_pos.get("size", 0.0), "price": ws_pos.get("price", 0.0), "status": "fallback_ws"}
 
 

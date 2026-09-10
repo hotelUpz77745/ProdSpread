@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: CORE/trading_engine.py
-# ROLE: Оценка входа и выхода из позиций.
+# ROLE: Evaluation of entry and exit conditions for positions.
 # ============================================================
 
 from typing import Tuple, Dict, Any, Optional
@@ -9,13 +9,13 @@ from CORE.math_core import OrderbookUtils
 class TradingEngine:
     def __init__(self, cfg: dict, exchanges: dict):
         """
-        cfg: весь json-конфиг
-        exchanges: маппинг {0: "BINANCE", 1: "KUCOIN", ...} для перевода индексов в имена
+        cfg: full json config
+        exchanges: mapping {0: "BINANCE", 1: "KUCOIN", ...} translating indices to names
         """
         self.cfg = cfg
         self.exchanges = exchanges
         
-        # Читаем параметры фильтра сигналов из signal_filters (с fallback на flat entry)
+        # Read signal filter parameters from signal_filters (with fallback to flat entry)
         signal_cfg = self.cfg["trading_rules"]["entry"].get("signal_filters", self.cfg["trading_rules"]["entry"])
         self.spread_entry = float(signal_cfg["spread_entry"])
         synth_cfg = signal_cfg.get("synthetic_exit", {})
@@ -60,7 +60,7 @@ class TradingEngine:
         long_ex = self.exchanges[long_idx]
         short_ex = self.exchanges[short_idx]
         
-        # Если смещения не переданы, определяем первые квалифицированные уровни (мусор перед ними отсекается)
+        # If offsets not provided, find first qualified levels (filtering front junk)
         if long_ask_offset <= 0 and self.min_top_depth_usd > 0.0:
             idx, _, _ = OrderbookUtils.find_first_qualified_level(
                 long_book.get("asks", []), self.min_top_depth_usd, is_ask=True
@@ -80,11 +80,11 @@ class TradingEngine:
         long_vol = self._get_vol_discount_entry(long_ex)
         short_vol = self._get_vol_discount_entry(short_ex)
         
-        # Срез стакана строго от первого квалифицированного уровня с объемом >= min_top_depth_usd
+        # Order book slice strictly from first qualified level with volume >= min_top_depth_usd
         asks_slice = long_book["asks"][long_ask_offset:] if long_ask_offset > 0 else long_book.get("asks", [])
         bids_slice = short_book["bids"][short_bid_offset:] if short_bid_offset > 0 else short_book.get("bids", [])
         
-        # Для лонга - покупаем из асков. Для шорта - продаем в биды.
+        # For Long - buy from asks. For Short - sell into bids.
         long_vwap_ask = OrderbookUtils.calculate_vwap_by_usd(asks_slice, size_usd, long_vol)
         short_vwap_bid = OrderbookUtils.calculate_vwap_by_usd(bids_slice, size_usd, short_vol)
         
@@ -96,7 +96,7 @@ class TradingEngine:
         
         vwap_spread = (short_vwap_bid - long_vwap_ask) / long_vwap_ask
         
-        # Учет собственной комиссии на входе
+        # Account for own entry commission
         entry_long_fee = self._get_fee(long_ex)
         entry_short_fee = self._get_fee(short_ex)
         entry_comm = entry_long_fee + entry_short_fee
@@ -107,7 +107,7 @@ class TradingEngine:
                 "reason": f"LOW_SPREAD (Net: {net_spread * 100:.3f}% < {self.spread_entry * 100:.3f}%, Gross: {vwap_spread * 100:.3f}%, Fee: {entry_comm * 100:.3f}%)"
             }
             
-        # ФИЛЬТР ДАВЛЕНИЯ СТАКАНА HEDGE НОГИ (Order Book Imbalance)
+        # HEDGE LEG ORDER BOOK IMBALANCE FILTER
         if self.check_obi_filter:
             route_key = f"{long_ex}_{short_ex}"
             rev_route_key = f"{short_ex}_{long_ex}"
@@ -123,27 +123,27 @@ class TradingEngine:
                     total_vol = sum_bids + sum_asks
                     if total_vol > 0.0:
                         imbalance = (sum_bids - sum_asks) / total_vol
-                        # Если Hedge идет в Long (покупка из asks), перекос в bids (давление вверх) неблагоприятен
+                        # If Hedge is Long (buying from asks), bid skew (upward pressure) is unfavorable
                         if long_ex == hedge_name and imbalance > self.max_adverse_imbalance:
                             return False, {"reason": f"ADVERSE_OBI_HEDGE_BUY (Imbalance: {imbalance:+.2f} > +{self.max_adverse_imbalance:.2f})"}
-                        # Если Hedge идет в Short (продажа в bids), перекос в asks (давление вниз) неблагоприятен
+                        # If Hedge is Short (selling to bids), ask skew (downward pressure) is unfavorable
                         if short_ex == hedge_name and imbalance < -self.max_adverse_imbalance:
                             return False, {"reason": f"ADVERSE_OBI_HEDGE_SELL (Imbalance: {imbalance:+.2f} < -{self.max_adverse_imbalance:.2f})"}
             
-        # СИНТЕТИЧЕСКАЯ ПРОВЕРКА ВЫХОДА (Round-Trip Liquidity Check)
-        # Опциональный рубильник в конфиге. Симулирует немедленный выход из позиции.
+        # ROUND-TRIP SYNTHETIC LIQUIDITY CHECK
+        # Optional config toggle. Simulates immediate exit from position.
         if self.check_synthetic_exit:
-            # Продаем купленный лонг (в BIDS) и откупаем проданный шорт (из ASKS)
+            # Sell bought Long (into BIDS) and buy back sold Short (from ASKS)
             long_vol_exit = self._get_vol_discount_exit(long_ex)
             short_vol_exit = self._get_vol_discount_exit(short_ex)
             long_exit_vwap_bid = OrderbookUtils.calculate_vwap_by_qty(long_book.get("bids", []), long_qty, long_vol_exit)
             short_exit_vwap_ask = OrderbookUtils.calculate_vwap_by_qty(short_book.get("asks", []), short_qty, short_vol_exit)
             
-            # Если обратный стакан пуст или не может поглотить наш сайз - отбой
+            # If reverse book is empty or cannot absorb size - abort
             if long_exit_vwap_bid <= 0 or short_exit_vwap_ask <= 0:
                 return False, {"reason": "NO_REVERSE_LIQUIDITY"}
                 
-            # Защита от конского внутреннего проскальзывания (Synthetic Slippage Check)
+            # Protection against excessive internal slippage (Synthetic Slippage Check)
             if self.check_synthetic_slippage:
                 long_synthetic_slip = (long_vwap_ask - long_exit_vwap_bid) / long_vwap_ask
                 short_synthetic_slip = (short_exit_vwap_ask - short_vwap_bid) / short_vwap_bid
@@ -184,12 +184,12 @@ class TradingEngine:
         live_price_fallback: float = 0.0
     ) -> Tuple[bool, Dict[str, Any]]:
         """
-        Оценка возможности входа/дожима Hedge-ноги с зафиксированной ценой Lead-ноги.
-        Использует ровно ту же формулу, что и evaluate_entry:
+        Evaluates entry/chase for Hedge leg with fixed Lead leg price.
+        Uses the same formula as evaluate_entry:
             vwap_spread = (short_price - long_price) / long_price
             net_spread = vwap_spread - (lead_fee + hedge_fee)
         
-        lead_direction: 'BUY' (Lead открыл Long) или 'SELL' (Lead открыл Short).
+        lead_direction: 'BUY' (Lead opened Long) or 'SELL' (Lead opened Short).
         """
         lead_fee = self._get_fee(lead_ex)
         hedge_fee = self._get_fee(hedge_ex)
@@ -197,7 +197,7 @@ class TradingEngine:
         hedge_vol = self._get_vol_discount_entry(hedge_ex)
 
         if lead_direction == "BUY":
-            # Lead встал в Long -> Hedge обязан встать в Short (Sell по bids)
+            # Lead took Long -> Hedge must take Short (Sell to bids)
             bids = hedge_book.get("bids", []) if isinstance(hedge_book, dict) else []
             if bids:
                 vwap_bid, deep_price = OrderbookUtils.calculate_vwap_and_deepest_price(bids, lead_qty, hedge_vol)
@@ -213,7 +213,7 @@ class TradingEngine:
             gross_spread = (vwap_bid - lead_price) / lead_price
             net_spread = gross_spread - total_fees
 
-            # Порог цены: ниже продавать нельзя, иначе чистый спред упадет ниже target_net_spread
+            # Price threshold: cannot sell below this, else net spread drops below target_net_spread
             limit_floor = lead_price * (1.0 + target_net_spread + total_fees)
             order_price = limit_floor
 
@@ -233,7 +233,7 @@ class TradingEngine:
             }
 
         else:
-            # Lead встал в Short -> Hedge обязан встать в Long (Buy по asks)
+            # Lead took Short -> Hedge must take Long (Buy from asks)
             asks = hedge_book.get("asks", []) if isinstance(hedge_book, dict) else []
             if asks:
                 vwap_ask, deep_price = OrderbookUtils.calculate_vwap_and_deepest_price(asks, lead_qty, hedge_vol)
@@ -249,7 +249,7 @@ class TradingEngine:
             gross_spread = (lead_price - vwap_ask) / vwap_ask
             net_spread = gross_spread - total_fees
 
-            # Порог цены: выше покупать нельзя, иначе чистый спред упадет ниже target_net_spread
+            # Price threshold: cannot buy above this, else net spread drops below target_net_spread
             limit_ceiling = lead_price / (1.0 + target_net_spread + total_fees)
             order_price = limit_ceiling
 
@@ -296,7 +296,7 @@ class TradingEngine:
         long_vol_exit = self._get_vol_discount_exit(long_ex)
         short_vol_exit = self._get_vol_discount_exit(short_ex)
         
-        # Для закрытия лонга - продаем в биды. Для закрытия шорта - покупаем из асков.
+        # To close Long - sell into bids. To close Short - buy from asks.
         long_vwap_bid = OrderbookUtils.calculate_vwap_by_qty(long_book.get("bids", []), long_qty, long_vol_exit)
         short_vwap_ask = OrderbookUtils.calculate_vwap_by_qty(short_book.get("asks", []), short_qty, short_vol_exit)
         
@@ -310,7 +310,7 @@ class TradingEngine:
             
         long_fee = self._get_fee(long_ex) * long_executed_volume_rate
         short_fee = self._get_fee(short_ex) * short_executed_volume_rate
-        total_comm = (long_fee * 2.0) + (short_fee * 2.0)  # Полный цикл комиссий: вход + выход обеих ног
+        total_comm = (long_fee * 2.0) + (short_fee * 2.0)  # Full round-trip fees: entry + exit for both legs
         
         net_yield = (long_realized_pnl * long_executed_volume_rate) + (short_realized_pnl * short_executed_volume_rate) - total_comm
         
@@ -379,7 +379,7 @@ class TradingEngine:
     def get_exit_target_val(self, duration_sec: float, actual_net_spread_entry: float = 0.0, decay_map: list = None) -> Tuple[float, int]:
         m = decay_map if decay_map is not None else self.decay_map
         if "target_spread" in m[0]:
-            # Абсолютная карта (weak_entry / single_leg): target_spread — порог спреда
+            # Absolute map (weak_entry / single_leg): target_spread threshold
             target = m[0]["target_spread"]
             idx = int(m[0].get("step", 0))
             for rule in m:
@@ -387,7 +387,7 @@ class TradingEngine:
                     target = float(rule["target_spread"])
                     idx = int(rule.get("step", 0))
         elif "price_slip" in m[0]:
-            # Чейзинг-карта (single_leg_exit): price_slip — проскальзывание от цены
+            # Chasing map (single_leg_exit): price_slip offset from price
             target = m[0]["price_slip"]
             idx = int(m[0].get("step", 0))
             for rule in m:
@@ -395,7 +395,7 @@ class TradingEngine:
                     target = float(rule["price_slip"])
                     idx = int(rule.get("step", 0))
         else:
-            # Относительная карта (normal_decay): min_profit_ratio — доля от входного спреда
+            # Relative map (normal_decay): min_profit_ratio share of entry spread
             ratio = m[0].get("min_profit_ratio", 0.0)
             idx = int(m[0].get("step", 0))
             for rule in m:
