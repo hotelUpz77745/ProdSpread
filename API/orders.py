@@ -982,7 +982,7 @@ class BitgetOrder:
         sizeMultiplier = float(symbol_data.get('sizeMultiplier', 1.0))
         volumePlace = int(symbol_data.get('volumePlace', 0))
         
-        raw_qty = (size_usd / price) / sizeMultiplier
+        raw_qty = (size_usd / price)
         qty_str = f"{raw_qty:.{volumePlace}f}"
         
         if float(qty_str) <= 0:
@@ -1007,9 +1007,9 @@ class BitgetOrder:
         
         exact_qty = kwargs.get("exact_qty")
         if exact_qty is not None and float(exact_qty) > 0:
-            raw_qty = float(exact_qty) / sizeMultiplier
+            raw_qty = float(exact_qty)
         else:
-            raw_qty = (size_usd / price) / sizeMultiplier
+            raw_qty = (size_usd / price)
         price_step = f"1e-{pricePlace}" if pricePlace > 0 else "1"
         vol_step = f"1e-{volumePlace}" if volumePlace > 0 else "1"
         price_rounding = ROUND_FLOOR if side.upper() == "BUY" else ROUND_CEILING
