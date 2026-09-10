@@ -73,9 +73,9 @@ async def test_adapters():
     print(f"--- Тестирование входа (LIMIT GTC, EXECUTION_PAUSE={execution_pause}с) ---")
     
     tasks = []
-    tasks.append(binance.place_order(test_symbol, "BUY", test_size_usd, price_long_limit, position_side="LONG", time_in_force="GTC"))
-    tasks.append(bitget.place_order(test_symbol, "SELL", test_size_usd, price_short_limit, position_side="SHORT", time_in_force="GTC"))
-    tasks.append(kucoin.place_order(f"{test_symbol}M", "BUY", test_size_usd, price_long_limit, position_side="LONG", time_in_force="GTC"))
+    tasks.append(binance.place_order(test_symbol, "BUY", test_size_usd, price_long_limit, order_type="LIMIT", position_side="LONG", time_in_force="GTC"))
+    tasks.append(bitget.place_order(test_symbol, "SELL", test_size_usd, price_short_limit, order_type="LIMIT", position_side="SHORT", time_in_force="GTC"))
+    tasks.append(kucoin.place_order(f"{test_symbol}M", "BUY", test_size_usd, price_long_limit, order_type="LIMIT", position_side="LONG", time_in_force="GTC"))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for i, res in enumerate(results):

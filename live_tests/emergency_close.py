@@ -36,7 +36,7 @@ async def close_position():
                             trade_side = "SELL" if amt > 0 else "BUY"
                             qty = abs(amt)
                             
-                            close_qs = f"symbol=XRPUSDT&side={trade_side}&positionSide={side}&type=MARKET&quantity={qty}&reduceOnly=true&timestamp={int(time.time()*1000)}"
+                            close_qs = f"symbol=XRPUSDT&side={trade_side}&positionSide={side}&type=MARKET&quantity={qty}&timestamp={int(time.time()*1000)}"
                             close_sig = binance._generate_signature(close_qs)
                             
                             async with session.post(f"https://fapi.binance.com/fapi/v1/order?{close_qs}&signature={close_sig}", headers={"X-MBX-APIKEY": binance.api_key}) as c_resp:

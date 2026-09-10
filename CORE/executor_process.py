@@ -129,16 +129,16 @@ class ExecutorProcess:
             pass
 
     def ban_coin(self, sym: str, reason: str = "", duration_sec: float = None):
+        ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
         if "Spread Collapsed" in reason:
             count = self.a1_collapse_counts.get(sym, 0) + 1
             self.a1_collapse_counts[sym] = count
-            p2_cfg = self.cfg.get("trading_rules", {}).get("entry", {}).get("phase2_lead_validation", {})
             if count == 1:
-                duration_sec = float(p2_cfg.get("quarantine_a1_step1_sec", 180))
+                duration_sec = float(ban_q["spread_collapse_step1"])
             elif count == 2:
-                duration_sec = float(p2_cfg.get("quarantine_a1_step2_sec", 900))
+                duration_sec = float(ban_q["spread_collapse_step2"])
             else:
-                duration_sec = float(p2_cfg.get("quarantine_a1_step3_sec", 3600))
+                duration_sec = float(ban_q["spread_collapse_step3"])
             reason = f"{reason} (A1 consecutive collapse #{count})"
             
         expire_time = (time.time() + duration_sec) if duration_sec else None
@@ -294,7 +294,8 @@ class ExecutorProcess:
             update_total_balance(self.cfg, extra_pnl=net_usd)
 
             if net_usd < 0:
-                self.ban_coin(sym, reason=f"Убыточная сделка ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)")
+                ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
+                self.ban_coin(sym, reason=f"Убыточная сделка ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", duration_sec=float(ban_q["loss_trade"]))
             else:
                 self.a1_collapse_counts.pop(sym, None)
                 log(f"[{sym}] 🎉 Прибыльная сделка ({reason}): Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", level="INFO")

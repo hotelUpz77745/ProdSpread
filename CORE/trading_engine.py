@@ -30,11 +30,11 @@ class TradingEngine:
         self.obi_levels = int(obi_cfg.get("depth_levels", 5))
         
         self.min_top_depth_usd = float(signal_cfg.get("min_top_depth_usd", 0.0))
-        self.exchange_roles = self.cfg.get("trading_rules", {}).get("entry", {}).get("exchange_roles", {})
-        self.decay_map = self.cfg["trading_rules"]["exit"]["relative_profit_decay_map"]
-        self.extreme_decay_map = self.cfg["trading_rules"]["exit"].get("extreme_profit_decay_map", [
-            {"index": 0, "seconds": 0, "target_val": 0.0000},
-            {"index": 1, "seconds": 60, "target_val": -999.0}
+        hedged_exit = self.cfg["trading_rules"]["exit"]["hedged_exit"]
+        self.decay_map = hedged_exit["normal_decay"]
+        self.extreme_decay_map = hedged_exit.get("weak_entry", {}).get("decay", [
+            {"step": 0, "after_sec": 0, "target_spread": 0.0000},
+            {"step": 1, "after_sec": 60, "target_spread": -999.0}
         ])
         self.trading_risks = self.cfg["trading_risks"]
 
@@ -378,19 +378,29 @@ class TradingEngine:
 
     def get_exit_target_val(self, duration_sec: float, actual_net_spread_entry: float = 0.0, decay_map: list = None) -> Tuple[float, int]:
         m = decay_map if decay_map is not None else self.decay_map
-        if "target_val" in m[0]:
-            target = m[0]["target_val"]
-            idx = int(m[0].get("index", m[0].get("step", 0)))
-            for rule in m:
-                if duration_sec >= float(rule["seconds"]):
-                    target = float(rule["target_val"])
-                    idx = int(rule.get("index", rule.get("step", 0)))
-        else:
-            ratio = m[0].get("ratio", 0.0)
+        if "target_spread" in m[0]:
+            # Абсолютная карта (weak_entry / single_leg): target_spread — порог спреда
+            target = m[0]["target_spread"]
             idx = int(m[0].get("step", 0))
             for rule in m:
-                if duration_sec >= float(rule["seconds"]):
-                    ratio = float(rule.get("ratio", 0.0))
+                if duration_sec >= float(rule["after_sec"]):
+                    target = float(rule["target_spread"])
+                    idx = int(rule.get("step", 0))
+        elif "price_slip" in m[0]:
+            # Чейзинг-карта (single_leg_exit): price_slip — проскальзывание от цены
+            target = m[0]["price_slip"]
+            idx = int(m[0].get("step", 0))
+            for rule in m:
+                if duration_sec >= float(rule["after_sec"]):
+                    target = float(rule["price_slip"])
+                    idx = int(rule.get("step", 0))
+        else:
+            # Относительная карта (normal_decay): min_profit_ratio — доля от входного спреда
+            ratio = m[0].get("min_profit_ratio", 0.0)
+            idx = int(m[0].get("step", 0))
+            for rule in m:
+                if duration_sec >= float(rule["after_sec"]):
+                    ratio = float(rule.get("min_profit_ratio", 0.0))
                     idx = int(rule.get("step", 0))
             if ratio <= -900.0:
                 target = -999.0

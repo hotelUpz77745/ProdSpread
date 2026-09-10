@@ -37,8 +37,8 @@
             "max_positions": 1
         },
         "okx": {
-            "paper_start_balance": 30.0,
-            "trade_size_usd": 100.0,
+            "paper_start_balance": 0.0,
+            "trade_size_usd": 0.0,
             "taker_fee": 0.0006,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
@@ -126,21 +126,22 @@
             "parallel_entry_logic": {
                 "max_slippage_pct": 0.002,
                 "max_slippage_pct_desc": "Допустимое проскальзывание в процентах при изначальном параллельном ударе (0.2%).",
-                "quarantine_zero_fill_sec": 10,
-                "quarantine_zero_fill_sec_desc": "Карантин монеты при нулевом наливе обеих ног (Zero Fill).",
                 "min_hedge_fill_rate": 0.75,
-                "min_hedge_fill_rate_desc": "Сбалансированность налива. Если соотношение объемов налитых ног >= 0.75, переходим в ACTIVE_HEDGED. Иначе - SINGLE_LEG_EXPOSURE."
+                "min_hedge_fill_rate_desc": "Сбалансированность налива. Если соотношение объемов налитых ног >= 0.75, переходим в ACTIVE_HEDGED. Иначе - SINGLE_LEG_EXPOSURE.",
+                "fill_confirm_timeout_sec": {
+                    "BINANCE_KUCOIN": 0.6,
+                    "BINANCE_BITGET": 0.6,
+                    "KUCOIN_BITGET": 0.6,
+                    "BINANCE_OKX": 0.6,
+                    "KUCOIN_OKX": 0.6,
+                    "OKX_BITGET": 0.6
+                },
+                "fill_confirm_timeout_sec_desc": "Макс. время ожидания подтверждения налива по WS после IOC. Настроено по связкам.",
+                "fill_confirm_poll_interval_sec": 0.0,
+                "fill_confirm_poll_interval_sec_desc": "Интервал опроса WS-кэша в цикле ожидания (0.0 = чисто реактивный Event-driven)."
             }
         },
         "exit": {
-            "max_desync_ms": {
-                "BINANCE_KUCOIN": 350,
-                "BINANCE_BITGET": 450,
-                "KUCOIN_BITGET": 450,
-                "BINANCE_OKX": 400,
-                "KUCOIN_OKX": 400,
-                "OKX_BITGET": 450
-            },
             "close_confirm_timeout_sec": {
                 "BINANCE_KUCOIN": 1.8,
                 "BINANCE_BITGET": 1.8,
@@ -150,89 +151,119 @@
                 "OKX_BITGET": 1.8
             },
             "close_confirm_timeout_sec_desc": "Max seconds to poll WS cache for zero-size position confirmation on exit. Configured per exchange pair.",
-            "relative_profit_decay_map": [
-                {
-                    "step": 0,
-                    "seconds": 0,
-                    "ratio": 0.8
-                },
-                {
-                    "step": 1,
-                    "seconds": 5,
-                    "ratio": 0.5
-                },
-                {
-                    "step": 2,
-                    "seconds": 15,
-                    "ratio": 0.25
-                },
-                {
-                    "step": 3,
-                    "seconds": 30,
-                    "ratio": 0.0
-                },
-                {
-                    "step": 4,
-                    "seconds": 45,
-                    "ratio": -0.2
-                },
-                {
-                    "step": 5,
-                    "seconds": 60,
-                    "ratio": -999.0
+            "hedged_exit": {
+                "desc": "Управление выходом из нормальной захеджированной позиции (обе ноги налиты).",
+                "normal_decay": [
+                    {
+                        "step": 0,
+                        "after_sec": 0,
+                        "min_profit_ratio": 0.8
+                    },
+                    {
+                        "step": 1,
+                        "after_sec": 5,
+                        "min_profit_ratio": 0.5
+                    },
+                    {
+                        "step": 2,
+                        "after_sec": 15,
+                        "min_profit_ratio": 0.25
+                    },
+                    {
+                        "step": 3,
+                        "after_sec": 30,
+                        "min_profit_ratio": 0.0
+                    },
+                    {
+                        "step": 4,
+                        "after_sec": 45,
+                        "min_profit_ratio": -0.2
+                    },
+                    {
+                        "step": 5,
+                        "after_sec": 60,
+                        "min_profit_ratio": -999.0
+                    }
+                ],
+                "normal_decay_desc": "Карта снижения порога фиксации прибыли. min_profit_ratio — доля от фактического входного спреда. 0.8 = жду 80%% профита, 0.0 = безубыток, -999 = принудительный выход по маркету (TTL).",
+                "weak_entry": {
+                    "threshold_spread": 0.0015,
+                    "threshold_spread_desc": "Если факт чистый спред при входе <= этого значения, используется ускоренная карта выхода вместо нормальной.",
+                    "decay": [
+                        {
+                            "step": 0,
+                            "after_sec": 0,
+                            "target_spread": 0.0
+                        },
+                        {
+                            "step": 1,
+                            "after_sec": 10,
+                            "target_spread": -0.0005
+                        },
+                        {
+                            "step": 2,
+                            "after_sec": 20,
+                            "target_spread": -999.0
+                        }
+                    ],
+                    "decay_desc": "Ускоренная карта выхода при слабом входе. target_spread — абсолютный порог чистого спреда. -0.0005 = готов потерять 0.05%%, -999 = маркет."
                 }
-            ],
-            "extreme_profit_decay_map": [
-                {
-                    "index": 0,
-                    "seconds": 0,
-                    "target_val": 0.0
-                },
-                {
-                    "index": 1,
-                    "seconds": 10,
-                    "target_val": -0.0005
-                },
-                {
-                    "index": 2,
-                    "seconds": 20,
-                    "target_val": -999.0
-                }
-            ],
-            "extreme_profit_decay_map_desc": "Экстремальная карта выхода при слабом фактическом входе (факт <= min_spread_entry). Шаг 0: безубыток. Шаг 1: через 10 сек уступка -0.05%. Шаг 2: через 20 сек принудительный выход по рынку.",
-            "min_spread_entry": 0.0015,
-            "min_spread_entry_desc": "Минимально допустимый фактический чистый спред при входе. Если факт <= min_spread_entry, активируется extreme_profit_decay_map.",
-            "single_leg_exit_map": [
-                {
-                    "step": 0,
-                    "seconds": 0,
-                    "target_val": -0.0
-                },
-                {
-                    "step": 1,
-                    "seconds": 15,
-                    "target_val": -0.0005
-                },
-                {
-                    "step": 2,
-                    "seconds": 30,
-                    "target_val": -0.001
-                },
-                {
-                    "step": 3,
-                    "seconds": 45,
-                    "target_val": -999.0
-                }
-            ],
-            "single_leg_exit_map_desc": "Карта деградации для закрытия одной зависшей ноги (чейзинг стакана). target_val - проскальзывание от лучшей цены стакана.",
-            "single_leg_exit_market_immediate": false,
-            "single_leg_exit_market_immediate_desc": "Если true, то при зависании одной ноги бот не будет чейзить стакан, а сразу сбросит ее по маркету."
+            },
+            "single_leg_exit": {
+                "desc": "Управление выходом из однобокой позиции (одна нога зависла, v8).",
+                "immediate_market": false,
+                "immediate_market_desc": "Если true — не чейзить стакан, а сразу сбросить по маркету.",
+                "chase_map": [
+                    {
+                        "step": 0,
+                        "after_sec": 0,
+                        "price_slip": -0.0
+                    },
+                    {
+                        "step": 1,
+                        "after_sec": 15,
+                        "price_slip": -0.0005
+                    },
+                    {
+                        "step": 2,
+                        "after_sec": 30,
+                        "price_slip": -0.001
+                    },
+                    {
+                        "step": 3,
+                        "after_sec": 45,
+                        "price_slip": -999.0
+                    }
+                ],
+                "chase_map_desc": "Карта чейзинга стакана. price_slip — проскальзывание от лучшей цены. 0.0 = точно по рынку, -0.0005 = уступка 0.05%%, -999 = маркет."
+            },
+            "max_desync_ms": {
+                "BINANCE_KUCOIN": 350,
+                "BINANCE_BITGET": 450,
+                "KUCOIN_BITGET": 450,
+                "BINANCE_OKX": 400,
+                "KUCOIN_OKX": 400,
+                "OKX_BITGET": 450
+            }
         },
         "ban_rules": {
             "is_active": true,
+            "quarantine_sec": {
+                "entry_error": 3600,
+                "entry_error_desc": "Ошибка API при отправке ордера на вход.",
+                "zero_fill": 10,
+                "zero_fill_desc": "Ни одна нога не налилась (обе 0).",
+                "single_leg_exposure": 1800,
+                "single_leg_exposure_desc": "Зависла одна нога, пришлось чейзить/сбрасывать.",
+                "spread_collapse_step1": 120,
+                "spread_collapse_step2": 120,
+                "spread_collapse_step3": 120,
+                "spread_collapse_desc": "Последовательные коллапсы спреда (A1). Шаг 1→2→3 = нарастающий карантин.",
+                "loss_trade": 3600,
+                "loss_trade_desc": "Сделка закрылась в убыток."
+            },
             "ban_if_exit_level_ge": null,
-            "quarantine_on_entry_error": true,
-            "quarantine_duration_sec": 3600
+            "ban_if_exit_level_ge_desc": "Бан монеты, если уровень выхода >= этого значения (null = отключено)."
         },
         "funding_filter": {
             "is_active": true,

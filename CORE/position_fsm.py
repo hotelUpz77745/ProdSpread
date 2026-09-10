@@ -1,5 +1,7 @@
-# File: CORE/position_fsm.py
-# Role: Конечный автомат состояний (FSM) жизненного цикла торговой позиции (HFT)
+# ============================================================
+# FILE: CORE/position_fsm.py
+# ROLE: FSM жизненного цикла позиции (вход, выход, аварийный сброс)
+# ============================================================
 
 import asyncio
 import time
@@ -62,29 +64,31 @@ class PositionFSM:
         self.state = PositionState.IDLE
         self.engine = TradingEngine(self.cfg, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
         entry_cfg = self.cfg["trading_rules"]["entry"]
-        lead_cfg = entry_cfg.get("phase1_lead_leg", entry_cfg)
-        hedge_cfg = entry_cfg.get("phase3_hedge_leg", entry_cfg)
+        parallel_cfg = entry_cfg["parallel_entry_logic"]
+        ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
 
-        self.order_policy = entry_cfg.get("order_execution_type", "ASYMMETRIC_LIMIT_IOC").upper()
-        self.min_fill_rate = float(hedge_cfg.get("min_hedge_fill_rate", entry_cfg.get("min_fill_rate", 0.75)))
+        self.order_policy = entry_cfg["order_execution_type"].upper()
+        self.min_fill_rate = float(parallel_cfg["min_hedge_fill_rate"])
 
-        # Параметры подтверждения налива (из phase1_lead_leg с fallback на flat entry)
-        timeout_cfg = lead_cfg.get("fill_confirm_timeout_sec", entry_cfg.get("fill_confirm_timeout_sec"))
-        if isinstance(timeout_cfg, dict):
-            pair_key1 = f"{long_ex}_{short_ex}".upper()
-            pair_key2 = f"{short_ex}_{long_ex}".upper()
-            if pair_key1 in timeout_cfg:
-                self.fill_confirm_timeout = float(timeout_cfg[pair_key1])
-            elif pair_key2 in timeout_cfg:
-                self.fill_confirm_timeout = float(timeout_cfg[pair_key2])
-            else:
-                raise KeyError(
-                    f"Параметры fill_confirm_timeout_sec не содержат пару {pair_key1} или {pair_key2} в cfg.json"
-                )
+        # Карантины из конфигов (без магических констант)
+        self.q_entry_error = float(ban_q["entry_error"])
+        self.q_zero_fill = float(ban_q["zero_fill"])
+        self.q_single_leg = float(ban_q["single_leg_exposure"])
+
+        # Параметры подтверждения налива из parallel_entry_logic
+        timeout_cfg = parallel_cfg["fill_confirm_timeout_sec"]
+        pair_key1 = f"{long_ex}_{short_ex}".upper()
+        pair_key2 = f"{short_ex}_{long_ex}".upper()
+        if pair_key1 in timeout_cfg:
+            self.fill_confirm_timeout = float(timeout_cfg[pair_key1])
+        elif pair_key2 in timeout_cfg:
+            self.fill_confirm_timeout = float(timeout_cfg[pair_key2])
         else:
-            self.fill_confirm_timeout = float(timeout_cfg)
-            
-        self.fill_confirm_poll_interval = float(lead_cfg.get("fill_confirm_poll_interval_sec", entry_cfg.get("fill_confirm_poll_interval_sec", 0.0)))
+            raise KeyError(
+                f"fill_confirm_timeout_sec не содержит пару {pair_key1} или {pair_key2} в cfg.json"
+            )
+
+        self.fill_confirm_poll_interval = float(parallel_cfg["fill_confirm_poll_interval_sec"])
 
         # Параметры подтверждения закрытия позиции (из секции exit с fallback на entry * 2)
         exit_timeout_cfg = self.cfg["trading_rules"].get("exit", {}).get("close_confirm_timeout_sec")
@@ -367,7 +371,7 @@ class PositionFSM:
             ex_name = self.long_ex if i == 0 else self.short_ex
             if isinstance(res, Exception):
                 log(f"[{self.sym}] 🚨 Ошибка входа ({ex_name}): {res}.", level="ERROR")
-                self.ban_coin_cb(self.sym, reason=str(res), duration_sec=3600)
+                self.ban_coin_cb(self.sym, reason=str(res), duration_sec=self.q_entry_error)
         
         self._set_state(PositionState.VERIFYING_FILL)
         
@@ -388,9 +392,8 @@ class PositionFSM:
         log(f"[{self.sym}] Phase 2: Результаты налива -> LONG: {l_qty:.4f} ({l_rate*100:.1f}%), SHORT: {s_qty:.4f} ({s_rate*100:.1f}%)", level="INFO")
         
         if l_qty <= 0.0 and s_qty <= 0.0:
-            zero_fill_sec = float(parallel_cfg.get("quarantine_zero_fill_sec", 10))
-            log(f"[{self.sym}] Zero Fill: Ни одна нога не налилась. Карантин {zero_fill_sec:.0f}с.", level="WARNING")
-            self.ban_coin_cb(self.sym, reason="Zero Fill (Both Legs)", duration_sec=zero_fill_sec)
+            log(f"[{self.sym}] Zero Fill: Ни одна нога не налилась. Карантин {self.q_zero_fill:.0f}с.", level="WARNING")
+            self.ban_coin_cb(self.sym, reason="Zero Fill (Both Legs)", duration_sec=self.q_zero_fill)
             self._set_state(PositionState.ABORTED)
             self._notify_pos_failed("ZERO_FILL")
             return False
@@ -410,8 +413,8 @@ class PositionFSM:
                 return True
         
         # SINGLE LEG EXPOSURE
-        exit_cfg = self.cfg["trading_rules"]["exit"]
-        if exit_cfg.get("single_leg_exit_market_immediate", False):
+        sle_cfg = self.cfg["trading_rules"]["exit"]["single_leg_exit"]
+        if sle_cfg["immediate_market"]:
             log(f"[{self.sym}] Зависла одна нога. Включен немедленный выход по маркету.", level="WARNING")
             if l_qty > 0:
                 await self._emergency_unwind_single(self.long_ex, self.native_long, l_qty, l_price, "BUY", "LONG")
@@ -458,44 +461,41 @@ class PositionFSM:
             self._set_state(PositionState.ABORTED)
             return
             
-        exit_cfg = self.cfg["trading_rules"]["exit"]
-        decay_map = exit_cfg.get("single_leg_exit_map", [])
+        sle_cfg = self.cfg["trading_rules"]["exit"]["single_leg_exit"]
+        chase_map = sle_cfg["chase_map"]
         
         qty_rem = qty_to_close
         
         start_time = time.time()
-        for step in decay_map:
+        for step in chase_map:
             if qty_rem <= 0:
                 break
             
-            target_val = float(step.get("target_val", 0.0))
-            wait_sec = float(step.get("seconds", 0.0))
+            price_slip = float(step["price_slip"])
+            wait_sec = float(step["after_sec"])
             
             now = time.time()
             elapsed = now - start_time
             if elapsed < wait_sec:
                 await asyncio.sleep(wait_sec - elapsed)
                 
-            if target_val <= -900.0:
+            if price_slip <= -900.0:
                 # Market fallback
                 log(f"[{self.sym}] Single Leg Fallback: MARKET выход ({open_ex}).", level="WARNING")
                 await self._emergency_unwind_single(open_ex, native_sym, qty_rem, entry_price, "BUY" if close_side=="SELL" else "SELL", pos_side)
                 break
                 
             # Пробуем лимитку
-            # Для чейзинга нужно взять лучшую цену стакана и ухудшить ее на target_val
-            # Чтобы не парсить стакан заново, используем последнюю цену из движка (он обновляется в фоне)
+            # Для чейзинга нужно взять лучшую цену стакана и ухудшить ее на price_slip
             current_calc_price = self.engine_res.get(engine_price_key, entry_price)
             
             if close_side == "SELL":
-                # Ухудшаем цену вниз
-                limit_price = current_calc_price * (1 + target_val)
+                limit_price = current_calc_price * (1 + price_slip)
             else:
-                # Ухудшаем цену вверх
-                limit_price = current_calc_price * (1 - target_val)
+                limit_price = current_calc_price * (1 - price_slip)
                 
             usd_needed = qty_rem * limit_price
-            log(f"[{self.sym}] Single Leg Chasing (Iter {step.get('step')}): {close_side} {qty_rem:.4f} @ {limit_price:.6f} (Target: {target_val})", level="INFO")
+            log(f"[{self.sym}] Single Leg Chasing (Step {step['step']}): {close_side} {qty_rem:.4f} @ {limit_price:.6f} (Slip: {price_slip})", level="INFO")
             
             try:
                 await self.orders[open_ex].place_order(
@@ -514,7 +514,7 @@ class PositionFSM:
         if ev_leg and hasattr(self.orders[open_ex], "unsubscribe_position_update"):
             self.orders[open_ex].unsubscribe_position_update(native_sym, pos_side)
             
-        self.ban_coin_cb(self.sym, reason="Single Leg Exposure Exit", duration_sec=3600)
+        self.ban_coin_cb(self.sym, reason="Single Leg Exposure Exit", duration_sec=self.q_single_leg)
         self._set_state(PositionState.ABORTED)
         self._notify_pos_failed("SINGLE_LEG_EXPOSURE")
 
