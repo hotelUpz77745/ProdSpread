@@ -719,9 +719,6 @@ class PositionFSM:
         self._notify_pos_failed("ASYMMETRIC_FILL_UNWOUND")
         log(f"[{self.sym}] ✅ Асимметрия полностью ликвидирована. Итерация завершена.", level="INFO")
 
-        # Отправляем монету во временный бан, чтобы бот не входил снова в асимметричный стакан
-        self.ban_coin_cb(self.sym, reason="Асимметрия налива (сброс входа)", duration_sec=1800)
-
     async def run_close(self, exit_res: Dict[str, Any], reason: str = "PROFIT_DECAY") -> bool:
         """
         Плановое закрытие обеих ног позиции:
