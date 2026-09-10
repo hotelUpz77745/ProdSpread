@@ -322,27 +322,7 @@ class PositionFSM:
         self._set_state(PositionState.SUBMITTING)
         
         entry_cfg = self.cfg["trading_rules"]["entry"]
-        roles_cfg = entry_cfg["exchange_roles"].get(self.route)
-        if not roles_cfg:
-            log(f"[{self.sym}] ⛔ Нет ролей для связки {self.route}.", level="WARNING")
-            self._set_state(PositionState.IDLE)
-            self._notify_pos_failed("NO_ROLES")
-            return False
-            
-        lead_ex = roles_cfg["lead"]
-        hedge_ex = roles_cfg["hedge"]
-        
         parallel_cfg = entry_cfg.get("parallel_entry_logic", entry_cfg)
-        
-        is_lead_long = (lead_ex == self.long_ex)
-        native_lead = self.native_long if is_lead_long else self.native_short
-        native_hedge = self.native_short if is_lead_long else self.native_long
-        
-        lead_side = "BUY" if is_lead_long else "SELL"
-        hedge_side = "SELL" if is_lead_long else "BUY"
-        
-        lead_pos_side = "LONG" if is_lead_long else "SHORT"
-        hedge_pos_side = "SHORT" if is_lead_long else "LONG"
         
         spread_val = self.engine_res.get("net_spread", self.engine_res.get("vwap_spread", 0.0))
         log(f"[{self.sym}] Открываем (PARALLEL_LIMIT_IOC): {self.long_ex} (L) / {self.short_ex} (S) | Net Spread: {spread_val * 100:.2f}%", level="INFO")

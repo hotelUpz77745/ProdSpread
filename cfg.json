@@ -123,17 +123,6 @@
                     "desc": "Симуляция немедленного закрытия. Защита от входа в спреды, где обратный bid/ask спред съест большую часть расчетной прибыли."
                 }
             },
-            "exchange_roles": {
-                "BINANCE_BITGET": {
-                    "lead": "BITGET",
-                    "hedge": "BINANCE"
-                },
-                "BINANCE_KUCOIN": {
-                    "lead": "KUCOIN",
-                    "hedge": "BINANCE"
-                }
-            },
-            "exchange_roles_desc": "Маршрутизация ролей: lead = слабая/неликвидная биржа (первый выстрел), hedge = ликвидная биржа (мгновенный догон).",
             "parallel_entry_logic": {
                 "max_slippage_pct": 0.002,
                 "max_slippage_pct_desc": "Допустимое проскальзывание в процентах при изначальном параллельном ударе (0.2%).",
