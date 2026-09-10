@@ -583,6 +583,15 @@ class PositionFSM:
                 "short_ex": self.short_ex,
                 "reason": reason
             }))
+
+    def _notify_pos_exit_failed(self):
+        if self.pm:
+            self.pm.rollback_exit(self.route, self.sym)
+        if self.writer:
+            asyncio.create_task(async_write_msg(self.writer, "POS_EXIT_FAILED", {
+                "route": self.route,
+                "sym": self.sym
+            }))
             
     def _finalize_open(self, qty_long: float, qty_short: float, p_long: float, p_short: float):
         self.open_time = time.time()
@@ -894,8 +903,9 @@ class PositionFSM:
                 return True
                 
             if attempt == 2:
-                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позицию (run_close) после 3 попыток очистки! Остаток L:{l_rem} S:{s_rem}. Позиция остается в памяти!", level="ERROR")
+                log(f"[{self.sym}] 🛑 КРИТИЧЕСКАЯ ОШИБКА: Не удалось закрыть позицию (run_close) после 3 попыток очистки! Остаток L:{l_rem} S:{s_rem}. Позиция возвращается в очередь на закрытие!", level="ERROR")
                 self._set_state(PositionState.CLOSING)
+                self._notify_pos_exit_failed()
                 return False
 
             log(f"[{self.sym}] ⚠️ После закрытия обнаружен остаток: L:{l_rem} S:{s_rem}. Попытка аварийного сброса #{attempt+1}...", level="WARNING")

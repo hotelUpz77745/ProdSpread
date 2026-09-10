@@ -335,6 +335,14 @@ class ExecutorProcess:
                                 await self.execute_open(data)
                             except Exception as e:
                                 log(f"[ExecutorProcess] Ошибка в execute_open: {e}\n{traceback.format_exc()}", level="ERROR")
+                                if self.writer:
+                                    asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
+                                        "route": data.get("route"),
+                                        "sym": data.get("sym"),
+                                        "long_ex": data.get("long_ex"),
+                                        "short_ex": data.get("short_ex"),
+                                        "reason": f"UNCAUGHT_OPEN_ERR: {e}"
+                                    }))
                         asyncio.create_task(safe_execute_open(payload))
                     elif msg_type == "CMD_CLOSE":
                         async def safe_execute_close(data):
@@ -342,6 +350,11 @@ class ExecutorProcess:
                                 await self.execute_close(data)
                             except Exception as e:
                                 log(f"[ExecutorProcess] Ошибка в execute_close: {e}\n{traceback.format_exc()}", level="ERROR")
+                                if self.writer:
+                                    asyncio.create_task(async_write_msg(self.writer, "POS_EXIT_FAILED", {
+                                        "route": data.get("route"),
+                                        "sym": data.get("sym")
+                                    }))
                         asyncio.create_task(safe_execute_close(payload))
                     elif msg_type == "SHUTDOWN":
                         self._running = False

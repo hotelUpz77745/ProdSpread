@@ -164,6 +164,10 @@ class Main:
                     route = payload["route"]
                     sym = payload["sym"]
                     self.pm.confirm_exit(route, sym)
+                elif msg_type == "POS_EXIT_FAILED":
+                    route = payload["route"]
+                    sym = payload["sym"]
+                    self.pm.rollback_exit(route, sym)
                 elif msg_type == "BAN_UPDATE":
                     sym = payload["symbol"]
                     exp = payload["expire_time"]
