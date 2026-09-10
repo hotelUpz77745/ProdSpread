@@ -539,17 +539,3 @@ if __name__ == "__main__":
 # taskkill /F /IM python.exe
 
 # # claude
-
-
-
-# {
-#     "TRUMP": null,
-#     "VET": null,
-#     "PROM": null,
-#     "GIGGLE": null,
-#     "ANTHROPIC": null,
-#     "ONG": null 
-# }
-
-
-# logs/test_hedge_binance_kucoin.log and logs/test_hedge_binance_bitget.log.
