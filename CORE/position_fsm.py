@@ -325,6 +325,7 @@ class PositionFSM:
         if not roles_cfg:
             log(f"[{self.sym}] ⛔ Нет ролей для связки {self.route} (ASYMMETRIC_LIMIT_IOC невозможен).", level="WARNING")
             self._set_state(PositionState.IDLE)
+            self._notify_pos_failed("NO_ROLES")
             return False
             
         lead_ex = roles_cfg["lead"]
@@ -383,6 +384,7 @@ class PositionFSM:
             if hasattr(self.orders[lead_ex], "unsubscribe_position_update"):
                 self.orders[lead_ex].unsubscribe_position_update(native_lead, lead_pos_side)
             self.ban_coin_cb(self.sym, reason=str(e), duration_sec=3600)
+            self._notify_pos_failed(f"LEAD_ERR: {e}")
             return False
             
         req_lead_qty = self.engine_res.get("long_qty", 0.0) if is_lead_long else self.engine_res.get("short_qty", 0.0)
@@ -410,6 +412,7 @@ class PositionFSM:
             log(f"[{self.sym}] Ветка Б (Zero Fill): Lead Leg не налился. Карантин {zero_fill_sec:.0f}с.", level="WARNING")
             self.ban_coin_cb(self.sym, reason="Zero Fill (Lead Leg)", duration_sec=zero_fill_sec)
             self._set_state(PositionState.ABORTED)
+            self._notify_pos_failed("ZERO_FILL")
             return False
             
         # =========================================================================
@@ -567,8 +570,19 @@ class PositionFSM:
         except Exception as e:
             log(f"[{self.sym}] Ошибка сброса {ex}: {e}", level="ERROR")
             
+        self._notify_pos_failed("UNWIND_SINGLE")
+
+    def _notify_pos_failed(self, reason: str):
         if self.pm:
             self.pm.rollback_entry(self.long_ex, self.short_ex, self.sym)
+        if self.writer:
+            asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
+                "route": self.route,
+                "sym": self.sym,
+                "long_ex": self.long_ex,
+                "short_ex": self.short_ex,
+                "reason": reason
+            }))
             
     def _finalize_open(self, qty_long: float, qty_short: float, p_long: float, p_short: float):
         self.open_time = time.time()
@@ -693,19 +707,8 @@ class PositionFSM:
                 await self.orders[self.short_ex].place_order(self.native_short, "BUY", s_check["size"] * p, p, order_type="MARKET", position_side="SHORT")
 
         self._set_state(PositionState.ABORTED)
-        if self.pm:
-            self.pm.rollback_entry(self.long_ex, self.short_ex, self.sym)
+        self._notify_pos_failed("ASYMMETRIC_FILL_UNWOUND")
         log(f"[{self.sym}] ✅ Асимметрия полностью ликвидирована. Итерация завершена.", level="INFO")
-
-        # Уведомляем main-процесс об отмене входа, чтобы освободить слот
-        if self.writer:
-            asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
-                "route": self.route,
-                "sym": self.sym,
-                "long_ex": self.long_ex,
-                "short_ex": self.short_ex,
-                "reason": "ASYMMETRIC_FILL_UNWOUND"
-            }))
 
         # Отправляем монету во временный бан, чтобы бот не входил снова в асимметричный стакан
         self.ban_coin_cb(self.sym, reason="Асимметрия налива (сброс входа)", duration_sec=1800)
