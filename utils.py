@@ -3,7 +3,6 @@
 # ROLE: SessionManager and generic utils
 # ============================================================
 import aiohttp
-from c_log import UnifiedLogger
 
 class SessionManager:
     """Singleton for managing a shared aiohttp.ClientSession."""
