@@ -1039,7 +1039,8 @@ class BitgetOrder:
         # Bitget v2 API: For full close use close-positions endpoint.
         # For partial trim (reduce_only=True) use normal order with tradeSide="close".
         reduce_only = kwargs.get("reduce_only", False)
-        if is_close and position_side and not reduce_only:
+        is_full_unwind = kwargs.get("is_full_unwind", False)
+        if is_close and position_side and (not reduce_only or is_full_unwind):
             hold = position_side.upper()
             if hold in ("LONG", "SHORT"):
                 return await self._close_position(symbol, hold.lower())

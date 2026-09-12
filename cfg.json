@@ -192,7 +192,7 @@
             },
             "single_leg_exit": {
                 "desc": "Управление выходом из однобокой позиции (одна нога зависла, v8).",
-                "immediate_market": false,
+                "immediate_market": true,
                 "immediate_market_desc": "Если true — не чейзить стакан, а сразу сбросить по маркету.",
                 "chase_map": [
                     {

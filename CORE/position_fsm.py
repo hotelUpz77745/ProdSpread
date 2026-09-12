@@ -545,7 +545,7 @@ class PositionFSM:
         reduce_side = "SELL" if open_side == "BUY" else "BUY"
         log(f"[{self.sym}] Immediate unwind {ex} ({qty} qty, {usd:.2f}$)...", level="WARNING")
         try:
-            await self.orders[ex].place_order(native_sym, reduce_side, usd, price, order_type="MARKET", position_side=pos_side, reduce_only=True)
+            await self.orders[ex].place_order(native_sym, reduce_side, usd, price, order_type="MARKET", position_side=pos_side, reduce_only=True, is_full_unwind=True)
         except Exception as e:
             log(f"[{self.sym}] Unwind error on {ex}: {e}", level="ERROR")
 
