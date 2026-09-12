@@ -99,7 +99,7 @@
             "order_execution_type": "PARALLEL_LIMIT_IOC",
             "signal_filters": {
                 "spread_entry": 0.008,
-                "min_top_depth_usd": 200.0,
+                "min_top_depth_usd": 50.0,
                 "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
                 "min_signal_dwell_ms": 0,
                 "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
