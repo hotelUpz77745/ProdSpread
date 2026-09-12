@@ -339,10 +339,11 @@ class PositionFSM:
         price_short_calc = self.engine_res.get("short_avg_price", 0.0)
         
         # Use slippage limits from config
-        max_slip = float(parallel_cfg.get("max_slippage_pct", entry_cfg.get("lead_max_slippage_pct", 0.0005)))
+        long_slip = float(parallel_cfg.get("long_slip_ratio", 0.0015))
+        short_slip = float(parallel_cfg.get("short_slip_ratio", 0.0015))
         
-        price_long_limit = price_long_calc * (1 + max_slip)
-        price_short_limit = price_short_calc * (1 - max_slip)
+        price_long_limit = price_long_calc * (1 + long_slip)
+        price_short_limit = price_short_calc * (1 - short_slip)
         
         ev_long = None
         ev_short = None
@@ -365,7 +366,15 @@ class PositionFSM:
             self.native_short, "SELL", size_short_usd, price_short_limit, order_type="LIMIT_IOC", position_side="SHORT"
         ))
         
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5.0)
+        except asyncio.TimeoutError:
+            log(f"[{self.sym}] API Timeout during PARALLEL LIMIT_IOC. Launching emergency unwind just in case.", level="ERROR")
+            self.ban_coin_cb(self.sym, reason="Entry API Timeout", duration_sec=self.q_entry_error)
+            # Must explicitly unwind because exchange might have processed the order!
+            await self._emergency_unwind()
+            self._notify_pos_failed("ENTRY_TIMEOUT")
+            return False
         
         for i, res in enumerate(results):
             ex_name = self.long_ex if i == 0 else self.short_ex
@@ -486,8 +495,18 @@ class PositionFSM:
                 break
                 
             # Try limit order
-            # For chasing, take best book price adjusted by price_slip
-            current_calc_price = self.engine_res.get(engine_price_key, entry_price)
+            # Get LIVE price for chasing (not the frozen engine_res price)
+            live_price = 0.0
+            try:
+                pos_check = await self.orders[open_ex].get_position_rest(native_sym, pos_side)
+                live_price = pos_check.get("price", 0.0)
+            except Exception:
+                pass
+            if live_price <= 0:
+                live_price = self.orders[open_ex].get_last_close_price(native_sym) if hasattr(self.orders[open_ex], "get_last_close_price") else 0.0
+            if live_price <= 0:
+                live_price = self.engine_res.get(engine_price_key, entry_price)
+            current_calc_price = live_price
             
             if close_side == "SELL":
                 limit_price = current_calc_price * (1 + price_slip)
@@ -495,7 +514,7 @@ class PositionFSM:
                 limit_price = current_calc_price * (1 - price_slip)
                 
             usd_needed = qty_rem * limit_price
-            log(f"[{self.sym}] Single Leg Chasing (Step {step['step']}): {close_side} {qty_rem:.4f} @ {limit_price:.6f} (Slip: {price_slip})", level="INFO")
+            log(f"[{self.sym}] Single Leg Chasing (Step {step['step']}): {close_side} {qty_rem:.4f} @ {limit_price:.6f} (Live: {current_calc_price:.6f}, Slip: {price_slip})", level="INFO")
             
             try:
                 await self.orders[open_ex].place_order(
@@ -524,11 +543,9 @@ class PositionFSM:
         reduce_side = "SELL" if side == "BUY" else "BUY"
         log(f"[{self.sym}] Immediate unwind {ex} ({qty} qty, {usd:.2f}$)...", level="WARNING")
         try:
-            await self.orders[ex].place_order(native_sym, reduce_side, usd, price, order_type="MARKET", position_side=pos_side)
+            await self.orders[ex].place_order(native_sym, reduce_side, usd, price, order_type="MARKET", position_side=pos_side, reduce_only=True)
         except Exception as e:
             log(f"[{self.sym}] Unwind error on {ex}: {e}", level="ERROR")
-            
-        self._notify_pos_failed("UNWIND_SINGLE")
 
     def _notify_pos_failed(self, reason: str):
         if self.pm:
@@ -562,8 +579,11 @@ class PositionFSM:
         actual_gross_spread = (p_short - p_long) / p_long if p_long > 0 else 0.0
         actual_net_spread = actual_gross_spread - entry_comm
         
-        # If trim occurred, always use extreme_decay
-        use_extreme_decay = True
+        # Calculate actual volume rates from fill vs requested quantities
+        req_l = self.engine_res.get("long_qty", 0.0)
+        req_s = self.engine_res.get("short_qty", 0.0)
+        long_vol_rate = (qty_long / req_l) if req_l > 0 else 1.0
+        short_vol_rate = (qty_short / req_s) if req_s > 0 else 1.0
         
         self.exec_res = {
             "engine_res": self.engine_res,
@@ -575,9 +595,8 @@ class PositionFSM:
             "actual_short_price": p_short,
             "actual_gross_spread": actual_gross_spread,
             "actual_net_spread": actual_net_spread,
-            "use_extreme_decay": use_extreme_decay,
-            "long_executed_volume_rate": 1.0,
-            "short_executed_volume_rate": 1.0,
+            "long_executed_volume_rate": long_vol_rate,
+            "short_executed_volume_rate": short_vol_rate,
             "open_time": self.open_time,
             "open_time_ms": self.open_time_ms
         }
@@ -627,7 +646,7 @@ class PositionFSM:
             usd = l_size * p
             log(f"[{self.sym}] Immediate unwind of exposed long ({l_size} qty, {usd:.2f}$) on {self.long_ex}...", level="WARNING")
             kill_tasks.append(self.orders[self.long_ex].place_order(
-                self.native_long, "SELL", usd, p, order_type="MARKET", position_side="LONG"
+                self.native_long, "SELL", usd, p, order_type="MARKET", position_side="LONG", reduce_only=True
             ))
 
         if s_size > 0 and self.short_ex in self.orders:
@@ -635,7 +654,7 @@ class PositionFSM:
             usd = s_size * p
             log(f"[{self.sym}] Immediate unwind of exposed short ({s_size} qty, {usd:.2f}$) on {self.short_ex}...", level="WARNING")
             kill_tasks.append(self.orders[self.short_ex].place_order(
-                self.native_short, "BUY", usd, p, order_type="MARKET", position_side="SHORT"
+                self.native_short, "BUY", usd, p, order_type="MARKET", position_side="SHORT", reduce_only=True
             ))
 
         if kill_tasks:
@@ -667,10 +686,10 @@ class PositionFSM:
             s_check = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT") if self.short_ex in self.orders else {"size": 0.0}
             if l_check.get("size", 0.0) > 0:
                 p = l_check.get("price", 0.0) or self.engine_res.get("long_avg_price", 1.0)
-                await self.orders[self.long_ex].place_order(self.native_long, "SELL", l_check["size"] * p, p, order_type="MARKET", position_side="LONG")
+                await self.orders[self.long_ex].place_order(self.native_long, "SELL", l_check["size"] * p, p, order_type="MARKET", position_side="LONG", reduce_only=True)
             if s_check.get("size", 0.0) > 0:
                 p = s_check.get("price", 0.0) or self.engine_res.get("short_avg_price", 1.0)
-                await self.orders[self.short_ex].place_order(self.native_short, "BUY", s_check["size"] * p, p, order_type="MARKET", position_side="SHORT")
+                await self.orders[self.short_ex].place_order(self.native_short, "BUY", s_check["size"] * p, p, order_type="MARKET", position_side="SHORT", reduce_only=True)
 
         self._set_state(PositionState.ABORTED)
         self._notify_pos_failed("ASYMMETRIC_FILL_UNWOUND")
@@ -717,7 +736,7 @@ class PositionFSM:
             t0 = time.perf_counter()
             try:
                 res = await self.orders[ex].place_order(
-                    symbol, side, size_usd, price, order_type=order_type, position_side=position_side
+                    symbol, side, size_usd, price, order_type=order_type, position_side=position_side, reduce_only=True
                 )
                 close_latencies[ex] = (time.perf_counter() - t0) * 1000.0
                 return res

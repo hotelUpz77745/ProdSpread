@@ -227,13 +227,13 @@ def pre_calculate_orderbook(prices: np.ndarray, active_routes: np.ndarray, top_n
         if min_top_depth_usd > 0.0 and (ask1_usd < min_top_depth_usd or bid2_usd < min_top_depth_usd):
             spread_1 = -999.0
         else:
-            spread_1 = (bid2 - ask1) / bid2 * 100.0
+            spread_1 = (bid2 - ask1) / bid2
             
         # Direction 2: Long ex2, Short ex1 (buy ask2, sell bid1)
         if min_top_depth_usd > 0.0 and (ask2_usd < min_top_depth_usd or bid1_usd < min_top_depth_usd):
             spread_2 = -999.0
         else:
-            spread_2 = (bid1 - ask2) / bid1 * 100.0
+            spread_2 = (bid1 - ask2) / bid1
             
         if spread_1 <= -999.0 and spread_2 <= -999.0:
             out[i, 0] = -1.0

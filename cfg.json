@@ -24,6 +24,7 @@
             "paper_start_balance": 11.78,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0005,
+            "limit_slip_ratio": 0.0015,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -32,6 +33,7 @@
             "paper_start_balance": 5.86,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0006,
+            "limit_slip_ratio": 0.0015,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -40,6 +42,7 @@
             "paper_start_balance": 0.0,
             "trade_size_usd": 0.0,
             "taker_fee": 0.0006,
+            "limit_slip_ratio": 0.0015,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -48,6 +51,7 @@
             "paper_start_balance": 11.79,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0006,
+            "limit_slip_ratio": 0.0015,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -110,24 +114,23 @@
                 },
                 "max_desync_ms_desc": "Пороги рассинхрона стаканов (мс) для каждой связки. Настроены индивидуально под скорость стримов бирж.",
                 "orderbook_imbalance": {
-                    "enabled": true,
+                    "enabled": false,
                     "max_adverse_imbalance": 0.55,
                     "depth_levels": 5,
-                    "desc": "Фильтр давления стакана Hedge-биржи перед выстрелом в Lead. Отсекает вход, если стакан Hedge перекошен против направления хеджа."
+                    "desc": "Отсекает вход, если на одной из ног стакан перекошен против направления удара (на Long-бирже тяжелые аски, на Short-бирже тяжелые биды). Временно отключен (false) как избыточный для жестких LIMIT_IOC."
                 },
                 "synthetic_exit": {
                     "enabled": true,
                     "check_slippage": true,
-                    "max_slippage_ratio": 0.65,
+                    "max_slippage_ratio": 0.50,
                     "hard_max_slippage": 0.008,
                     "desc": "Симуляция немедленного закрытия. Защита от входа в спреды, где обратный bid/ask спред съест большую часть расчетной прибыли."
                 }
             },
             "parallel_entry_logic": {
-                "max_slippage_pct": 0.002,
-                "max_slippage_pct_desc": "Допустимое проскальзывание в процентах при изначальном параллельном ударе (0.2%).",
-                "min_hedge_fill_rate": 0.75,
-                "min_hedge_fill_rate_desc": "Сбалансированность налива. Если соотношение объемов налитых ног >= 0.75, переходим в ACTIVE_HEDGED. Иначе - SINGLE_LEG_EXPOSURE.",
+                "limit_slip_desc": "Дальность заброса LIMIT_IOC ордера от текущего расчетного центра (читается из trading_risks для каждой биржи индивидуально).",
+                "min_hedge_fill_rate": 0.60,
+                "min_hedge_fill_rate_desc": "Сбалансированность налива. Если соотношение объемов налитых ног >= 0.60, переходим в ACTIVE_HEDGED. Иначе - SINGLE_LEG_EXPOSURE.",
                 "fill_confirm_timeout_sec": {
                     "BINANCE_KUCOIN": 0.6,
                     "BINANCE_BITGET": 0.6,
@@ -185,29 +188,7 @@
                         "min_profit_ratio": -999.0
                     }
                 ],
-                "normal_decay_desc": "Карта снижения порога фиксации прибыли. min_profit_ratio — доля от фактического входного спреда. 0.8 = жду 80%% профита, 0.0 = безубыток, -999 = принудительный выход по маркету (TTL).",
-                "weak_entry": {
-                    "threshold_spread": 0.0015,
-                    "threshold_spread_desc": "Если факт чистый спред при входе <= этого значения, используется ускоренная карта выхода вместо нормальной.",
-                    "decay": [
-                        {
-                            "step": 0,
-                            "after_sec": 0,
-                            "target_spread": 0.0
-                        },
-                        {
-                            "step": 1,
-                            "after_sec": 10,
-                            "target_spread": -0.0005
-                        },
-                        {
-                            "step": 2,
-                            "after_sec": 20,
-                            "target_spread": -999.0
-                        }
-                    ],
-                    "decay_desc": "Ускоренная карта выхода при слабом входе. target_spread — абсолютный порог чистого спреда. -0.0005 = готов потерять 0.05%%, -999 = маркет."
-                }
+                "normal_decay_desc": "Карта снижения порога фиксации прибыли. min_profit_ratio — доля от фактического входного спреда. 0.8 = жду 80%% профита, 0.0 = безубыток, -999 = принудительный выход по маркету (TTL)."
             },
             "single_leg_exit": {
                 "desc": "Управление выходом из однобокой позиции (одна нога зависла, v8).",

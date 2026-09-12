@@ -13,9 +13,17 @@ from API.KUCOIN.symbol import KucoinSymbols
 from API.OKX.symbol import OkxSymbols
 from API.BITGET.symbol import BitgetSymbols
 
-from utils import UnifiedLogger
+from c_log import log
 
-logger = UnifiedLogger("DISCOVERY")
+class _DiscoveryLogger:
+    """Lightweight wrapper around c_log.log with prefix for discovery module."""
+    def __init__(self, prefix: str):
+        self._prefix = prefix
+    def info(self, msg): log(f"[{self._prefix}] {msg}", level="INFO")
+    def error(self, msg): log(f"[{self._prefix}] {msg}", level="ERROR")
+    def warning(self, msg): log(f"[{self._prefix}] {msg}", level="WARNING")
+
+logger = _DiscoveryLogger("DISCOVERY")
 
 _REVERSE_ALIASES = {"BTC": "XBT"}  # Kucoin specific
 

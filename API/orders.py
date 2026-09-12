@@ -570,9 +570,13 @@ class KucoinOrder:
             
         if position_side:
             body["positionSide"] = position_side.upper()
-            if (side.lower() == "buy" and position_side.upper() == "SHORT") or \
-               (side.lower() == "sell" and position_side.upper() == "LONG"):
-                body["reduceOnly"] = True
+            
+        is_closing = (side.lower() == "buy" and position_side and position_side.upper() == "SHORT") or \
+                     (side.lower() == "sell" and position_side and position_side.upper() == "LONG")
+                     
+        if kwargs.get("reduce_only") or is_closing:
+            body["reduceOnly"] = True
+            body["closeOrder"] = True
         
         body_str = json.dumps(body)
         str_to_sign = now + "POST" + endpoint + body_str
@@ -1081,7 +1085,7 @@ class BitgetOrder:
             'Content-Type': 'application/json'
         }
         
-        print(f"BITGET DEBUG REQUEST: {body_str}")
+        log(f"[BitgetOrder] Order request: {body_str}", level="DEBUG")
         
         url = f"https://api.bitget.com{endpoint}"
         async with self.session.post(url, headers=headers, data=body_str) as resp:

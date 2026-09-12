@@ -83,8 +83,18 @@ class PositionManager:
             else:
                 self.route_state[route]["is_locked"] = False
                 
-    def can_enter(self, long_ex: str, short_ex: str, sym: str) -> bool:
+    def _normalize_route(self, long_ex: str, short_ex: str) -> str:
+        """Returns the canonical route name from route_state, checking both directions."""
         route = f"{long_ex}_{short_ex}"
+        if route in self.route_state:
+            return route
+        rev = f"{short_ex}_{long_ex}"
+        if rev in self.route_state:
+            return rev
+        return route  # fallback to original (will fail downstream checks)
+
+    def can_enter(self, long_ex: str, short_ex: str, sym: str) -> bool:
+        route = self._normalize_route(long_ex, short_ex)
         if route not in self.route_state:
             return False
             
@@ -108,7 +118,7 @@ class PositionManager:
         return True
         
     def lock_for_entry(self, long_ex: str, short_ex: str, sym: str, engine_res: dict):
-        route = f"{long_ex}_{short_ex}"
+        route = self._normalize_route(long_ex, short_ex)
         self.positions[route][sym]["pending_action"] = "OPEN"
         self.positions[route][sym]["details"] = {"engine_res": engine_res}
         
@@ -118,7 +128,7 @@ class PositionManager:
         self._update_locks()
         
     def confirm_entry(self, long_ex: str, short_ex: str, sym: str, exec_res: dict, open_time: float):
-        route = f"{long_ex}_{short_ex}"
+        route = self._normalize_route(long_ex, short_ex)
         state = self.positions[route][sym]
         
         if state["pending_action"] != "OPEN":
@@ -149,7 +159,7 @@ class PositionManager:
         self._save_state()
         
     def rollback_entry(self, long_ex: str, short_ex: str, sym: str):
-        route = f"{long_ex}_{short_ex}"
+        route = self._normalize_route(long_ex, short_ex)
         state = self.positions[route][sym]
         
         if state["pending_action"] == "OPEN":

@@ -30,12 +30,9 @@ class TradingEngine:
         self.obi_levels = int(obi_cfg.get("depth_levels", 5))
         
         self.min_top_depth_usd = float(signal_cfg.get("min_top_depth_usd", 0.0))
+        self.exchange_roles = self.cfg["trading_rules"]["entry"].get("exchange_roles", {})
         hedged_exit = self.cfg["trading_rules"]["exit"]["hedged_exit"]
         self.decay_map = hedged_exit["normal_decay"]
-        self.extreme_decay_map = hedged_exit.get("weak_entry", {}).get("decay", [
-            {"step": 0, "after_sec": 0, "target_spread": 0.0000},
-            {"step": 1, "after_sec": 60, "target_spread": -999.0}
-        ])
         self.trading_risks = self.cfg["trading_risks"]
 
     def _get_vol_discount_entry(self, exchange_name: str) -> float:
@@ -94,7 +91,7 @@ class TradingEngine:
         long_qty = size_usd / long_vwap_ask
         short_qty = size_usd / short_vwap_bid
         
-        vwap_spread = (short_vwap_bid - long_vwap_ask) / long_vwap_ask
+        vwap_spread = (short_vwap_bid - long_vwap_ask) / short_vwap_bid
         
         # Account for own entry commission
         entry_long_fee = self._get_fee(long_ex)
@@ -107,28 +104,27 @@ class TradingEngine:
                 "reason": f"LOW_SPREAD (Net: {net_spread * 100:.3f}% < {self.spread_entry * 100:.3f}%, Gross: {vwap_spread * 100:.3f}%, Fee: {entry_comm * 100:.3f}%)"
             }
             
-        # HEDGE LEG ORDER BOOK IMBALANCE FILTER
+        # ORDERBOOK IMBALANCE FILTER (OBI) - Evaluate on BOTH legs
         if self.check_obi_filter:
-            route_key = f"{long_ex}_{short_ex}"
-            rev_route_key = f"{short_ex}_{long_ex}"
-            role_info = self.exchange_roles.get(route_key) or self.exchange_roles.get(rev_route_key)
-            if role_info:
-                hedge_name = role_info.get("hedge")
-                hedge_book = long_book if long_ex == hedge_name else (short_book if short_ex == hedge_name else None)
-                if hedge_book:
-                    h_bids = hedge_book.get("bids", [])[:self.obi_levels]
-                    h_asks = hedge_book.get("asks", [])[:self.obi_levels]
-                    sum_bids = sum(float(b[1]) for b in h_bids) if h_bids else 0.0
-                    sum_asks = sum(float(a[1]) for a in h_asks) if h_asks else 0.0
-                    total_vol = sum_bids + sum_asks
-                    if total_vol > 0.0:
-                        imbalance = (sum_bids - sum_asks) / total_vol
-                        # If Hedge is Long (buying from asks), bid skew (upward pressure) is unfavorable
-                        if long_ex == hedge_name and imbalance > self.max_adverse_imbalance:
-                            return False, {"reason": f"ADVERSE_OBI_HEDGE_BUY (Imbalance: {imbalance:+.2f} > +{self.max_adverse_imbalance:.2f})"}
-                        # If Hedge is Short (selling to bids), ask skew (downward pressure) is unfavorable
-                        if short_ex == hedge_name and imbalance < -self.max_adverse_imbalance:
-                            return False, {"reason": f"ADVERSE_OBI_HEDGE_SELL (Imbalance: {imbalance:+.2f} < -{self.max_adverse_imbalance:.2f})"}
+            # Check Long Leg OBI (Bad if heavy ask skew -> price likely to drop)
+            l_bids = long_book.get("bids", [])[:self.obi_levels]
+            l_asks = long_book.get("asks", [])[:self.obi_levels]
+            sum_l_bids = sum(float(b[1]) for b in l_bids) if l_bids else 0.0
+            sum_l_asks = sum(float(a[1]) for a in l_asks) if l_asks else 0.0
+            if sum_l_bids + sum_l_asks > 0.0:
+                l_imbalance = (sum_l_bids - sum_l_asks) / (sum_l_bids + sum_l_asks)
+                if l_imbalance < -self.max_adverse_imbalance:
+                    return False, {"reason": f"ADVERSE_OBI_LONG (Ask skew: {l_imbalance:+.2f} < -{self.max_adverse_imbalance:.2f})"}
+
+            # Check Short Leg OBI (Bad if heavy bid skew -> price likely to rise)
+            s_bids = short_book.get("bids", [])[:self.obi_levels]
+            s_asks = short_book.get("asks", [])[:self.obi_levels]
+            sum_s_bids = sum(float(b[1]) for b in s_bids) if s_bids else 0.0
+            sum_s_asks = sum(float(a[1]) for a in s_asks) if s_asks else 0.0
+            if sum_s_bids + sum_s_asks > 0.0:
+                s_imbalance = (sum_s_bids - sum_s_asks) / (sum_s_bids + sum_s_asks)
+                if s_imbalance > self.max_adverse_imbalance:
+                    return False, {"reason": f"ADVERSE_OBI_SHORT (Bid skew: {s_imbalance:+.2f} > +{self.max_adverse_imbalance:.2f})"}
             
         # ROUND-TRIP SYNTHETIC LIQUIDITY CHECK
         # Optional config toggle. Simulates immediate exit from position.
@@ -210,7 +206,7 @@ class TradingEngine:
             if vwap_bid <= 0.0:
                 return False, {"reason": "INSUFFICIENT_HEDGE_LIQUIDITY"}
 
-            gross_spread = (vwap_bid - lead_price) / lead_price
+            gross_spread = (vwap_bid - lead_price) / vwap_bid
             net_spread = gross_spread - total_fees
 
             # Price threshold: cannot sell below this, else net spread drops below target_net_spread
@@ -246,7 +242,7 @@ class TradingEngine:
             if vwap_ask <= 0.0:
                 return False, {"reason": "INSUFFICIENT_HEDGE_LIQUIDITY"}
 
-            gross_spread = (lead_price - vwap_ask) / vwap_ask
+            gross_spread = (lead_price - vwap_ask) / lead_price
             net_spread = gross_spread - total_fees
 
             # Price threshold: cannot buy above this, else net spread drops below target_net_spread
@@ -314,7 +310,7 @@ class TradingEngine:
         
         net_yield = (long_realized_pnl * long_executed_volume_rate) + (short_realized_pnl * short_executed_volume_rate) - total_comm
         
-        vwap_spread_out = (short_vwap_ask - long_vwap_bid) / long_vwap_bid
+        vwap_spread_out = (short_vwap_ask - long_vwap_bid) / short_vwap_ask
         is_exit = net_yield >= target_val
         reason = "TTL_EXPIRED" if is_ttl else "PROFIT_DECAY"
         

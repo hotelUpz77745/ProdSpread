@@ -120,8 +120,9 @@ class Main:
     def _is_funding_skip(self) -> bool:
         if not self.funding_is_active:
             return False
-        current_sec = int(time.time()) % 3600
-        if current_sec <= self.funding_skip_sec or current_sec >= (3600 - self.funding_skip_after_sec):
+        # Funding occurs every 8 hours (00:00, 08:00, 16:00 UTC), not every hour
+        current_sec = int(time.time()) % (8 * 3600)
+        if current_sec <= self.funding_skip_sec or current_sec >= (8 * 3600 - self.funding_skip_after_sec):
             return True
         return False
 
@@ -239,8 +240,8 @@ class Main:
                     asyncio.create_task(self.streams[ex].run(handler))
                     log(f"Started {ex} Public Orderbook WS stream ({len(syms)} symbols)", level="INFO")
 
-        # Initial balance write
-        update_total_balance(self.cfg, is_startup=True)
+        # Balance tracking moved to ExecutorProcess only (avoids file race condition)
+        # update_total_balance(self.cfg, is_startup=True)
 
         # 5. Main calculation loop (Numba JIT: [ask_p, ask_usd, bid_p, bid_usd])
         prices_array = np.full((7, 4), [np.inf, 0.0, 0.0, 0.0], dtype=np.float64)
@@ -268,8 +269,7 @@ class Main:
 
                         long_rate = state["details"].get("long_executed_volume_rate", 1.0)
                         short_rate = state["details"].get("short_executed_volume_rate", 1.0)
-                        use_extreme = state["details"].get("use_extreme_decay", False)
-                        active_decay_map = self.engine.extreme_decay_map if use_extreme else self.engine.decay_map
+                        active_decay_map = self.engine.decay_map
 
                         is_exit, exit_res = self.engine.evaluate_exit(
                             long_book, short_book, long_ex, short_ex,
@@ -437,20 +437,17 @@ class Main:
                                             # Dwell confirmed - reset key
                                             self._signal_first_seen.pop(sig_key, None)
                                             
-                                        roles_cfg = self.cfg["trading_rules"]["entry"]["exchange_roles"].get(route, {})
-                                        hedge_ex_name = roles_cfg.get("hedge", long_ex if short_ex == roles_cfg.get("lead") else short_ex)
-                                        hedge_book_snap = self.books.get(hedge_ex_name, {}).get(sym, {})
-                                        
+                                        # Normalize route to canonical form for PositionManager
+                                        canonical_route = self.pm._normalize_route(long_ex, short_ex)
                                         self.pm.lock_for_entry(long_ex, short_ex, sym, engine_res)
                                         # Send open command to Executor Process
                                         if self.executor_writer:
                                             asyncio.create_task(async_write_msg(self.executor_writer, "CMD_OPEN", {
                                                 "sym": sym,
-                                                "route": route,
+                                                "route": canonical_route,
                                                 "long_ex": long_ex,
                                                 "short_ex": short_ex,
-                                                "engine_res": engine_res,
-                                                "hedge_book": hedge_book_snap
+                                                "engine_res": engine_res
                                             }))
                                         break
                                     else:
