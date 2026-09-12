@@ -252,6 +252,7 @@
             "skip_if_after_while_sec": 300
         },
         "emergency_unwind": {
+            "desc": "Панический аварийный сброс. Бьет ордером MARKET reduce_only. Срабатывает при: 1) Таймауте FSM, 2) Перекосе налива обеих ног (ratio < min_hedge_fill_rate), 3) Включенном immediate_market для single_leg.",
             "max_attempts": 2,
             "max_attempts_desc": "Maximum REST check + close cycles in emergency unwind",
             "retry_pause_sec": 0.05,
