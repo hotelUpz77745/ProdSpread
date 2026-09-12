@@ -67,7 +67,7 @@ class PositionFSM:
         parallel_cfg = entry_cfg["parallel_entry_logic"]
         ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
 
-        self.order_policy = entry_cfg.get("order_execution_type", "PARALLEL_LIMIT_IOC").upper()
+        self.order_policy = entry_cfg["order_execution_type"].upper()
         self.min_fill_rate = float(parallel_cfg["min_hedge_fill_rate"])
 
         # Quarantines from configs (no magic constants)
@@ -91,7 +91,7 @@ class PositionFSM:
         self.fill_confirm_poll_interval = float(parallel_cfg["fill_confirm_poll_interval_sec"])
 
         # Position close confirmation parameters (from exit section with fallback to entry * 2)
-        exit_timeout_cfg = self.cfg["trading_rules"].get("exit", {}).get("close_confirm_timeout_sec")
+        exit_timeout_cfg = self.cfg["trading_rules"]["exit"]["close_confirm_timeout_sec"]
         if exit_timeout_cfg:
             if isinstance(exit_timeout_cfg, dict):
                 pair_key1 = f"{long_ex}_{short_ex}".upper()

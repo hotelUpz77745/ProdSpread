@@ -97,8 +97,8 @@ class ExecutorProcess:
             bitget_passphrase=os.environ.get("BITGET_API_PASSPHRASE", "")
         )
         
-        self.order_execution_type = self.cfg["trading_rules"]["entry"].get("order_execution_type", "PARALLEL_LIMIT_IOC").upper()
-        self.min_fill_rate = float(self.cfg["trading_rules"]["entry"].get("parallel_entry_logic", {}).get("min_hedge_fill_rate", 0.60))
+        self.order_execution_type = self.cfg["trading_rules"]["entry"]["order_execution_type"].upper()
+        self.min_fill_rate = float(self.cfg["trading_rules"]["entry"]["parallel_entry_logic"]["min_hedge_fill_rate"])
         
         self.pm = None
         self.analytics_map = {}
@@ -129,10 +129,10 @@ class ExecutorProcess:
             pass
 
     def ban_coin(self, sym: str, reason: str = "", duration_sec: float = None):
-        ban_cfg = self.cfg.get("trading_rules", {}).get("ban_rules", {})
-        if not ban_cfg.get("is_active", True):
+        ban_cfg = self.cfg["trading_rules"]["ban_rules"]
+        if not ban_cfg["is_active"]:
             return
-        ban_q = ban_cfg.get("quarantine_sec", {})
+        ban_q = ban_cfg["quarantine_sec"]
         if "Spread Collapsed" in reason:
             count = self.a1_collapse_counts.get(sym, 0) + 1
             self.a1_collapse_counts[sym] = count
