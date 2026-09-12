@@ -129,7 +129,10 @@ class ExecutorProcess:
             pass
 
     def ban_coin(self, sym: str, reason: str = "", duration_sec: float = None):
-        ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
+        ban_cfg = self.cfg.get("trading_rules", {}).get("ban_rules", {})
+        if not ban_cfg.get("is_active", True):
+            return
+        ban_q = ban_cfg.get("quarantine_sec", {})
         if "Spread Collapsed" in reason:
             count = self.a1_collapse_counts.get(sym, 0) + 1
             self.a1_collapse_counts[sym] = count

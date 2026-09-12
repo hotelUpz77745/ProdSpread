@@ -400,10 +400,12 @@ class Main:
                                     continue
                                 long_ex, short_ex = IDX_TO_EX[long_idx], IDX_TO_EX[short_idx]
                                 
-                                if sym not in self.ts[long_ex] or sym not in self.ts[short_ex]:
+                                long_ts = self.ts[long_ex].get(sym, 0.0)
+                                short_ts = self.ts[short_ex].get(sym, 0.0)
+                                if long_ts <= 0.0 or short_ts <= 0.0:
                                     continue
                                 
-                                diff_ms = abs(self.ts[long_ex][sym] - self.ts[short_ex][sym]) * 1000.0
+                                diff_ms = abs(long_ts - short_ts) * 1000.0
                                 limit = self._get_desync_limit(self.entry_desync_limit, long_ex, short_ex)
                                 if limit is not None and diff_ms > limit:
                                     continue
