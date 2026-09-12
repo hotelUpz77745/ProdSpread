@@ -67,7 +67,7 @@ class PositionFSM:
         parallel_cfg = entry_cfg["parallel_entry_logic"]
         ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
 
-        self.order_policy = entry_cfg["order_execution_type"].upper()
+        self.order_policy = entry_cfg.get("order_execution_type", "PARALLEL_LIMIT_IOC").upper()
         self.min_fill_rate = float(parallel_cfg["min_hedge_fill_rate"])
 
         # Quarantines from configs (no magic constants)
@@ -180,7 +180,7 @@ class PositionFSM:
             s_ok = (s_rate >= self.min_fill_rate) if req_short_qty > 0 else True
 
             if l_ok and s_ok:
-                leg_desc = "Both legs" if (req_long_qty > 0 and req_short_qty > 0) else ("Lead" if self.state == PositionState.VERIFYING_FILL else "Hedge")
+                leg_desc = "Both legs" if (req_long_qty > 0 and req_short_qty > 0) else "Single leg"
                 log(f"[{self.sym}] {leg_desc} confirmed reactively in {elapsed_now_ms:.2f} ms (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
                 break
 
@@ -338,9 +338,9 @@ class PositionFSM:
         price_long_calc = self.engine_res.get("long_avg_price", 0.0)
         price_short_calc = self.engine_res.get("short_avg_price", 0.0)
         
-        # Use slippage limits from config
-        long_slip = float(parallel_cfg.get("long_slip_ratio", 0.0015))
-        short_slip = float(parallel_cfg.get("short_slip_ratio", 0.0015))
+        # Use slippage limits from trading_risks per exchange
+        long_slip = float(self.cfg["trading_risks"][self.long_ex.lower()]["limit_slip_ratio"])
+        short_slip = float(self.cfg["trading_risks"][self.short_ex.lower()]["limit_slip_ratio"])
         
         price_long_limit = price_long_calc * (1 + long_slip)
         price_short_limit = price_short_calc * (1 - short_slip)
@@ -409,7 +409,7 @@ class PositionFSM:
             
         # Check partial vs full hedge
         # If both are somewhat filled, check if they are balanced enough
-        min_hedge_rate = float(parallel_cfg.get("min_hedge_fill_rate", 0.75))
+        min_hedge_rate = self.min_fill_rate
         
         if l_qty > 0 and s_qty > 0:
             l_notional = l_qty * l_price
@@ -467,7 +467,9 @@ class PositionFSM:
                 await self._emergency_unwind_single(self.long_ex, self.native_long, l_qty, l_price, "BUY", "LONG")
             if s_qty > 0:
                 await self._emergency_unwind_single(self.short_ex, self.native_short, s_qty, s_price, "SELL", "SHORT")
+            self.ban_coin_cb(self.sym, reason="Imbalanced Fill Both Legs Unwound", duration_sec=self.q_single_leg)
             self._set_state(PositionState.ABORTED)
+            self._notify_pos_failed("IMBALANCED_FILL_UNWOUND")
             return
             
         sle_cfg = self.cfg["trading_rules"]["exit"]["single_leg_exit"]
@@ -491,7 +493,7 @@ class PositionFSM:
             if price_slip <= -900.0:
                 # Market fallback
                 log(f"[{self.sym}] Single Leg Fallback: MARKET exit ({open_ex}).", level="WARNING")
-                await self._emergency_unwind_single(open_ex, native_sym, qty_rem, entry_price, "BUY" if close_side=="SELL" else "SELL", pos_side)
+                await self._emergency_unwind_single(open_ex, native_sym, qty_rem, entry_price, "BUY" if pos_side == "LONG" else "SELL", pos_side)
                 break
                 
             # Try limit order
@@ -537,10 +539,10 @@ class PositionFSM:
         self._set_state(PositionState.ABORTED)
         self._notify_pos_failed("SINGLE_LEG_EXPOSURE")
 
-    async def _emergency_unwind_single(self, ex: str, native_sym: str, qty: float, price: float, side: str, pos_side: str):
+    async def _emergency_unwind_single(self, ex: str, native_sym: str, qty: float, price: float, open_side: str, pos_side: str):
         self._set_state(PositionState.EMERGENCY_UNWIND)
         usd = qty * price
-        reduce_side = "SELL" if side == "BUY" else "BUY"
+        reduce_side = "SELL" if open_side == "BUY" else "BUY"
         log(f"[{self.sym}] Immediate unwind {ex} ({qty} qty, {usd:.2f}$)...", level="WARNING")
         try:
             await self.orders[ex].place_order(native_sym, reduce_side, usd, price, order_type="MARKET", position_side=pos_side, reduce_only=True)
@@ -576,7 +578,7 @@ class PositionFSM:
         entry_fee_s = float(self.cfg["trading_risks"][self.short_ex.lower()]["taker_fee"])
         entry_comm = entry_fee_l + entry_fee_s
         
-        actual_gross_spread = (p_short - p_long) / p_long if p_long > 0 else 0.0
+        actual_gross_spread = (p_short - p_long) / p_short if p_short > 0 else 0.0
         actual_net_spread = actual_gross_spread - entry_comm
         
         # Calculate actual volume rates from fill vs requested quantities
@@ -828,7 +830,7 @@ class PositionFSM:
             return True
 
         # 3. Fallback: Control query and remnant cleanup via REST (if WS timed out)
-        for attempt in range(3):
+        for attempt in range(self.unwind_max_attempts):
             await asyncio.sleep(self.unwind_retry_pause)
             l_check = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0}
             s_check = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT") if self.short_ex in self.orders else {"size": 0.0}
@@ -875,8 +877,8 @@ class PositionFSM:
                     ))
                 return True
                 
-            if attempt == 2:
-                log(f"[{self.sym}] CRITICAL ERROR: Failed to close position (run_close) after 3 attempts! Remainder L:{l_rem} S:{s_rem}. Re-queuing close!", level="ERROR")
+            if attempt == self.unwind_max_attempts - 1:
+                log(f"[{self.sym}] CRITICAL ERROR: Failed to close position (run_close) after {self.unwind_max_attempts} attempts! Remainder L:{l_rem} S:{s_rem}. Re-queuing close!", level="ERROR")
                 self._set_state(PositionState.CLOSING)
                 self._notify_pos_exit_failed()
                 return False

@@ -3,11 +3,11 @@
 > [!NOTE]
 > **СТАТУС ТЕКУЩЕЙ АРХИТЕКТУРЫ: PARALLEL_LIMIT_IOC (v8.0)**
 > В версии **v8.0** система использует параллельный симметричный протокол исполнения `LIMIT_IOC` со следующими рубежами защиты капитала:
-> - **Пре-фильтр OBI (Order Book Imbalance):** Оценка дисбаланса топ-уровней стакана на обеих биржах до выстрела (Long-аски, Short-биды). Отсекает вход при давлении против входа. Отключаем по умолчанию как избыточный для жесткого LIMIT_IOC.
+> - **Пре-фильтр OBI (Order Book Imbalance):** Оценка дисбаланса топ-уровней стакана на обеих биржах до выстрела (Long-аски, Short-биды). Отсекает вход при давлении против входа. По умолчанию отключен (`enabled: false`) как избыточный для жесткого LIMIT_IOC.
 > - **Синтетический выход (Synthetic Exit):** Симуляция немедленного закрытия по встречным стаканам. Блокирует спред, если внутренний bid-ask съедает >50% прибыли (защита от фантомных спредов).
-> - **Параллельный вход (Parallel Entry):** Лимитный прострел обеих бирж (LIMIT_IOC) с независимым контролем дальности заброса (`limit_slip_ratio` из `trading_risks`).
+> - **Параллельный вход (Parallel Entry):** Лимитный прострел обеих бирж (LIMIT_IOC) с независимым контролем дальности заброса (`limit_slip_ratio` из `trading_risks` для каждой биржи).
 > - **Валидация налива (Fill Validation):** Оценка соотношения налитых объемов `min_hedge_fill_rate` (>= 60%). Если достигнуто — переход в `ACTIVE_HEDGED`. Если нет — `SINGLE_LEG_EXPOSURE`. При нулевом наливе обеих ног — карантин `10s`.
-> - **Выход Hedged (Hedged Exit):** Обычный выход по карте `normal_decay`. Спреды рассчитываются строго относительно цены Short-ноги (Bid) для 100% совпадения с `PapperSpread`.
+> - **Выход Hedged (Hedged Exit):** Обычный выход по карте `normal_decay`. Спреды рассчитываются строго относительно цены Short-ноги (Bid) для 100% математического совпадения с `PapperSpread`.
 > - **Выход Single Leg (Single Leg Exit):** Попытка дозакрыть зависшую ногу лимитками (чейзинг стакана) по карте `chase_map`, либо мгновенный сброс маркетом (если `immediate_market: true` или частичный дисбалансный налив обеих ног).
 
 ---
@@ -23,13 +23,11 @@
 │  • Public WS Streams (Binance, KuCoin, Bitget, OKX)    │
 │  • Numba JIT Orderbook Scan (pre_calculate_orderbook)   │
 │  • VWAP & Spread Analysis (trading_engine.py)          │
-│  • Order Book Imbalance (OBI) Filter (Hedge Book)      │
-│  • Tightened Synthetic Slippage (ratio: 0.35, max: 0.8%)│
+│  • Synthetic Reverse Liquidity Check (ratio: 0.50)     │
 │  • Signal Dwell Time Filter (min_signal_dwell_ms)      │
 │  • Global Symbol & Exchange Locks (position_manager)   │
 │  • Profit Decay Monitoring:                            │
-│      - relative_profit_decay_map (60с TTL, 30с 0.00)   │
-│      - extreme_profit_decay_map (20с TTL сжатая)       │
+│      - normal_decay (60с TTL, 30с 0.00)                │
 └─────────────────────────┬──────────────────────────────┘
                           │ Local Async TCP Socket (IPC)
                           │ [CMD_OPEN, CMD_CLOSE, INIT_TOPOLOGY]
@@ -39,7 +37,7 @@
 │               (CORE/executor_process.py)               │
 │  • Pre-warmed Persistent TCP/TLS REST Sessions         │
 │    (Keepalive Loop каждые 45с с фейк-ордерами warmup)  │
-│  • Position FSM (Reactive Finite State Machine v7.1)   │
+│  • Position FSM (Reactive Finite State Machine v8.0)   │
 │  • Reactive Event Bus (asyncio.Event per symbol/side)  │
 │    [Zero OS Timer Sleep Jitter: FSM wakeup < 0.1 ms]   │
 │  • Real-Time Private WS Position Streams (KuCoin,      │
@@ -49,9 +47,10 @@
 │      - SELL: ROUND_CEILING (не продавать ниже)         │
 │      - QTY: ROUND_FLOOR + Epsilon 1e-8 (нет остатка)   │
 │  • Exact Nominal Dispatch (exact_qty)                  │
-│  • Phase 2 Soft Floor Check (min_acceptable_net_spread)│
-│  • 1-Shot HFT Market Kill-Switch (emergency unwind)    │
-│  • Controlled Trim (trim_excess_lead: MARKET reduce)   │
+│  • Parallel LIMIT_IOC Shot (slippage from risks)       │
+│  • Fill Confirmation via WS (timeout 0.6s)             │
+│  • Single Leg Book Chasing (chase_map LIMIT_IOC)       │
+│  • Emergency Unwind (MARKET reduce_only)               │
 │  • Instant 0ms PnL Calculation (analytics.py)          │
 │  • Automated Margin & Leverage Setup (leverage_setter) │
 └────────────────────────────────────────────────────────┘
@@ -67,46 +66,46 @@
 - **Микросекундный пре-фильтр (`CORE/math_core.py`):** Каждую итерацию без задержки обновляет 4-колоночную матрицу цен и объемов `prices_array` (`[ask_p, ask_usd, bid_p, bid_usd]`) и прогоняет ее через `pre_calculate_orderbook` (`Numba @njit`), мгновенно отсекая тонкие уровни (`min_top_depth_usd: 200.0`) и сортируя связки по величине спреда без аллокаций памяти Python.
 - **Оценка входа (`CORE/trading_engine.py`):** 
   - Рассчитывает взвешенные VWAP-цены входа с дисконтом глубины (`volatility_discount_entry: 0.40`), вычитает суммарные комиссии обеих бирж.
-  - **Фильтр давления стакана (OBI):** Рассчитывает $\text{Imbalance} = (\sum \text{Bids}_{1..5} - \sum \text{Asks}_{1..5}) / (\sum \text{Bids}_{1..5} + \sum \text{Asks}_{1..5})$ стакана Hedge-биржи. Если при покупке на хедже стакан забит бидами ($> +0.45$), или при продаже забит асками ($< -0.45$), сигнал бракуется до выстрела.
-  - **Ужесточенное синтетическое проскальзывание:** `max_slippage_ratio = 0.35`, `hard_max_slippage = 0.008` (0.8%).
-- **Signal Dwell Time (Выдержка сигнала):** Опциональный фильтр устойчивости сигнала (`min_signal_dwell_ms`, 0 — выстрел на 1-м тике).
+  - Базис спреда рассчитывается относительно цены Short-ноги: `(short_vwap_bid - long_vwap_ask) / short_vwap_bid`.
+  - **Синтетический выход (Synthetic Exit):** Симуляция немедленного закрытия встречными стаканами (`max_slippage_ratio = 0.50`, `hard_max_slippage = 0.008`).
+  - **Фильтр давления стакана (OBI):** Рассчитывает дисбаланс топ-5 уровней стакана для обеих ног. Опционален, по умолчанию отключен.
+- **Signal Dwell Time (Выдержка сигнала):** Фильтр устойчивости сигнала (`min_signal_dwell_ms`, 0 — мгновенный выстрел на первом тике).
 - **Мониторинг позиций и деградация профита:** 
-  - На каждом тике рассчитывает суммарный арбитражный PnL связки (`net_yield`) по реальным бидам/аскам стаканов с учетом объемов и 4 комиссий (вход + выход обеих ног).
-  - Поддерживает две карты деградации: `relative_profit_decay_map` (основная 60с) и `extreme_profit_decay_map` (аварийная 20с сжатая).
+  - На каждом тике рассчитывает суммарный арбитражный PnL связки (`net_yield`) по реальным бидам/аскам стаканов с учетом объемов и комиссий (вход + выход обеих ног).
+  - Сетка выхода `normal_decay`: 0с — 80% от спреда входа, 15с — 50%, 30с — безубыток (0.0%), 45с — -20%, 60с — аварийный Hard TTL сброс (-999.0).
 
 ### 2. Execution & FSM Engine (`CORE/executor_process.py` + `CORE/position_fsm.py`)
 - **Реактивная шина событий (Reactive Event Bus):**
-  - Во всех приватных сокетах (`API/BINANCE/ws_private_binance.py`, `API/KUCOIN/ws_private_kucoin.py`, `API/BITGET/ws_private_bitget.py`) внедрены реестры `_update_events[(symbol, side)] = asyncio.Event()`.
+  - В приватных сокетах (`BinancePositionStream`, `KucoinPositionStream`, `BitgetPositionStream`) внедрены реестры `_update_events[(symbol, side)] = asyncio.Event()`.
   - При получении пуша сокет мгновенно дергает `_notify(symbol, side)`, пробуждая ожидающие корутины за $< 0.1$ мс без джиттера таймеров OS.
 - **Безопасное квантование цен и объемов (`API/orders.py`):**
-  - `BUY` $\to$ `ROUND_FLOOR` (гарантирует, что цена покупки лимитки хеджа никогда не превысит допустимый потолок спреда `limit_ceiling`).
-  - `SELL` $\to$ `ROUND_CEILING` (гарантирует, что цена продажи лимитки хеджа никогда не опустится ниже расчетного пола `limit_floor`).
-  - `QTY` $\to$ `ROUND_FLOOR` с защитой эпсилона `1e-8` (устраняет дельту от усечения `99.99999999999999`).
+  - `BUY` $\to$ `ROUND_FLOOR` (гарантирует, что цена покупки лимитки никогда не превысит допустимый предел).
+  - `SELL` $\to$ `ROUND_CEILING` (гарантирует, что цена продажи лимитки никогда не опустится ниже расчетного пола).
+  - `QTY` $\to$ `ROUND_FLOOR` с защитой эпсилона `1e-8` (устраняет дельту от усечения).
   - Поддержка точного номинала `exact_qty` во всех ордерах.
-- **Фаза 2: Soft Floor & Min Notional:**
-  - Проверка `min_notional_usd >= 6.0$` (гарантирует запас над лимитом Binance $5$).
-  - Оценка жизнеспособности спреда через `evaluate_hedge_entry` с порогом `min_acceptable_net_spread = 0.0010` (+10 bps суммарного чистого спреда). Если спред ниже +10 bps $\to$ Ветка А1 (сброс ноги, 1 час карантина).
-- **Фаза 3: Дожим Hedge Leg:**
-  - Карта `decay_map`: iter 0 (`0.60`, уступка 40% спреда, 50мс), iter 1 (`0.30`, уступка 70%, 150мс), iter 2 (`0.00`, дожим по минимальному порогу спреда, 300мс).
-  - Процент налива хеджа `min_hedge_fill_rate = 0.75` измеряется **строго относительно фактически налитого объема Lead-ноги** (`lead_qty_actual`).
-- **Фаза 4: Управляемая подрезка (`trim_excess_lead`):**
-  - При частичном наливе хеджа ($\ge 75\%$) излишек Lead-ноги аккуратно срезается MARKET-ордером `reduce_only` с точным номиналом `exact_qty=delta_qty`.
-- **Экстремальный выход (Сжатый 20с Hard TTL):**
-  - При факте входа $\le \text{min\_spread\_entry}$ ($0.0015$) активируется `extreme_profit_decay_map`: 0с — безубыток, 10с — уступка -0.05%, 20с — безусловный сброс по рынку (`target_val = -999.0`, `TTL_EXPIRED`).
+- **Параллельный вход (Parallel Entry):**
+  - Одновременная отправка двух `LIMIT_IOC` ордеров (Long и Short) через `asyncio.gather`.
+  - Предельные цены рассчитываются с индивидуальным проскальзыванием `limit_slip_ratio` из `trading_risks` для каждой биржи.
+- **Валидация налива и балансировка:**
+  - Ожидание подтверждения налива по WS до `fill_confirm_timeout_sec` (0.6 с).
+  - При нулевом наливе обеих ног $\to$ Ветка Zero Fill (карантин `10с`).
+  - При балансе налива `min(notional) / max(notional) >= min_hedge_fill_rate` (0.60) $\to$ `ACTIVE_HEDGED`.
+  - При исполнении только одной ноги $\to$ `SINGLE_LEG_EXPOSURE` (чейзинг стакана).
+  - При частичном дисбалансном наливе обеих ног (`< 0.60`) $\to$ экстренный сброс обеих ног по рынку (`IMBALANCED_FILL_UNWOUND`, карантин 1800с).
 
 ### 3. Менеджер позиций (`CORE/position_manager.py`)
 - **Инвариант биржи (`max_positions`):** Число активных и ожидающих (`pending`) позиций по каждой бирже строго ограничено конфигом (по умолчанию 1).
 - **Инвариант символа:** Одна и та же монета не может одновременно торговаться более чем на одной связке.
-- **Сохранение флагов состояния:** Сохраняет `use_extreme_decay`, `actual_gross_spread` и `actual_net_spread` в `active_positions.json`.
+- **Сохранение флагов состояния:** Сохраняет `actual_gross_spread` и `actual_net_spread` в `active_positions.json`.
 
 ### 4. Аналитика и клиринг PnL (`analytics.py`)
 - Фиксация реальных цен исполнения обеих ног (`entry_long_price`, `entry_short_price`, `close_long_price`, `close_short_price`).
 - Учет полного цикла комиссий (Round-Trip Taker Fees: вход + выход по обеим ногам).
-- Синхронная запись сделок в `total_balance.json` and `active_positions.json`.
+- Синхронная запись сделок в `total_balance.json` и `active_positions.json`.
 
 ---
 
-## 🔄 Жизненный цикл сделки v7.1 (Asymmetric LIMIT_IOC)
+## 🔄 Жизненный цикл сделки v8.0 (Parallel LIMIT_IOC)
 
 ```
 [Стаканы L2 WS] ──> [pre_calculate_orderbook (Numba JIT)]
@@ -114,8 +113,8 @@
                                ▼
                     [trading_engine.evaluate_entry]
                                ├── Расчет VWAP с дисконтом волатильности 0.40
-                               ├── Проверка OBI стакана Hedge-биржи (|Imbalance| <= 0.45)
-                               └── Ужесточенная синтетическая ликвидность (slip <= 0.35*net, hard <= 0.8%)
+                               ├── Синтетический выход (slip <= 0.50*net, hard <= 0.8%)
+                               └── Базис спреда: (Short_Bid - Long_Ask) / Short_Bid
                                ▼
                     [Signal Dwell Time Filter] (0 - мгновенный выстрел)
                                ▼
@@ -125,38 +124,42 @@
                                │
                                ▼
                     [PositionFSM: run_open()]
-                     ├── Фаза 1: Выстрел в Lead Leg (Слабая нога: Bitget/KuCoin)
-                     │     └─ LIMIT_IOC с slippage 0.05%. Если налив 0 -> Карантин 300с (Ветка Б)
+                     ├── Фаза 1: Одновременный выстрел (PARALLEL LIMIT_IOC)
+                     │     ├── Long Leg: BUY LIMIT_IOC (slip из trading_risks)
+                     │     └── Short Leg: SELL LIMIT_IOC (slip из trading_risks)
                      │
-                     ├── Фаза 2: Валидация Lead Leg & Soft Floor
-                     │     ├── Проверка minNotional >= 6.0$
-                     │     ├── Проверка evaluate_hedge_entry (порог min_acceptable_net_spread >= 0.10%)
-                     │     └── Если спред < 0.10% -> 1-Shot Market Kill-Switch (Ветка А1, бан 3600с)
+                     ├── Фаза 2: Реактивное ожидание налива по WS (до 600 мс)
+                     │     ├── l_qty == 0 и s_qty == 0: ZERO_FILL -> Карантин 10с
+                     │     ├── Налив обеих ног с ratio >= 60%: ACTIVE_HEDGED
+                     │     ├── Налита только одна нога: SINGLE_LEG_EXPOSURE
+                     │     └── Частичный перекос обеих ног (ratio < 60%):
+                     │           Аварийный сброс обеих ног маркетом (IMBALANCED_FILL_UNWOUND)
                      │
-                     ├── Фаза 3: Дожим сильной ноги (Hedge Leg: Binance)
-                     │     ├── 3 итерации decay_map: 0.60 (50мс) -> 0.30 (150мс) -> 0.00 (300мс)
-                     │     ├── Точный номинал exact_qty (без float-искажений)
-                     │     ├── Безопасное квантование: ROUND_FLOOR на BUY, ROUND_CEILING на SELL
-                     │     └── Расчет налива строго от Lead Leg (hedge_actual / lead_actual >= 75%)
-                     │
-                     ├── Фаза 4: Выравнивание дельты
-                     │     ├── Если налив >= 75% и trim_excess_lead=true: MARKET reduce_only подрезка излишка Lead
-                     │     └── Если налив < 75%: Полный аварийный развал обеих ног
-                     │
-                     └── Успешный вход -> Расчет actual_net_spread -> POS_OPENED
+                     └── При переходе в SINGLE_LEG_EXPOSURE:
+                           ├── Если immediate_market: true -> мгновенный сброс маркетом
+                           └── Если immediate_market: false -> Чейзинг стакана (chase_map):
+                                 0с -> лимитка по рынку (0.00%)
+                                 15с -> лимитка с уступкой (-0.05%)
+                                 30с -> лимитка с уступкой (-0.10%)
+                                 45с -> сброс остатка по MARKET
                                │
                                ▼
-                    [main.py: мониторинг выхода]
-                               ├── Нормальный вход: relative_profit_decay_map (30с 0.00, 60с TTL)
-                               └── Слабый вход (<= 0.15%): extreme_profit_decay_map (10с -0.05%, 20с TTL)
+                    [main.py: мониторинг выхода (ACTIVE_HEDGED)]
+                               ├── Расчет net_yield по реальным стаканам выхода
+                               └── Карта normal_decay:
+                                     0с -> 80% профита
+                                     15с -> 50% профита
+                                     30с -> 0.0% (безубыток)
+                                     45с -> -20%
+                                     60с -> TTL_EXPIRED (-999.0)
                                ▼
                     [main.py шлет CMD_CLOSE через IPC]
                                │
                                ▼
                     [PositionFSM: run_close()]
-                     ├── Параллельная отправка LIMIT_IOC ордеров закрытия (прогретый REST)
+                     ├── Параллельная отправка LIMIT_IOC ордеров закрытия
                      ├── Реактивное подтверждение по WS (_wait_for_close_confirmation)
-                     ├── Аварийный сброс по рынку остатков при недоливе
+                     ├── При недоливе: аварийная зачистка остатков (до unwind_max_attempts)
                      ├── Мгновенный расчет PnL и Round-Trip комиссий
                      └── Шлет POS_CLOSED -> confirm_exit -> разблокировка биржи
 ```
@@ -167,32 +170,30 @@
 
 | Блок / Фаза | Параметр | Значение | Описание |
 | :--- | :--- | :--- | :--- |
-| **Режим входа** | `order_execution_type` | `"ASYMMETRIC_LIMIT_IOC"` | Асимметричный последовательный выстрел (Слабая нога $\to$ Валидация $\to$ Хедж $\to$ Подрезка) |
+| **Режим входа** | `order_execution_type` | `"PARALLEL_LIMIT_IOC"` | Параллельный синхронный выстрел в обе ноги |
 | **Сигнальные фильтры** | `spread_entry` | `0.008` (0.80%) | Минимальный требуемый чистый спред входа после вычета комиссий |
-| | `min_spread_entry` | `0.0015` (0.15%) | Порог активации экстремальной карты деградации при слабом фактическом входе |
-| | `check_obi_filter` | `true` | Фильтр давления стакана Binance перед выстрелом в Lead |
-| | `max_adverse_imbalance` | `0.45` | Предел перекоса стакана Binance ($> 0.45$ против стороны хеджа $\to$ отмена) |
-| | `obi_levels` | `5` | Глубина анализа стакана для OBI (топ-5 уровней) |
-| | `max_slippage_ratio` | `0.35` (35%) | Предельная доля спреда на синтетический выход (ужесточено) |
-| | `hard_max_slippage` | `0.008` (0.8%) | Жесткий потолок синтетического проскальзывания (ужесточено) |
-| | `min_top_depth_usd` | `$200.0` | Фильтр глубины: минимальный объем (USD) на первом квалифицированном уровне стакана |
-| | `max_desync_ms` | `BN_KU: 125, BN_BG: 200` (мс) | Допустимый рассинхрон получения стаканов между биржами |
+| | `min_top_depth_usd` | `$200.0` | Минимальный объем (USD) на первом квалифицированном уровне стакана |
 | | `min_signal_dwell_ms` | `0` (мс) | Выдержка сигнала перед входом (0 — выстрел на первом тике) |
-| **Роли связок** | `exchange_roles` | `{"lead": "...", "hedge": "BINANCE"}` | Маршрутизация ролей: Lead = неликвидная биржа, Hedge = ликвидный гигант (Binance) |
-| **Фаза 1: Lead Leg** | `phase1_lead_leg.max_slippage_pct` | `0.0005` (0.05%) | Запас цены для одиночного LIMIT_IOC выстрела от лучшего аска/бида |
-| | `phase1_lead_leg.fill_confirm_timeout_sec` | `0.600` (600 мс) | Таймаут ожидания налива слабой ноги по WS-событию / кэшу |
-| | `phase1_lead_leg.quarantine_zero_fill_sec` | `300` (5 мин) | Карантин монеты при нулевом наливе Lead Leg (Ветка Б) |
-| **Фаза 2: Валидация** | `phase2_lead_validation.min_notional_usd`| `$6.0` | Порог minNotional налитого объема Lead (гарантия запаса над лимитом Binance $5) |
-| | `phase2_lead_validation.min_acceptable_net_spread` | `0.0010` (0.10%) | Порог жизнеспособности спреда (Soft Floor). Если $< 0.10\% \to$ Ветка А1 |
-| | `phase2_lead_validation.max_model_drift_ratio` | `0.80` (80%) | Предел дрейфа расчетной цены (уход > 80% от спреда $\to$ откат ноги, Ветка А1) |
-| | `phase2_lead_validation.quarantine_a1_step1_sec`| `3600` (1 час) | Карантин монеты при сбросе по Ветке А1 (фикса 1 час) |
-| **Фаза 3: Hedge Leg** | `phase3_hedge_leg.decay_map` | `3 итерации (0.60 / 0.30 / 0.00)` | Адаптивный дожим хеджа: уступка 40% (50мс) $\to$ 70% (150мс) $\to$ порог (300мс) |
-| | `phase3_hedge_leg.min_hedge_fill_rate` | `0.75` (75%) | Минимальный процент налива хеджа **относительно фактически налитого объема Lead-ноги** |
-| | `phase3_hedge_leg.quarantine_hedge_failed_sec` | `1800` (30 мин) | Карантин связки при сбое хеджирования (< 75% налива) |
-| **Фаза 4: Резолюция** | `phase4_resolution.trim_excess_lead` | `true` | Подрезка излишка Lead Leg ордером MARKET reduce_only при частичном наливе |
-| **Фаза 5: Выход** | `relative_profit_decay_map` | `60 сек (0.80 -> 0.00 -> TTL)` | Сетка выхода: 30с безубыток, 45с -20%, 60с аварийный Hard TTL сброс (-999.0) |
-| | `extreme_profit_decay_map` | `20 сек (0.00 -> -0.05% -> TTL)` | Сжатая аварийная сетка выхода при слабом входе: 0с безубыток, 10с -0.05%, 20с TTL (-999.0) |
-| | `close_confirm_timeout_sec` | `1.800` (1.8 с) | Таймаут подтверждения закрытия позиции |
+| | `top_n_candidates` | `4` | Количество лучших связок-кандидатов из `pre_calculate_orderbook` |
+| | `max_desync_ms` | `BN_KU: 125, BN_BG: 200` (мс) | Допустимый рассинхрон получения стаканов между биржами |
+| | `orderbook_imbalance.enabled` | `false` | Фильтр дисбаланса OBI (отключен как избыточный для LIMIT_IOC) |
+| | `synthetic_exit.enabled` | `true` | Симуляция немедленного обратного закрытия |
+| | `synthetic_exit.max_slippage_ratio` | `0.50` (50%) | Предельная доля спреда, съедаемая обратным стаканом |
+| | `synthetic_exit.hard_max_slippage` | `0.008` (0.80%) | Жесткий потолок обратного проскальзывания |
+| **Параллельный вход** | `trading_risks.<ex>.limit_slip_ratio` | `0.0015` (0.15%) | Индивидуальная дальность заброса LIMIT_IOC ордера для каждой биржи |
+| | `min_hedge_fill_rate` | `0.60` (60%) | Минимальный баланс налива ног для признания позиции хеджированной |
+| | `fill_confirm_timeout_sec` | `0.6` (600 мс) | Таймаут ожидания подтверждения налива по WS |
+| | `fill_confirm_poll_interval_sec` | `0.0` | Интервал опроса WS-кэша (0.0 = чистый Event-driven) |
+| **Выход из хеджа** | `normal_decay` | `60 сек` | Сетка деградации: 0с: 80%, 15с: 50%, 30с: 0%, 45с: -20%, 60с: TTL |
+| | `close_confirm_timeout_sec` | `1.2` (с) | Таймаут реактивного подтверждения закрытия позиции |
+| **Выход Single Leg** | `single_leg_exit.immediate_market` | `false` | Использовать ли чейзинг лимитками перед сбросом по рынку |
+| | `single_leg_exit.chase_map` | `4 шага (до 45с)` | Чейзинг: 0с: 0.0%, 15с: -0.05%, 30с: -0.10%, 45с: MARKET (-999.0) |
+| **Аварийный сброс** | `emergency_unwind.max_attempts` | `2` | Число повторных попыток очистки остатков позиции |
+| | `emergency_unwind.retry_pause_sec` | `0.05` (50 мс) | Пауза между попытками очистки остатков |
+| **Карантины** | `zero_fill` | `10` (сек) | Карантин при нулевом наливе обеих ног |
+| | `single_leg_exposure` | `1800` (30 мин) | Карантин при зависании одной ноги / перекосе налива |
+| | `entry_error` | `3600` (1 час) | Карантин при сетевой ошибке отправки ордера |
+| | `loss_trade` | `3600` (1 час) | Карантин при закрытии сделки с убытком |
 | **Инварианты рисков** | `max_positions` | `1` | Максимум 1 активная позиция на биржу |
 
 ---

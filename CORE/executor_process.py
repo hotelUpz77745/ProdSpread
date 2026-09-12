@@ -97,8 +97,8 @@ class ExecutorProcess:
             bitget_passphrase=os.environ.get("BITGET_API_PASSPHRASE", "")
         )
         
-        self.order_execution_type = self.cfg["trading_rules"]["entry"].get("order_execution_type", "ASYMMETRIC_LIMIT_IOC").upper()
-        self.min_fill_rate = float(self.cfg["trading_rules"]["entry"].get("phase3_hedge_leg", {}).get("min_hedge_fill_rate", self.cfg["trading_rules"]["entry"].get("min_fill_rate", 0.75)))
+        self.order_execution_type = self.cfg["trading_rules"]["entry"].get("order_execution_type", "PARALLEL_LIMIT_IOC").upper()
+        self.min_fill_rate = float(self.cfg["trading_rules"]["entry"].get("parallel_entry_logic", {}).get("min_hedge_fill_rate", 0.60))
         
         self.pm = None
         self.analytics_map = {}

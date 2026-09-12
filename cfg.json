@@ -96,7 +96,7 @@
     },
     "trading_rules": {
         "entry": {
-            "order_execution_type": "ASYMMETRIC_LIMIT_IOC",
+            "order_execution_type": "PARALLEL_LIMIT_IOC",
             "signal_filters": {
                 "spread_entry": 0.008,
                 "min_top_depth_usd": 200.0,
