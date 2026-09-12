@@ -139,7 +139,7 @@ class Main:
                 return float(limit_cfg[r1])
             if r2 in limit_cfg:
                 return float(limit_cfg[r2])
-            return float(limit_cfg.get("default", 200.0))
+            raise KeyError(f"Neither '{r1}' nor '{r2}' found in max_desync_ms config")
         elif limit_cfg is not None:
             return float(limit_cfg)
         return None

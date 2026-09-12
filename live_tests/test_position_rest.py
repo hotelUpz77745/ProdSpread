@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_position_rest.py
+# ROLE: REST position polling and consistency tests.
+# ============================================================
 import asyncio
 import os
 import sys

@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/emergency_close.py
+# ROLE: Diagnostic script to immediately emergency close exposed positions.
+# ============================================================
 import asyncio
 import os
 import time

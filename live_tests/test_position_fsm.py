@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_position_fsm.py
+# ROLE: State transition and timeout tests for PositionFSM.
+# ============================================================
 import unittest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch

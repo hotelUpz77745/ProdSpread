@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_bitget_positions.py
+# ROLE: Position query and parsing tests for Bitget.
+# ============================================================
 import asyncio
 import json
 import os

@@ -15,8 +15,15 @@ import time
 import json
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 # Мокируем отсутствующие в минимальном окружении библиотеки
 class DummyPytz:
@@ -242,16 +249,30 @@ async def test_emergency_execute_close_price_fallback():
         "long_executed_volume_rate": 1.0,
         "short_executed_volume_rate": 0.0
     }
+    executor.pm.lock_for_entry("BINANCE", "KUCOIN", "DOGE", {"long_price": 0.20, "short_price": 0.205})
     executor.pm.confirm_entry("BINANCE", "KUCOIN", "DOGE", exec_res, time.time())
     executor.pm.lock_for_exit("BINANCE_KUCOIN", "DOGE")
     
     # Мокируем ордера
-    mock_b_order = AsyncMock()
+    mock_b_order = MagicMock()
+    mock_b_order.get_executed_position = MagicMock(side_effect=[{"size": 250.0, "price": 0.20}, {"size": 0.0, "price": 0.0}])
     mock_b_order.get_exact_position = AsyncMock(return_value={"size": 250.0, "price": 0.20})
+    mock_b_order.get_exact_position_guarded = AsyncMock(return_value={"size": 250.0, "price": 0.20})
     mock_b_order.place_order = AsyncMock(return_value={"orderId": 999})
+    mock_b_order.cancel_all_orders = AsyncMock()
+    mock_b_order.subscribe_position_update = MagicMock(return_value=asyncio.Event())
+    mock_b_order.unsubscribe_position_update = MagicMock()
+    mock_b_order.get_last_close_price = MagicMock(return_value=0.20)
     
-    mock_k_order = AsyncMock()
+    mock_k_order = MagicMock()
+    mock_k_order.get_executed_position = MagicMock(return_value={"size": 0.0, "price": 0.0})
     mock_k_order.get_exact_position = AsyncMock(return_value={"size": 0.0, "price": 0.0})
+    mock_k_order.get_exact_position_guarded = AsyncMock(return_value={"size": 0.0, "price": 0.0})
+    mock_k_order.place_order = AsyncMock(return_value={"orderId": 888})
+    mock_k_order.cancel_all_orders = AsyncMock()
+    mock_k_order.subscribe_position_update = MagicMock(return_value=asyncio.Event())
+    mock_k_order.unsubscribe_position_update = MagicMock()
+    mock_k_order.get_last_close_price = MagicMock(return_value=0.205)
     
     executor.orders = {
         "BINANCE": mock_b_order,
@@ -339,17 +360,36 @@ async def test_execute_open_low_fill_rate_recovery():
     executor.pm = PositionManager(cfg, ["BINANCE", "KUCOIN"], ["BINANCE_KUCOIN"], ["DOGE"])
     
     # Мокируем ордера: Binance налился 100%, Kucoin 0%
-    mock_b = AsyncMock()
+    ev_b = asyncio.Event()
+    ev_b.set()
+    ev_k = asyncio.Event()
+    ev_k.set()
+
+    mock_b = MagicMock()
     mock_b.check_order_size = MagicMock()
     mock_b.place_order = AsyncMock(return_value={"orderId": 111})
     mock_b.get_executed_position = MagicMock(return_value={"size": 250.0, "price": 0.20})
     mock_b.get_exact_position = AsyncMock(return_value={"size": 250.0, "price": 0.20})
+    mock_b.get_exact_position_guarded = AsyncMock(return_value={"size": 0.0, "price": 0.0})
+    mock_b.get_position_rest = AsyncMock(return_value={"size": 0.0, "price": 0.0})
+    mock_b.get_book_ticker = AsyncMock(return_value={"bid": 0.20, "ask": 0.20})
+    mock_b.get_last_close_price = MagicMock(return_value=0.20)
+    mock_b.cancel_all_orders = AsyncMock()
+    mock_b.subscribe_position_update = MagicMock(return_value=ev_b)
+    mock_b.unsubscribe_position_update = MagicMock()
     
-    mock_k = AsyncMock()
+    mock_k = MagicMock()
     mock_k.check_order_size = MagicMock()
     mock_k.place_order = AsyncMock(return_value={"orderId": 222})
     mock_k.get_executed_position = MagicMock(return_value={"size": 0.0, "price": 0.0})
     mock_k.get_exact_position = AsyncMock(return_value={"size": 0.0, "price": 0.0})
+    mock_k.get_exact_position_guarded = AsyncMock(return_value={"size": 0.0, "price": 0.0})
+    mock_k.get_position_rest = AsyncMock(return_value={"size": 0.0, "price": 0.0})
+    mock_k.get_book_ticker = AsyncMock(return_value={"bid": 0.205, "ask": 0.205})
+    mock_k.get_last_close_price = MagicMock(return_value=0.205)
+    mock_k.cancel_all_orders = AsyncMock()
+    mock_k.subscribe_position_update = MagicMock(return_value=ev_k)
+    mock_k.unsubscribe_position_update = MagicMock()
     
     executor.orders = {"BINANCE": mock_b, "KUCOIN": mock_k}
     executor.coin_to_native = {"DOGE": {"BINANCE": "DOGEUSDT", "KUCOIN": "DOGEUSDTM"}}

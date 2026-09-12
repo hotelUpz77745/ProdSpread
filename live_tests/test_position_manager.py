@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_position_manager.py
+# ROLE: Position manager lock and concurrency tests.
+# ============================================================
 import unittest
 import os
 import json

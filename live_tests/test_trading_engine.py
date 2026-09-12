@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_trading_engine.py
+# ROLE: Signal evaluation and filter tests for TradingEngine.
+# ============================================================
 import unittest
 import os
 import sys

@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_cleanup.py
+# ROLE: Diagnostic cleanup script for lingering open orders and positions.
+# ============================================================
 # Debug Bitget close: print exact request body
 import asyncio, aiohttp, os, json, time, sys, hmac, hashlib, base64, uuid
 from dotenv import load_dotenv

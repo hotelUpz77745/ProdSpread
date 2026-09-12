@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_leverage.py
+# ROLE: Exchange leverage configuration verification test.
+# ============================================================
 import asyncio
 import os
 import sys

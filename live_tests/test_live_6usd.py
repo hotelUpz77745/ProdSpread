@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_live_6usd.py
+# ROLE: Micro-size live order execution test ( notional).
+# ============================================================
 import asyncio
 import json
 import os

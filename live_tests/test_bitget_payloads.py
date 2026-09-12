@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_bitget_payloads.py
+# ROLE: Payload validation tests for Bitget API requests.
+# ============================================================
 import asyncio
 import json
 import os

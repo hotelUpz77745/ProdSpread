@@ -55,7 +55,7 @@ class ExecutorProcess:
         )
         
         # Orders
-        net_cfg = self.cfg.get("network_settings", {})
+        net_cfg = self.cfg["network_settings"]
         self.orders = {
             "BINANCE": BinanceOrder(
                 api_key=os.environ.get("BINANCE_API_KEY", ""),

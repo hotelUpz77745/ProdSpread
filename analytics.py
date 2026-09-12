@@ -102,8 +102,8 @@ class TradeAnalytics:
         
         gross_pnl = (long_pnl + short_pnl) / 2.0
         
-        long_cfg = self.risks_cfg.get(long_ex.lower(), {"trade_size_usd": 20.0, "taker_fee": 0.0005})
-        short_cfg = self.risks_cfg.get(short_ex.lower(), {"trade_size_usd": 20.0, "taker_fee": 0.0006})
+        long_cfg = self.risks_cfg[long_ex.lower()]
+        short_cfg = self.risks_cfg[short_ex.lower()]
         
         actual_long_usd = long_executed_usd if long_executed_usd is not None and long_executed_usd > 0 else long_cfg["trade_size_usd"]
         actual_short_usd = short_executed_usd if short_executed_usd is not None and short_executed_usd > 0 else short_cfg["trade_size_usd"]
@@ -219,9 +219,9 @@ def update_total_balance(cfg: dict, is_startup: bool = False, extra_pnl: float =
     """
     global _cached_base_total, _cached_cumulative_pnl, _balance_initialized
     try:
-        risks = cfg.get("trading_risks", {})
+        risks = cfg["trading_risks"]
         if _cached_base_total is None or is_startup:
-            _cached_base_total = sum(float(risk.get("paper_start_balance", 0.0)) for risk in risks.values())
+            _cached_base_total = sum(float(risk["paper_start_balance"]) for risk in risks.values())
 
         if not _balance_initialized or is_startup:
             _cached_cumulative_pnl = _recalc_total_pnl_from_disk()

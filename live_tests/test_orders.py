@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_orders.py
+# ROLE: Comprehensive unit and live tests for orders adapters.
+# ============================================================
 import unittest
 import asyncio
 import json

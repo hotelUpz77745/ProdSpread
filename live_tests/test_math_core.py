@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_math_core.py
+# ROLE: Unit and performance tests for math_core orderbook routines.
+# ============================================================
 import unittest
 import numpy as np
 import os

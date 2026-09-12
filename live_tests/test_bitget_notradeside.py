@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_bitget_notradeside.py
+# ROLE: Diagnostic test for Bitget hedge-mode side resolution.
+# ============================================================
 import asyncio
 import json
 import os

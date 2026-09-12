@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_kucoin_ws_events.py
+# ROLE: Kucoin WebSocket event stream verification test.
+# ============================================================
 import asyncio
 import os
 import aiohttp

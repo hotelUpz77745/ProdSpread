@@ -39,9 +39,12 @@ class BinanceOrder:
         self.api_secret = api_secret
         self.session = session
         self.position_stream = position_stream
-        net_cfg = network_settings or {}
-        self.keepalive_interval_sec = float(net_cfg.get("rest_keepalive_interval_sec", 45))
-        self.idle_warmup_threshold_sec = float(net_cfg.get("idle_warmup_threshold_sec", 30))
+        if network_settings is not None:
+            self.keepalive_interval_sec = float(network_settings["rest_keepalive_interval_sec"])
+            self.idle_warmup_threshold_sec = float(network_settings["idle_warmup_threshold_sec"])
+        else:
+            self.keepalive_interval_sec = 0.0
+            self.idle_warmup_threshold_sec = 0.0
         self.symbol_info = None
         self._bg_task = None
         self._keepalive_task = None
@@ -395,9 +398,12 @@ class KucoinOrder:
         self.session = session
         self.position_stream = position_stream
         self.margin_settings = margin_settings
-        net_cfg = network_settings or {}
-        self.keepalive_interval_sec = float(net_cfg.get("rest_keepalive_interval_sec", 45))
-        self.idle_warmup_threshold_sec = float(net_cfg.get("idle_warmup_threshold_sec", 30))
+        if network_settings is not None:
+            self.keepalive_interval_sec = float(network_settings["rest_keepalive_interval_sec"])
+            self.idle_warmup_threshold_sec = float(network_settings["idle_warmup_threshold_sec"])
+        else:
+            self.keepalive_interval_sec = 0.0
+            self.idle_warmup_threshold_sec = 0.0
         self.symbol_info = None
         self._bg_task = None
         self._keepalive_task = None
@@ -579,6 +585,7 @@ class KucoinOrder:
         elif order_type.upper() == "LIMIT":
             body["type"] = "limit"
             body["price"] = price_str
+            body["timeInForce"] = "GTC"
         else:
             body["type"] = order_type.lower()
             
@@ -915,9 +922,12 @@ class BitgetOrder:
         self.margin_settings = margin_settings
         self.session = session
         self.position_stream = position_stream
-        net_cfg = network_settings or {}
-        self.keepalive_interval_sec = float(net_cfg.get("rest_keepalive_interval_sec", 45))
-        self.idle_warmup_threshold_sec = float(net_cfg.get("idle_warmup_threshold_sec", 30))
+        if network_settings is not None:
+            self.keepalive_interval_sec = float(network_settings["rest_keepalive_interval_sec"])
+            self.idle_warmup_threshold_sec = float(network_settings["idle_warmup_threshold_sec"])
+        else:
+            self.keepalive_interval_sec = 0.0
+            self.idle_warmup_threshold_sec = 0.0
         self.symbol_info = []
         self._bg_task = None
         self._keepalive_task = None

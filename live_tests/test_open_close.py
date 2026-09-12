@@ -1,6 +1,6 @@
 # ============================================================
-# FILE: test_open_close.py
-# Тест IOC сценария: открыть IOC лимиткой с запасом -> проверить -> закрыть по маркету
+# FILE: live_tests/test_open_close.py
+# ROLE: Integration test for IOC position open and market close.
 # ============================================================
 import asyncio
 import aiohttp

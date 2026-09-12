@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_ipc_socket.py
+# ROLE: Inter-process communication (IPC) protocol verification test.
+# ============================================================
 import unittest
 import asyncio
 import json

@@ -141,7 +141,9 @@
                 },
                 "fill_confirm_timeout_sec_desc": "Макс. время ожидания подтверждения налива по WS после IOC. Настроено по связкам.",
                 "fill_confirm_poll_interval_sec": 0.0,
-                "fill_confirm_poll_interval_sec_desc": "Интервал опроса WS-кэша в цикле ожидания (0.0 = чисто реактивный Event-driven)."
+                "fill_confirm_poll_interval_sec_desc": "Интервал опроса WS-кэша в цикле ожидания (0.0 = чисто реактивный Event-driven).",
+                "entry_api_timeout_sec": 5.0,
+                "entry_api_timeout_sec_desc": "Таймаут (сек) параллельного запроса отправки ордеров LIMIT_IOC в asyncio.wait_for."
             }
         },
         "exit": {
@@ -216,7 +218,9 @@
                         "price_slip": -999.0
                     }
                 ],
-                "chase_map_desc": "Карта чейзинга стакана. price_slip — проскальзывание от лучшей цены. 0.0 = точно по рынку, -0.0005 = уступка 0.05%%, -999 = маркет."
+                "chase_map_desc": "Карта чейзинга стакана. price_slip — проскальзывание от лучшей цены. 0.0 = точно по рынку, -0.0005 = уступка 0.05%%, -999 = маркет.",
+                "limit_fill_wait_sec": 0.5,
+                "limit_fill_wait_sec_desc": "Пауза ожидания исполнения лимитного ордера чейзинга перед проверкой и отменой."
             },
             "max_desync_ms": {
                 "BINANCE_KUCOIN": 350,
@@ -256,7 +260,9 @@
             "max_attempts": 2,
             "max_attempts_desc": "Maximum REST check + close cycles in emergency unwind",
             "retry_pause_sec": 0.05,
-            "retry_pause_sec_desc": "Pause (sec) between emergency unwind attempts"
+            "retry_pause_sec_desc": "Pause (sec) between emergency unwind attempts",
+            "ws_verify_timeout_sec": 0.3,
+            "ws_verify_timeout_sec_desc": "Таймаут ожидания обновления WS-кэша позиции после аварийного сброса."
         }
     },
     "network_settings": {

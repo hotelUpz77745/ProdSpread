@@ -89,6 +89,7 @@ class PositionFSM:
             )
 
         self.fill_confirm_poll_interval = float(parallel_cfg["fill_confirm_poll_interval_sec"])
+        self.entry_api_timeout = float(parallel_cfg["entry_api_timeout_sec"])
 
         # Position close confirmation parameters (from exit section with fallback to entry * 2)
         exit_timeout_cfg = self.cfg["trading_rules"]["exit"]["close_confirm_timeout_sec"]
@@ -111,6 +112,10 @@ class PositionFSM:
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
         self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
         self.unwind_retry_pause = float(unwind_cfg["retry_pause_sec"])
+        self.ws_verify_timeout = float(unwind_cfg["ws_verify_timeout_sec"])
+
+        sle_cfg = self.cfg["trading_rules"]["exit"]["single_leg_exit"]
+        self.single_leg_limit_fill_wait = float(sle_cfg["limit_fill_wait_sec"])
 
         self.exec_res: Dict[str, Any] = {}
         self.long_pos: Dict[str, float] = {"size": 0.0, "price": 0.0}
@@ -326,7 +331,7 @@ class PositionFSM:
         self._set_state(PositionState.SUBMITTING)
         
         entry_cfg = self.cfg["trading_rules"]["entry"]
-        parallel_cfg = entry_cfg.get("parallel_entry_logic", entry_cfg)
+        parallel_cfg = entry_cfg["parallel_entry_logic"]
         
         spread_val = self.engine_res.get("net_spread", self.engine_res.get("vwap_spread", 0.0))
         log(f"[{self.sym}] Opening (PARALLEL_LIMIT_IOC): {self.long_ex} (L) / {self.short_ex} (S) | Net Spread: {spread_val * 100:.2f}%", level="INFO")
@@ -367,7 +372,7 @@ class PositionFSM:
         ))
         
         try:
-            results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5.0)
+            results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=self.entry_api_timeout)
         except asyncio.TimeoutError:
             log(f"[{self.sym}] API Timeout during PARALLEL LIMIT_IOC. Launching emergency unwind just in case.", level="ERROR")
             self.ban_coin_cb(self.sym, reason="Entry API Timeout", duration_sec=self.q_entry_error)
@@ -527,7 +532,7 @@ class PositionFSM:
                 log(f"[{self.sym}] Chasing error on {open_ex}: {e}", level="ERROR")
                 continue
                 
-            await asyncio.sleep(0.5) # Wait for limit fill
+            await asyncio.sleep(self.single_leg_limit_fill_wait)  # Wait for limit fill from config
             
             # Check position
             pos = await self.orders[open_ex].get_position_rest(native_sym, pos_side)
@@ -663,9 +668,9 @@ class PositionFSM:
         if kill_tasks:
             await asyncio.gather(*kill_tasks, return_exceptions=True)
 
-        # Fast verification of zero position via WS (up to 300 ms)
+        # Fast verification of zero position via WS (up to ws_verify_timeout_sec)
         is_flat = False
-        t_deadline = time.perf_counter() + 0.3
+        t_deadline = time.perf_counter() + self.ws_verify_timeout
         while time.perf_counter() < t_deadline:
             l_flat = True
             s_flat = True

@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_bitget_execution.py
+# ROLE: Live integration test for Bitget order execution.
+# ============================================================
 import asyncio
 import os
 import aiohttp

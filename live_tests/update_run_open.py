@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/update_run_open.py
+# ROLE: Diagnostic script for validating run_open routine updates.
+# ============================================================
 import sys
 import re
 

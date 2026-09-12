@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_bitget_trim.py
+# ROLE: Bitget asymmetric position trimming test.
+# ============================================================
 import asyncio
 import json
 import os
