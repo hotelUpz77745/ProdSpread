@@ -518,6 +518,7 @@ class PositionFSM:
         chase_map = sle_cfg["chase_map"]
         
         qty_rem = qty_to_close
+        last_exit_price = entry_price
         
         start_time = time.time()
         for step in chase_map:
@@ -565,6 +566,7 @@ class PositionFSM:
                 await self.orders[open_ex].place_order(
                     native_sym, close_side, usd_needed, limit_price, order_type="LIMIT_IOC", position_side=pos_side, exact_qty=qty_rem, reduce_only=True
                 )
+                last_exit_price = limit_price
             except Exception as e:
                 log(f"[{self.sym}] Chasing error on {open_ex}: {e}", level="ERROR")
                 continue
@@ -578,7 +580,35 @@ class PositionFSM:
         if ev_leg and hasattr(self.orders[open_ex], "unsubscribe_position_update"):
             self.orders[open_ex].unsubscribe_position_update(native_sym, pos_side)
             
-        self.ban_coin_cb(self.sym, reason="Single Leg Exposure Exit", duration_sec=self.q_single_leg)
+        # PnL calculation for single-leg closure
+        closed_qty = qty_to_close - qty_rem
+        taker_fee_rate = float(self.cfg["trading_risks"][open_ex.lower()]["taker_fee"])
+        
+        if closed_qty > 0:
+            if pos_side == "LONG":
+                gross_pnl = (last_exit_price - entry_price) * closed_qty
+            else:
+                gross_pnl = (entry_price - last_exit_price) * closed_qty
+            comm = (entry_price * closed_qty + last_exit_price * closed_qty) * taker_fee_rate
+            net_pnl = gross_pnl - comm
+            entry_usd = entry_price * closed_qty
+            net_yield = (net_pnl / entry_usd) if entry_usd > 0 else 0.0
+            
+            try:
+                from analytics import update_total_balance
+                update_total_balance(self.cfg, extra_pnl=net_pnl)
+            except Exception as e:
+                log(f"[{self.sym}] Error updating total balance on single leg: {e}", level="WARNING")
+        else:
+            net_pnl = 0.0
+            net_yield = 0.0
+
+        if net_pnl >= 0.0:
+            log(f"[{self.sym}] Single Leg Exit finished in PROFIT: Net {net_pnl:+.4f}$ ({net_yield*100:+.3f}%). Quarantine skipped.", level="INFO")
+        else:
+            log(f"[{self.sym}] Single Leg Exit finished in LOSS: Net {net_pnl:+.4f}$ ({net_yield*100:+.3f}%). Applying quarantine.", level="WARNING")
+            self.ban_coin_cb(self.sym, reason=f"Single Leg Loss ({net_pnl:+.4f}$)", duration_sec=self.q_single_leg)
+            
         self._set_state(PositionState.ABORTED)
         self._notify_pos_failed("SINGLE_LEG_EXPOSURE")
 

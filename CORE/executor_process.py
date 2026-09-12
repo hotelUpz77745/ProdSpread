@@ -144,13 +144,17 @@ class ExecutorProcess:
                 duration_sec = float(ban_q["spread_collapse_step3"])
             reason = f"{reason} (A1 consecutive collapse #{count})"
             
-        expire_time = (time.time() + duration_sec) if duration_sec else None
+        if duration_sec is not None and duration_sec <= 0:
+            log(f"[{sym}] Quarantine skipped (duration <= 0s). Reason: {reason}", level="INFO")
+            return
+            
+        expire_time = (time.time() + duration_sec) if duration_sec is not None else None
         self.banned_symbols[sym] = expire_time
         self._save_banned()
-        if expire_time:
+        if expire_time is not None:
             log(f"[{sym}] Quarantine for {int(duration_sec)}s. Reason: {reason}", level="WARNING")
         else:
-            log(f"[{sym}] Symbol banned ({reason}).", level="WARNING")
+            log(f"[{sym}] Symbol banned permanently ({reason}).", level="WARNING")
         # Notify Market Process
         if self.writer:
             asyncio.create_task(async_write_msg(self.writer, "BAN_UPDATE", {"symbol": sym, "expire_time": expire_time}))
