@@ -114,10 +114,10 @@
                 },
                 "max_desync_ms_desc": "Пороги рассинхрона стаканов (мс) для каждой связки. Настроены индивидуально под скорость стримов бирж.",
                 "orderbook_imbalance": {
-                    "enabled": false,
+                    "enabled": true,
                     "max_adverse_imbalance": 0.55,
                     "depth_levels": 5,
-                    "desc": "Отсекает вход, если на одной из ног стакан перекошен против направления удара (на Long-бирже тяжелые аски, на Short-бирже тяжелые биды). Временно отключен (false) как избыточный для жестких LIMIT_IOC."
+                    "desc": "Отсекает вход, если на одной из ног стакан перекошен против направления удара (на Long-бирже тяжелые аски, на Short-бирже тяжелые биды)."
                 },
                 "synthetic_exit": {
                     "enabled": true,
@@ -196,30 +196,32 @@
                 "desc": "Управление выходом из однобокой позиции (одна нога зависла, v8).",
                 "immediate_market": false,
                 "immediate_market_desc": "Если true — не чейзить стакан, а сразу сбросить по маркету.",
+                "max_chase_loss_ratio": 0.0050,
+                "max_chase_loss_ratio_desc": "Hard Stop-Loss: если текущий убыток по одиночной ноге превышает 0.50%, немедленный сброс по маркету.",
                 "chase_map": [
                     {
                         "step": 0,
-                        "after_sec": 0,
+                        "after_sec": 0.0,
                         "price_slip": -0.0
                     },
                     {
                         "step": 1,
-                        "after_sec": 15,
-                        "price_slip": -0.0005
+                        "after_sec": 1.0,
+                        "price_slip": -0.0008
                     },
                     {
                         "step": 2,
-                        "after_sec": 30,
-                        "price_slip": -0.001
+                        "after_sec": 2.5,
+                        "price_slip": -0.0015
                     },
                     {
                         "step": 3,
-                        "after_sec": 45,
+                        "after_sec": 4.0,
                         "price_slip": -999.0
                     }
                 ],
-                "chase_map_desc": "Карта чейзинга стакана. price_slip — проскальзывание от лучшей цены. 0.0 = точно по рынку, -0.0005 = уступка 0.05%%, -999 = маркет.",
-                "limit_fill_wait_sec": 0.5,
+                "chase_map_desc": "Карта чейзинга стакана с HFT-интервалами (1.0с - 2.5с - 4.0с маркет).",
+                "limit_fill_wait_sec": 0.35,
                 "limit_fill_wait_sec_desc": "Пауза ожидания исполнения лимитного ордера чейзинга перед проверкой и отменой."
             },
             "max_desync_ms": {
@@ -233,6 +235,10 @@
         },
         "ban_rules": {
             "is_active": true,
+            "perm_ban_loss_pct": 0.0075,
+            "perm_ban_loss_pct_desc": "Порог убытка по сделке (0.0075 = 0.75%), при котором монета уходит в пожизненный перманентный бан.",
+            "max_consecutive_losses": 2,
+            "max_consecutive_losses_desc": "Количество убыточных сделок подряд по монете до пожизненного бана.",
             "quarantine_sec": {
                 "entry_error": 3600,
                 "entry_error_desc": "Ошибка API при отправке ордера на вход.",

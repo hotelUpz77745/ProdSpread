@@ -105,6 +105,7 @@ class ExecutorProcess:
         self.active_fsm = {}
         self.banned_symbols = {}
         self.a1_collapse_counts = {}
+        self.consecutive_loss_counts = {}
         self.coin_to_native = {}
         self._running = True
 
@@ -145,8 +146,21 @@ class ExecutorProcess:
             reason = f"{reason} (A1 consecutive collapse #{count})"
             
         if duration_sec is not None and duration_sec <= 0:
+            self.consecutive_loss_counts.pop(sym, None)
+            if sym in self.banned_symbols and self.banned_symbols[sym] is not None:
+                self.banned_symbols.pop(sym, None)
+                self._save_banned()
             log(f"[{sym}] Quarantine skipped (duration <= 0s). Reason: {reason}", level="INFO")
             return
+            
+        if "Loss" in reason or "loss" in reason:
+            if duration_sec is not None:
+                max_consec = int(ban_cfg["max_consecutive_losses"])
+                l_count = self.consecutive_loss_counts.get(sym, 0) + 1
+                self.consecutive_loss_counts[sym] = l_count
+                if l_count >= max_consec:
+                    duration_sec = None
+                    reason = f"{reason} ({l_count} consecutive losses >= {max_consec} limit -> PERMANENT BAN)"
             
         expire_time = (time.time() + duration_sec) if duration_sec is not None else None
         self.banned_symbols[sym] = expire_time
@@ -299,10 +313,17 @@ class ExecutorProcess:
             update_total_balance(self.cfg, extra_pnl=net_usd)
 
             if net_usd < 0:
-                ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
-                self.ban_coin(sym, reason=f"Loss trade ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", duration_sec=float(ban_q["loss_trade"]))
+                ban_rules = self.cfg["trading_rules"]["ban_rules"]
+                perm_ban_pct = float(ban_rules["perm_ban_loss_pct"])
+                if abs(net_yield) >= perm_ban_pct:
+                    log(f"[{sym}] Severe loss trade ({net_yield*100:+.2f}% <= -{perm_ban_pct*100:.2f}%). PERMANENT BAN!", level="ERROR")
+                    self.ban_coin(sym, reason=f"Severe loss trade ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.2f}%)", duration_sec=None)
+                else:
+                    ban_q = ban_rules["quarantine_sec"]
+                    self.ban_coin(sym, reason=f"Loss trade ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", duration_sec=float(ban_q["loss_trade"]))
             else:
                 self.a1_collapse_counts.pop(sym, None)
+                self.consecutive_loss_counts.pop(sym, None)
                 log(f"[{sym}] Profitable trade ({reason}): Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", level="INFO")
         except Exception as e:
             log(f"[{sym}] Local PnL clearing error: {e}", level="ERROR")

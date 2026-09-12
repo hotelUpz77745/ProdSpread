@@ -116,6 +116,9 @@ class PositionFSM:
 
         sle_cfg = self.cfg["trading_rules"]["exit"]["single_leg_exit"]
         self.single_leg_limit_fill_wait = float(sle_cfg["limit_fill_wait_sec"])
+        self.max_chase_loss_ratio = float(sle_cfg["max_chase_loss_ratio"])
+        ban_cfg = self.cfg["trading_rules"]["ban_rules"]
+        self.perm_ban_loss_pct = float(ban_cfg["perm_ban_loss_pct"])
 
         self.exec_res: Dict[str, Any] = {}
         self.long_pos: Dict[str, float] = {"size": 0.0, "price": 0.0}
@@ -533,13 +536,6 @@ class PositionFSM:
             if elapsed < wait_sec:
                 await asyncio.sleep(wait_sec - elapsed)
                 
-            if price_slip <= -900.0:
-                # Market fallback
-                log(f"[{self.sym}] Single Leg Fallback: MARKET exit ({open_ex}).", level="WARNING")
-                await self._emergency_unwind_single(open_ex, native_sym, qty_rem, entry_price, "BUY" if pos_side == "LONG" else "SELL", pos_side)
-                break
-                
-            # Try limit order
             # Get LIVE market orderbook price for chasing (best bid to sell, best ask to buy)
             live_price = 0.0
             if hasattr(self.orders[open_ex], "get_book_ticker"):
@@ -553,7 +549,34 @@ class PositionFSM:
             if live_price <= 0:
                 live_price = self.engine_res.get(engine_price_key, entry_price)
             current_calc_price = live_price
-            
+
+            # HARD STOP-LOSS CIRCUIT BREAKER:
+            # If price moves against naked leg by >= max_chase_loss_ratio (e.g. 0.50%), immediately exit by market!
+            if current_calc_price > 0 and entry_price > 0:
+                if pos_side == "LONG":
+                    live_loss = (entry_price - current_calc_price) / entry_price
+                else:
+                    live_loss = (current_calc_price - entry_price) / entry_price
+                if live_loss >= self.max_chase_loss_ratio:
+                    log(f"[{self.sym}] Hard Stop-Loss triggered! Live loss {live_loss*100:.2f}% >= {self.max_chase_loss_ratio*100:.2f}%. Immediate market exit ({open_ex})!", level="ERROR")
+                    await self._emergency_unwind_single(open_ex, native_sym, qty_rem, entry_price, "BUY" if pos_side == "LONG" else "SELL", pos_side)
+                    last_exit_price = current_calc_price
+                    await asyncio.sleep(self.ws_verify_timeout)
+                    pos = await self.orders[open_ex].get_position_rest(native_sym, pos_side)
+                    qty_rem = pos.get("size", 0.0) if pos else 0.0
+                    break
+
+            if price_slip <= -900.0:
+                # Market fallback
+                log(f"[{self.sym}] Single Leg Fallback: MARKET exit ({open_ex}).", level="WARNING")
+                await self._emergency_unwind_single(open_ex, native_sym, qty_rem, entry_price, "BUY" if pos_side == "LONG" else "SELL", pos_side)
+                last_exit_price = current_calc_price if current_calc_price > 0 else entry_price
+                await asyncio.sleep(self.ws_verify_timeout)
+                pos = await self.orders[open_ex].get_position_rest(native_sym, pos_side)
+                qty_rem = pos.get("size", 0.0) if pos else 0.0
+                break
+                
+            # Try limit order
             if close_side == "SELL":
                 limit_price = current_calc_price * (1 + price_slip)
             else:
@@ -575,7 +598,7 @@ class PositionFSM:
             
             # Check position
             pos = await self.orders[open_ex].get_position_rest(native_sym, pos_side)
-            qty_rem = pos.get("size", 0.0)
+            qty_rem = pos.get("size", 0.0) if pos else 0.0
             
         if ev_leg and hasattr(self.orders[open_ex], "unsubscribe_position_update"):
             self.orders[open_ex].unsubscribe_position_update(native_sym, pos_side)
@@ -605,9 +628,14 @@ class PositionFSM:
 
         if net_pnl >= 0.0:
             log(f"[{self.sym}] Single Leg Exit finished in PROFIT: Net {net_pnl:+.4f}$ ({net_yield*100:+.3f}%). Quarantine skipped.", level="INFO")
+            self.ban_coin_cb(self.sym, reason=f"Single Leg Profit ({net_pnl:+.4f}$)", duration_sec=0)
         else:
-            log(f"[{self.sym}] Single Leg Exit finished in LOSS: Net {net_pnl:+.4f}$ ({net_yield*100:+.3f}%). Applying quarantine.", level="WARNING")
-            self.ban_coin_cb(self.sym, reason=f"Single Leg Loss ({net_pnl:+.4f}$)", duration_sec=self.q_single_leg)
+            if abs(net_yield) >= self.perm_ban_loss_pct:
+                log(f"[{self.sym}] Severe Single Leg Loss ({net_yield*100:+.2f}% <= -{self.perm_ban_loss_pct*100:.2f}%). PERMANENT BAN!", level="ERROR")
+                self.ban_coin_cb(self.sym, reason=f"Severe Single Leg Loss ({net_pnl:+.4f}$, {net_yield*100:+.2f}%)", duration_sec=None)
+            else:
+                log(f"[{self.sym}] Single Leg Exit finished in LOSS: Net {net_pnl:+.4f}$ ({net_yield*100:+.3f}%). Applying quarantine.", level="WARNING")
+                self.ban_coin_cb(self.sym, reason=f"Single Leg Loss ({net_pnl:+.4f}$)", duration_sec=self.q_single_leg)
             
         self._set_state(PositionState.ABORTED)
         self._notify_pos_failed("SINGLE_LEG_EXPOSURE")
