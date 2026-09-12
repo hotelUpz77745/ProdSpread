@@ -65,7 +65,7 @@ async def run_test():
         bot = DummyBot(session)
         
         # Test the leverage setter
-        setter = LeverageSetter(bot)
+        setter = LeverageSetter(bot.cfg, bot.orders, bot.discovery.active_pairs_map)
         
         if os.path.exists(setter.cache_path):
             os.remove(setter.cache_path)

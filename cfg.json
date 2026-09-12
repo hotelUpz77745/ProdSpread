@@ -132,12 +132,12 @@
                 "min_hedge_fill_rate": 0.60,
                 "min_hedge_fill_rate_desc": "Сбалансированность налива. Если соотношение объемов налитых ног >= 0.60, переходим в ACTIVE_HEDGED. Иначе - SINGLE_LEG_EXPOSURE.",
                 "fill_confirm_timeout_sec": {
-                    "BINANCE_KUCOIN": 0.6,
-                    "BINANCE_BITGET": 0.6,
-                    "KUCOIN_BITGET": 0.6,
-                    "BINANCE_OKX": 0.6,
-                    "KUCOIN_OKX": 0.6,
-                    "OKX_BITGET": 0.6
+                    "BINANCE_KUCOIN": 0.1,
+                    "BINANCE_BITGET": 0.1,
+                    "KUCOIN_BITGET": 0.1,
+                    "BINANCE_OKX": 0.1,
+                    "KUCOIN_OKX": 0.1,
+                    "OKX_BITGET": 0.1
                 },
                 "fill_confirm_timeout_sec_desc": "Макс. время ожидания подтверждения налива по WS после IOC. Настроено по связкам.",
                 "fill_confirm_poll_interval_sec": 0.0,

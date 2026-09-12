@@ -372,6 +372,34 @@ class BinanceOrder:
         log(f"[BinanceOrder] REST blinked after {max_retries} retries, fallback WS: {ws_pos}", level="WARNING")
         return {"size": ws_pos.get("size", 0.0), "price": ws_pos.get("price", 0.0), "status": "fallback_ws"}
 
+    async def get_max_leverage_map(self) -> dict:
+        if not self.api_key or not self.api_secret:
+            return {}
+        if not self.session:
+            from utils import SessionManager
+            self.session = await SessionManager().get_session()
+        timestamp = str(int(time.time() * 1000))
+        query_string = f"timestamp={timestamp}"
+        signature = self._generate_signature(query_string)
+        url = f"https://fapi.binance.com/fapi/v1/leverageBracket?{query_string}&signature={signature}"
+        
+        headers = {"X-MBX-APIKEY": self.api_key}
+        try:
+            async with self.session.get(url, headers=headers) as resp:
+                data = await resp.json()
+                if not isinstance(data, list):
+                    return {}
+                res = {}
+                for item in data:
+                    if "symbol" in item:
+                        brackets = item.get("brackets", [])
+                        init_lev = int(brackets[0].get("initialLeverage", 20)) if brackets else 20
+                        res[item["symbol"]] = init_lev
+                return res
+        except Exception as e:
+            log(f"[BinanceOrder] get_max_leverage_map error: {e}", level="WARNING")
+            return {}
+
     async def get_active_positions(self) -> list:
         if not self.api_key:
             return []
@@ -784,6 +812,24 @@ class KucoinOrder:
                 return float(item.get('multiplier', 1.0))
         return 1.0
 
+    async def get_max_leverage_map(self) -> dict:
+        if not self.session:
+            from utils import SessionManager
+            self.session = await SessionManager().get_session()
+        if not self.symbol_info:
+            try:
+                async with self.session.get("https://api-futures.kucoin.com/api/v1/contracts/active") as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get("code") == "200000":
+                            self.symbol_info = data.get("data", [])
+            except Exception as e:
+                log(f"[KucoinOrder] get_max_leverage_map error: {e}", level="WARNING")
+                return {}
+        if not self.symbol_info:
+            return {}
+        return {item["symbol"]: int(item.get("maxLeverage") or 20) for item in self.symbol_info if "symbol" in item}
+
     async def get_book_ticker(self, symbol: str) -> dict:
         if not self.session:
             from utils import SessionManager
@@ -912,7 +958,23 @@ class OkxOrder:
         return {"size": 0.0, "price": 0.0}
 
     async def get_exact_position(self, symbol: str, side: str):
-        return {"size": 0.0, "price": 0.0}
+        # NOT IMPLEMENTED YET
+        return {"size": 0.0, "price": 0.0, "status": "error", "raw": {}}
+
+    async def get_max_leverage_map(self) -> dict:
+        if not getattr(self, "session", None):
+            from utils import SessionManager
+            self.session = await SessionManager().get_session()
+        url = "https://www.okx.com/api/v5/public/instruments?instType=SWAP"
+        try:
+            async with self.session.get(url) as resp:
+                data = await resp.json()
+                if "data" not in data or not isinstance(data["data"], list):
+                    return {}
+                return {item["instId"]: int(item.get("lever") or 20) for item in data["data"] if "instId" in item}
+        except Exception as e:
+            log(f"[OkxOrder] get_max_leverage_map error: {e}", level="WARNING")
+            return {}
 
 class BitgetOrder:
     def __init__(self, api_key: str, api_secret: str, api_passphrase: str, margin_settings: dict, session=None, position_stream=None, network_settings: dict = None):
@@ -1432,4 +1494,18 @@ class BitgetOrder:
         log(f"[BitgetOrder] REST blinked after {max_retries} retries, fallback WS: {ws_pos}", level="WARNING")
         return {"size": ws_pos.get("size", 0.0), "price": ws_pos.get("price", 0.0), "status": "fallback_ws"}
 
+    async def get_max_leverage_map(self) -> dict:
+        if not self.session:
+            from utils import SessionManager
+            self.session = await SessionManager().get_session()
+        url = "https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES"
+        try:
+            async with self.session.get(url) as resp:
+                data = await resp.json()
+                if "data" not in data or not isinstance(data["data"], list):
+                    return {}
+                return {item["symbol"]: int(item.get("maxLever") or 20) for item in data["data"] if "symbol" in item}
+        except Exception as e:
+            log(f"[BitgetOrder] get_max_leverage_map error: {e}", level="WARNING")
+            return {}
 

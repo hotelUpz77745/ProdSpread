@@ -403,6 +403,43 @@ class PositionFSM:
         l_price = l_pos.get("price", 0.0)
         s_price = s_pos.get("price", 0.0)
         
+        need_l_rest = (req_long_qty > 0 and l_qty <= 0.0)
+        need_s_rest = (req_short_qty > 0 and s_qty <= 0.0)
+        
+        if need_l_rest or need_s_rest:
+            log(f"[{self.sym}] WS timeout reached with missing fills (L:{l_qty}, S:{s_qty}). Querying REST to avoid ghost positions...", level="WARNING")
+            rest_tasks = []
+            
+            if need_l_rest and self.long_ex in self.orders:
+                rest_tasks.append(self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG"))
+            else:
+                rest_tasks.append(asyncio.sleep(0, result={"size": 0.0, "price": 0.0}))
+                
+            if need_s_rest and self.short_ex in self.orders:
+                rest_tasks.append(self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT"))
+            else:
+                rest_tasks.append(asyncio.sleep(0, result={"size": 0.0, "price": 0.0}))
+                
+            rest_res = await asyncio.gather(*rest_tasks, return_exceptions=True)
+            
+            if need_l_rest and self.long_ex in self.orders:
+                l_rest = rest_res[0] if not isinstance(rest_res[0], Exception) else {"size": 0.0}
+                if l_rest.get("size", 0.0) > 0:
+                    l_qty = l_rest["size"]
+                    l_price = l_rest.get("price", l_price)
+                    l_rate = (l_qty / req_long_qty) if req_long_qty > 0 else 0.0
+                    self.long_pos = {"size": l_qty, "price": l_price}
+                    log(f"[{self.sym}] REST recovered LONG fill: {l_qty:.4f}", level="INFO")
+                    
+            if need_s_rest and self.short_ex in self.orders:
+                s_rest = rest_res[1] if not isinstance(rest_res[1], Exception) else {"size": 0.0}
+                if s_rest.get("size", 0.0) > 0:
+                    s_qty = s_rest["size"]
+                    s_price = s_rest.get("price", s_price)
+                    s_rate = (s_qty / req_short_qty) if req_short_qty > 0 else 0.0
+                    self.short_pos = {"size": s_qty, "price": s_price}
+                    log(f"[{self.sym}] REST recovered SHORT fill: {s_qty:.4f}", level="INFO")
+        
         log(f"[{self.sym}] Phase 2: Fill results -> LONG: {l_qty:.4f} ({l_rate*100:.1f}%), SHORT: {s_qty:.4f} ({s_rate*100:.1f}%)", level="INFO")
         
         if l_qty <= 0.0 and s_qty <= 0.0:

@@ -56,7 +56,7 @@ class LeverageSetter:
         
         for generic_sym, ex_map in self.coin_to_native.items():
             for ex, native_sym in ex_map.items():
-                if self.orders.get(ex) and self.orders[ex].api_key:
+                if self.orders.get(ex) and getattr(self.orders[ex], "api_key", None):
                     symbols_per_exchange[ex].add(native_sym)
                     
         new_settings_applied = False
@@ -67,9 +67,19 @@ class LeverageSetter:
                 continue
                 
             ex_settings = self.cfg["margin_settings"][ex_name]
-            target_leverage = ex_settings["leverage"]
+            config_leverage = ex_settings["leverage"]
             target_margin = ex_settings["margin_type"]
             order_adapter = self.orders[ex_name]
+            
+            # Fetch max leverage map from exchange specification
+            max_lev_map = {}
+            if hasattr(order_adapter, "get_max_leverage_map"):
+                log(f"[LeverageSetter] [{ex_name}] Fetching max leverage specifications...", level="INFO")
+                try:
+                    max_lev_map = await order_adapter.get_max_leverage_map()
+                except Exception as e:
+                    log(f"[LeverageSetter] [{ex_name}] Error fetching max leverage specifications: {e}", level="WARNING")
+                    max_lev_map = {}
                 
             # Initialize cache for exchange if absent
             if ex_name not in self._cache:
@@ -79,6 +89,10 @@ class LeverageSetter:
             for sym in symbols:
                 cached_data = self._cache[ex_name].get(sym, {})
                 
+                # Determine actual leverage: min of config and exchange max
+                max_allowed = max_lev_map.get(sym, config_leverage)
+                target_leverage = min(config_leverage, max_allowed)
+                
                 # Skip if cache already matches target settings
                 if cached_data.get("leverage") == target_leverage and cached_data.get("margin_type") == target_margin:
                     continue
@@ -87,7 +101,7 @@ class LeverageSetter:
                 tasks.append(self._apply_settings(order_adapter, ex_name, sym, target_leverage, target_margin))
                 
             if tasks:
-                log(f"[LeverageSetter] [{ex_name}] Configuring {len(tasks)} symbols (lev: {target_leverage}, type: {target_margin})...", level="INFO")
+                log(f"[LeverageSetter] [{ex_name}] Configuring {len(tasks)} symbols (type: {target_margin})...", level="INFO")
                 # Run in batches to respect rate limits
                 batch_size = 10
                 for i in range(0, len(tasks), batch_size):
@@ -95,10 +109,11 @@ class LeverageSetter:
                     results = await asyncio.gather(*batch, return_exceptions=True)
                     
                     for result in results:
-                        if isinstance(result, tuple) and result[0]: # (success, symbol)
+                        if isinstance(result, tuple) and result[0]: # (success, symbol, applied_leverage)
                             sym = result[1]
+                            applied_leverage = result[2]
                             self._cache[ex_name][sym] = {
-                                "leverage": target_leverage,
+                                "leverage": applied_leverage,
                                 "margin_type": target_margin
                             }
                             new_settings_applied = True
@@ -108,17 +123,26 @@ class LeverageSetter:
             self._save_cache()
             log("[LeverageSetter] New settings saved to cache.", level="INFO")
             
-    async def _apply_settings(self, adapter, ex_name: str, sym: str, leverage: int, margin_type: str):
+    async def _apply_settings(self, adapter, ex_name: str, sym: str, target_leverage: int, margin_type: str):
         try:
-            res_margin = await adapter.set_margin_type(sym, margin_type, leverage=leverage)
-            res_lev = await adapter.set_leverage(sym, leverage, margin_type=margin_type)
+            # 1. Try to set margin type
+            try:
+                await adapter.set_margin_type(sym, margin_type, leverage=target_leverage)
+            except Exception as e:
+                err = str(e).lower()
+                if "no need to change" not in err and "margin type cannot be changed" not in err:
+                    log(f"[LeverageSetter] [{ex_name}] Warning setting margin type {sym}: {e}", level="WARNING")
+                    
+            # 2. Try to set leverage
+            res_lev = await adapter.set_leverage(sym, target_leverage, margin_type=margin_type)
+            if not res_lev:
+                return False, sym, target_leverage
             
-            if not res_margin or not res_lev:
-                return False, sym
-            return True, sym
+            return True, sym, target_leverage
+            
         except Exception as e:
             err = str(e).lower()
             if "no need to change" in err or "margin type cannot be changed" in err:
-                return True, sym
-            log(f"[LeverageSetter] [{ex_name}] Error configuring {sym}: {e}", level="WARNING")
-            return False, sym
+                return True, sym, target_leverage
+            log(f"[LeverageSetter] [{ex_name}] Error configuring {sym} at lev {target_leverage}: {e}", level="WARNING")
+            return False, sym, target_leverage
