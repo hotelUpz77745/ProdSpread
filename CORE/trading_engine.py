@@ -15,21 +15,21 @@ class TradingEngine:
         self.cfg = cfg
         self.exchanges = exchanges
         
-        # Read signal filter parameters from signal_filters (with fallback to flat entry)
-        signal_cfg = self.cfg["trading_rules"]["entry"].get("signal_filters", self.cfg["trading_rules"]["entry"])
+        # Read signal filter parameters from signal_filters directly
+        signal_cfg = self.cfg["trading_rules"]["entry"]["signal_filters"]
         self.spread_entry = float(signal_cfg["spread_entry"])
-        synth_cfg = signal_cfg.get("synthetic_exit", {})
-        self.check_synthetic_exit = bool(synth_cfg.get("enabled", True))
-        self.check_synthetic_slippage = bool(synth_cfg.get("check_slippage", True))
-        self.max_slippage_ratio = float(synth_cfg.get("max_slippage_ratio", 0.65))
-        self.hard_max_slippage = float(synth_cfg.get("hard_max_slippage", 0.008))
+        synth_cfg = signal_cfg["synthetic_exit"]
+        self.check_synthetic_exit = bool(synth_cfg["enabled"])
+        self.check_synthetic_slippage = bool(synth_cfg["check_slippage"])
+        self.max_slippage_ratio = float(synth_cfg["max_slippage_ratio"])
+        self.hard_max_slippage = float(synth_cfg["hard_max_slippage"])
         
-        obi_cfg = signal_cfg.get("orderbook_imbalance", {})
-        self.check_obi_filter = bool(obi_cfg.get("enabled", True))
-        self.max_adverse_imbalance = float(obi_cfg.get("max_adverse_imbalance", 0.55))
-        self.obi_levels = int(obi_cfg.get("depth_levels", 5))
+        obi_cfg = signal_cfg["orderbook_imbalance"]
+        self.check_obi_filter = bool(obi_cfg["enabled"])
+        self.max_adverse_imbalance = float(obi_cfg["max_adverse_imbalance"])
+        self.obi_levels = int(obi_cfg["depth_levels"])
         
-        self.min_top_depth_usd = float(signal_cfg.get("min_top_depth_usd", 0.0))
+        self.min_top_depth_usd = float(signal_cfg["min_top_depth_usd"])
         hedged_exit = self.cfg["trading_rules"]["exit"]["hedged_exit"]
         self.decay_map = hedged_exit["normal_decay"]
         self.trading_risks = self.cfg["trading_risks"]
@@ -279,28 +279,28 @@ class TradingEngine:
         m = decay_map if decay_map is not None else self.decay_map
         if "target_spread" in m[0]:
             # Absolute map (weak_entry / single_leg): target_spread threshold
-            target = m[0]["target_spread"]
-            idx = int(m[0].get("step", 0))
+            target = float(m[0]["target_spread"])
+            idx = int(m[0]["step"])
             for rule in m:
                 if duration_sec >= float(rule["after_sec"]):
                     target = float(rule["target_spread"])
-                    idx = int(rule.get("step", 0))
+                    idx = int(rule["step"])
         elif "price_slip" in m[0]:
             # Chasing map (single_leg_exit): price_slip offset from price
-            target = m[0]["price_slip"]
-            idx = int(m[0].get("step", 0))
+            target = float(m[0]["price_slip"])
+            idx = int(m[0]["step"])
             for rule in m:
                 if duration_sec >= float(rule["after_sec"]):
                     target = float(rule["price_slip"])
-                    idx = int(rule.get("step", 0))
+                    idx = int(rule["step"])
         else:
             # Relative map (normal_decay): min_profit_ratio share of entry spread
-            ratio = m[0].get("min_profit_ratio", 0.0)
-            idx = int(m[0].get("step", 0))
+            ratio = float(m[0]["min_profit_ratio"])
+            idx = int(m[0]["step"])
             for rule in m:
                 if duration_sec >= float(rule["after_sec"]):
-                    ratio = float(rule.get("min_profit_ratio", 0.0))
-                    idx = int(rule.get("step", 0))
+                    ratio = float(rule["min_profit_ratio"])
+                    idx = int(rule["step"])
             if ratio <= -900.0:
                 target = -999.0
             else:

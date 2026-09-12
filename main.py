@@ -47,7 +47,7 @@ class Main:
         self.engine = TradingEngine(self.cfg, IDX_TO_EX)
         
         # Configs
-        signal_cfg = self.cfg["trading_rules"]["entry"].get("signal_filters", self.cfg["trading_rules"]["entry"])
+        signal_cfg = self.cfg["trading_rules"]["entry"]["signal_filters"]
         self.entry_desync_limit = signal_cfg["max_desync_ms"]
         self.exit_desync_limit  = self.cfg["trading_rules"]["exit"]["max_desync_ms"]
         self.top_n_candidates   = signal_cfg["top_n_candidates"]
