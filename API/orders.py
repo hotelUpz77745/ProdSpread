@@ -304,6 +304,20 @@ class BinanceOrder:
             return self.position_stream.get_last_close_price(symbol)
         return 0.0
 
+    async def get_book_ticker(self, symbol: str) -> dict:
+        if not self.session:
+            from utils import SessionManager
+            self.session = await SessionManager().get_session()
+        url = f"https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol={symbol}"
+        try:
+            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=2.0)) as resp:
+                if resp.status == 200:
+                    d = await resp.json()
+                    return {"bid": float(d.get("bidPrice", 0.0)), "ask": float(d.get("askPrice", 0.0))}
+        except Exception as e:
+            log(f"[BinanceOrder] get_book_ticker error: {e}", level="WARNING")
+        return {"bid": 0.0, "ask": 0.0}
+
     async def get_position_rest(self, symbol: str, side: str = None) -> dict:
         if not self.api_key:
             return {"size": 0.0, "price": 0.0, "status": "ok"}
@@ -763,6 +777,21 @@ class KucoinOrder:
                 return float(item.get('multiplier', 1.0))
         return 1.0
 
+    async def get_book_ticker(self, symbol: str) -> dict:
+        if not self.session:
+            from utils import SessionManager
+            self.session = await SessionManager().get_session()
+        url = f"https://api-futures.kucoin.com/api/v1/ticker?symbol={symbol}"
+        try:
+            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=2.0)) as resp:
+                if resp.status == 200:
+                    d = await resp.json()
+                    row = d.get("data", {})
+                    return {"bid": float(row.get("bestBidPrice", 0.0)), "ask": float(row.get("bestAskPrice", 0.0))}
+        except Exception as e:
+            log(f"[KucoinOrder] get_book_ticker error: {e}", level="WARNING")
+        return {"bid": 0.0, "ask": 0.0}
+
     async def get_position_rest(self, symbol: str, side: str = None) -> dict:
         if not self.api_key:
             return {"size": 0.0, "price": 0.0, "status": "ok"}
@@ -1046,6 +1075,15 @@ class BitgetOrder:
                 return await self._close_position(symbol, hold.lower())
 
         trade_side = "close" if is_close else "open"
+        order_side = side.lower()
+        if is_close and position_side:
+            # Bitget v2 Hedge Mode: side parameter indicates the position direction:
+            # "buy" to close LONG, "sell" to close SHORT. Sending opposite side triggers error 22002.
+            pos_upper = position_side.upper()
+            if pos_upper == "LONG":
+                order_side = "buy"
+            elif pos_upper == "SHORT":
+                order_side = "sell"
 
         mm = self.margin_settings["margin_type"].lower()
         if mm == "cross":
@@ -1057,7 +1095,7 @@ class BitgetOrder:
             "marginMode": mm,
             "marginCoin": "USDT",
             "size": qty_str,
-            "side": side.lower(),
+            "side": order_side,
             "tradeSide": trade_side,
             "clientOid": str(uuid.uuid4())
         }
@@ -1302,6 +1340,23 @@ class BitgetOrder:
         if self.position_stream and hasattr(self.position_stream, "get_last_close_price"):
             return self.position_stream.get_last_close_price(symbol)
         return 0.0
+
+    async def get_book_ticker(self, symbol: str) -> dict:
+        if not self.session:
+            from utils import SessionManager
+            self.session = await SessionManager().get_session()
+        url = f"https://api.bitget.com/api/v2/mix/market/ticker?symbol={symbol}&productType=USDT-FUTURES"
+        try:
+            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=2.0)) as resp:
+                if resp.status == 200:
+                    d = await resp.json()
+                    rows = d.get("data", [])
+                    if rows:
+                        row = rows[0]
+                        return {"bid": float(row.get("bidPr", 0.0)), "ask": float(row.get("askPr", 0.0))}
+        except Exception as e:
+            log(f"[BitgetOrder] get_book_ticker error: {e}", level="WARNING")
+        return {"bid": 0.0, "ask": 0.0}
 
     async def get_position_rest(self, symbol: str, side: str = None) -> dict:
         if not self.api_key:

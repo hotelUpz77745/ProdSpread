@@ -497,13 +497,14 @@ class PositionFSM:
                 break
                 
             # Try limit order
-            # Get LIVE price for chasing (not the frozen engine_res price)
+            # Get LIVE market orderbook price for chasing (best bid to sell, best ask to buy)
             live_price = 0.0
-            try:
-                pos_check = await self.orders[open_ex].get_position_rest(native_sym, pos_side)
-                live_price = pos_check.get("price", 0.0)
-            except Exception:
-                pass
+            if hasattr(self.orders[open_ex], "get_book_ticker"):
+                try:
+                    bt = await self.orders[open_ex].get_book_ticker(native_sym)
+                    live_price = bt.get("bid", 0.0) if close_side == "SELL" else bt.get("ask", 0.0)
+                except Exception as e:
+                    log(f"[{self.sym}] Error fetching book ticker on {open_ex}: {e}", level="WARNING")
             if live_price <= 0:
                 live_price = self.orders[open_ex].get_last_close_price(native_sym) if hasattr(self.orders[open_ex], "get_last_close_price") else 0.0
             if live_price <= 0:

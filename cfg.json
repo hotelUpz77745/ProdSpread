@@ -48,7 +48,7 @@
             "max_positions": 1
         },
         "bitget": {
-            "paper_start_balance": 11.79,
+            "paper_start_balance": 11.52,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0006,
             "limit_slip_ratio": 0.0015,
@@ -192,7 +192,7 @@
             },
             "single_leg_exit": {
                 "desc": "Управление выходом из однобокой позиции (одна нога зависла, v8).",
-                "immediate_market": true,
+                "immediate_market": false,
                 "immediate_market_desc": "Если true — не чейзить стакан, а сразу сбросить по маркету.",
                 "chase_map": [
                     {
