@@ -243,9 +243,7 @@ class Main:
         # Balance tracking moved to ExecutorProcess only (avoids file race condition)
         # update_total_balance(self.cfg, is_startup=True)
 
-        # 5. Main calculation loop (Numba JIT: [ask_p, ask_usd, bid_p, bid_usd])
-        prices_array = np.full((7, 4), [np.inf, 0.0, 0.0, 0.0], dtype=np.float64)
-
+        # 5. Main calculation loop
         try:
             while True:
                 iter_start = time.perf_counter()
@@ -260,39 +258,30 @@ class Main:
                         open_time = state["details"].get("open_time", time.time())
                         duration_sec = time.time() - open_time
                         
-                        long_ex = state["details"]["long_ex"]
-                        short_ex = state["details"]["short_ex"]
+                        target_ex = state["details"]["target_ex"]
+                        oracle_ex = state["details"]["oracle_ex"]
+                        side = state["details"]["side"]
                         
-                        long_book = self.books[long_ex].get(sym, {})
-                        short_book = self.books[short_ex].get(sym, {})
-                        is_stakan_valid = bool(long_book.get("bids") and short_book.get("asks"))
-
-                        long_rate = state["details"].get("long_executed_volume_rate", 1.0)
-                        short_rate = state["details"].get("short_executed_volume_rate", 1.0)
+                        target_book = self.books[target_ex].get(sym, {})
+                        
                         active_decay_map = self.engine.decay_map
 
-                        is_exit, exit_res = self.engine.evaluate_exit(
-                            long_book, short_book, long_ex, short_ex,
-                            state["details"]["engine_res"].get("long_qty", 0.0) * long_rate,
-                            state["details"]["engine_res"].get("short_qty", 0.0) * short_rate,
-                            state["details"].get("entry_long_price", 0.0),
-                            state["details"].get("entry_short_price", 0.0),
-                            duration_sec,
-                            is_stakan_valid=is_stakan_valid,
-                            long_executed_volume_rate=long_rate,
-                            short_executed_volume_rate=short_rate,
-                            decay_map=active_decay_map,
-                            actual_net_spread_entry=state["details"].get("actual_net_spread", 0.0)
+                        is_exit, exit_res = self.engine.evaluate_exit_v9(
+                            target_book=target_book,
+                            target_ex=target_ex,
+                            entry_price=state["details"]["entry_price"],
+                            qty=state["details"]["qty"],
+                            side=side,
+                            duration_sec=duration_sec,
+                            actual_net_spread_entry=state["details"]["net_spread"]
                         )
                         
-                        # Protection against phantom spikes on exit (only for PROFIT_DECAY)
-                        # Emergency exits (TTL, LOW_FILL_RATE) are never blocked!
-                        if is_exit and exit_res.get("reason") == "PROFIT_DECAY":
-                            long_ts = self.ts[long_ex].get(sym, 0.0)
-                            short_ts = self.ts[short_ex].get(sym, 0.0)
-                            if long_ts > 0 and short_ts > 0:
-                                diff_ms = abs(long_ts - short_ts) * 1000.0
-                                limit = self._get_desync_limit(self.exit_desync_limit, long_ex, short_ex)
+                        if is_exit and exit_res.get("reason") in ("TAKE_PROFIT", "STOP_LOSS"):
+                            oracle_ts = self.ts[oracle_ex].get(sym, 0.0)
+                            target_ts = self.ts[target_ex].get(sym, 0.0)
+                            if oracle_ts > 0 and target_ts > 0:
+                                diff_ms = abs(oracle_ts - target_ts) * 1000.0
+                                limit = self._get_desync_limit(self.exit_desync_limit, target_ex, oracle_ex)
                                 if limit is not None and diff_ms > limit:
                                     is_exit = False
                                     exit_res["reason"] = f"EXIT_DESYNC_SKIP ({diff_ms:.0f}ms > {limit:.0f}ms)"
@@ -302,33 +291,27 @@ class Main:
                         _last_log = self._exit_log_ts.get(sym, 0.0)
                         if _now_log - _last_log >= 5.0:
                             self._exit_log_ts[sym] = _now_log
-                            _net = exit_res.get("net_yield")
+                            _net = exit_res.get("net_pnl_pct")
                             _tgt = exit_res.get("target_val")
-                            _spr = exit_res.get("vwap_spread_out")
                             _reason = exit_res.get("reason", "?")
-                            _lcp = exit_res.get("long_close_price")
-                            _scp = exit_res.get("short_close_price")
-                            _elp = state["details"].get("entry_long_price", 0.0)
-                            _esp = state["details"].get("entry_short_price", 0.0)
+                            _ep = state["details"].get("entry_price", 0.0)
                             _lvl = exit_res.get("exit_level_index", "?")
                             
                             _net_s = f"{_net*100:+.4f}%" if _net is not None else "N/A"
                             _tgt_s = f"{_tgt*100:+.4f}%" if _tgt is not None else "TTL"
-                            _spr_s = f"{_spr*100:+.4f}%" if _spr is not None else "N/A"
-                            _lcp_s = f"{_lcp:.6f}" if _lcp else "N/A"
-                            _scp_s = f"{_scp:.6f}" if _scp else "N/A"
+                            _ep_s = f"{_ep:.6f}" if _ep else "N/A"
                             
                             if is_exit:
-                                log(f"[{sym}] EXIT_SIGNAL: net={_net_s} tgt={_tgt_s} spread_out={_spr_s} | "
-                                    f"L_close={_lcp_s} S_close={_scp_s} (entry L={_elp:.6f} S={_esp:.6f}) | "
-                                    f"dur={duration_sec:.0f}s lvl={_lvl} fill=L:{long_rate*100:.0f}%/S:{short_rate*100:.0f}% | {_reason}", level="INFO")
+                                log(f"[{sym}] EXIT_SIGNAL: net={_net_s} tgt={_tgt_s} | "
+                                    f"Entry={_ep_s} | "
+                                    f"dur={duration_sec:.0f}s lvl={_lvl} | {_reason}", level="INFO")
                             else:
                                 _gap = ""
                                 if _net is not None and _tgt is not None:
                                     _gap = f" gap={(_net - _tgt)*100:+.4f}%"
-                                log(f"[{sym}] EXIT_HOLD: net={_net_s} tgt={_tgt_s}{_gap} spread_out={_spr_s} | "
-                                    f"L_close={_lcp_s} S_close={_scp_s} (entry L={_elp:.6f} S={_esp:.6f}) | "
-                                    f"dur={duration_sec:.0f}s lvl={_lvl} fill=L:{long_rate*100:.0f}%/S:{short_rate*100:.0f}% | SKIP: {_reason}", level="INFO")
+                                log(f"[{sym}] EXIT_HOLD: net={_net_s} tgt={_tgt_s}{_gap} | "
+                                    f"Entry={_ep_s} | "
+                                    f"dur={duration_sec:.0f}s lvl={_lvl} | SKIP: {_reason}", level="INFO")
                         
                         current_level = state["details"].get("exit_level_index", 0)
                         new_level = exit_res.get("exit_level_index", current_level)
@@ -342,10 +325,8 @@ class Main:
                                 log(f"[{sym}] Profit decay: Level {new_level}, target: {target_val * 100:.3f}%", level="INFO")
                         
                         if is_exit:
-                            # Clean throttle log on exit
                             self._exit_log_ts.pop(sym, None)
                             self.pm.lock_for_exit(route, sym)
-                            # Send close command to Executor Process
                             if self.executor_writer:
                                 asyncio.create_task(async_write_msg(self.executor_writer, "CMD_CLOSE", {
                                     "route": route,
@@ -363,71 +344,38 @@ class Main:
                                     del self.banned_symbols[sym]
                                 else:
                                     continue
-                            
-                            prices_array.fill(np.inf)
-                            prices_array[:, 1] = 0.0
-                            prices_array[:, 2] = 0.0
-                            prices_array[:, 3] = 0.0
-                            filtered_offsets = {}
-                            
-                            for ex_name, ex_idx in EX_TO_IDX.items():
-                                book = self.books[ex_name].get(sym)
-                                ts_val = self.ts[ex_name].get(sym, 0.0)
-                                if book and book.get("bids") and book.get("asks"):
-                                    if (now_mono - ts_val) <= 5.0:  # is stale check
-                                        ask_idx, ask_p, ask_usd = OrderbookUtils.find_first_qualified_level(
-                                            book["asks"], self.min_top_depth_usd, is_ask=True
-                                        )
-                                        bid_idx, bid_p, bid_usd = OrderbookUtils.find_first_qualified_level(
-                                            book["bids"], self.min_top_depth_usd, is_ask=False
-                                        )
-                                        prices_array[ex_idx, 0] = ask_p
-                                        prices_array[ex_idx, 1] = ask_usd
-                                        prices_array[ex_idx, 2] = bid_p
-                                        prices_array[ex_idx, 3] = bid_usd
-                                        filtered_offsets[ex_idx] = (max(0, ask_idx), max(0, bid_idx))
-                            
-                            candidates = pre_calculate_orderbook(
-                                prices_array, 
-                                self.active_routes_array, 
-                                top_n=self.top_n_candidates,
-                                min_top_depth_usd=self.min_top_depth_usd
-                            )
-                            
-                            for cand in candidates:
-                                long_idx, short_idx, est_spread = int(cand[0]), int(cand[1]), float(cand[2])
-                                if long_idx < 0 or short_idx < 0 or est_spread <= 0.0:
-                                    continue
-                                long_ex, short_ex = IDX_TO_EX[long_idx], IDX_TO_EX[short_idx]
+                                    
+                            for route_key, roles in self.engine.exchange_roles.items():
+                                oracle_ex = roles["oracle"]
+                                target_ex = roles["target"]
                                 
-                                long_ts = self.ts[long_ex].get(sym, 0.0)
-                                short_ts = self.ts[short_ex].get(sym, 0.0)
-                                if long_ts <= 0.0 or short_ts <= 0.0:
-                                    continue
+                                oracle_book = self.books[oracle_ex].get(sym)
+                                target_book = self.books[target_ex].get(sym)
                                 
-                                diff_ms = abs(long_ts - short_ts) * 1000.0
-                                limit = self._get_desync_limit(self.entry_desync_limit, long_ex, short_ex)
+                                if not oracle_book or not target_book:
+                                    continue
+                                    
+                                oracle_ts = self.ts[oracle_ex].get(sym, 0.0)
+                                target_ts = self.ts[target_ex].get(sym, 0.0)
+                                
+                                if (now_mono - oracle_ts) > 5.0 or (now_mono - target_ts) > 5.0:
+                                    continue
+                                    
+                                diff_ms = abs(oracle_ts - target_ts) * 1000.0
+                                limit = self._get_desync_limit(self.entry_desync_limit, oracle_ex, target_ex)
                                 if limit is not None and diff_ms > limit:
                                     continue
-                                
-                                if self.pm.can_enter(long_ex, short_ex, sym):
-                                    size_usd = self.cfg["trading_risks"][long_ex.lower()]["trade_size_usd"]
-                                    long_ask_offset, _ = filtered_offsets.get(long_idx, (0, 0))
-                                    _, short_bid_offset = filtered_offsets.get(short_idx, (0, 0))
-                                    is_valid_entry, engine_res = self.engine.evaluate_entry(
-                                        self.books[long_ex][sym],
-                                        self.books[short_ex][sym],
-                                        cand,
-                                        size_usd,
-                                        long_ask_offset=long_ask_offset,
-                                        short_bid_offset=short_bid_offset
+
+                                if self.pm.can_enter(oracle_ex, target_ex, sym):
+                                    size_usd = float(self.cfg["trading_risks"][target_ex.lower()]["trade_size_usd"])
+                                    
+                                    is_valid_entry, engine_res = self.engine.evaluate_entry_v9(
+                                        oracle_book, target_book, oracle_ex, target_ex, size_usd
                                     )
                                     
-                                    route = f"{long_ex}_{short_ex}"
-                                    sig_key = (route, sym)
+                                    sig_key = (route_key, sym)
                                     
                                     if is_valid_entry:
-                                        # Signal dwell time check
                                         if self.min_signal_dwell_ms > 0:
                                             first_seen = self._signal_first_seen.get(sig_key)
                                             if first_seen is None:
@@ -436,24 +384,22 @@ class Main:
                                             dwell_ms = (now_mono - first_seen) * 1000.0
                                             if dwell_ms < self.min_signal_dwell_ms:
                                                 continue
-                                            # Dwell confirmed - reset key
                                             self._signal_first_seen.pop(sig_key, None)
                                             
-                                        # Normalize route to canonical form for PositionManager
-                                        canonical_route = self.pm._normalize_route(long_ex, short_ex)
-                                        self.pm.lock_for_entry(long_ex, short_ex, sym, engine_res)
-                                        # Send open command to Executor Process
+                                        canonical_route = self.pm._normalize_route(oracle_ex, target_ex)
+                                        self.pm.lock_for_entry(oracle_ex, target_ex, sym, engine_res)
+                                        
                                         if self.executor_writer:
                                             asyncio.create_task(async_write_msg(self.executor_writer, "CMD_OPEN", {
                                                 "sym": sym,
                                                 "route": canonical_route,
-                                                "long_ex": long_ex,
-                                                "short_ex": short_ex,
+                                                "long_ex": oracle_ex,   # keep for backward compatibility with PositionManager
+                                                "short_ex": target_ex,
+                                                "target_ex": target_ex,
+                                                "oracle_ex": oracle_ex,
                                                 "engine_res": engine_res
                                             }))
-                                        break
                                     else:
-                                        # Signal unconfirmed/vanished - reset timer
                                         self._signal_first_seen.pop(sig_key, None)
 
                             if len(self._signal_first_seen) > 100:

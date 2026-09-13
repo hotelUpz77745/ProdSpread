@@ -205,15 +205,17 @@ class ExecutorProcess:
     async def execute_open(self, data: dict):
         sym = data["sym"]
         route = data["route"]
-        long_ex = data["long_ex"]
-        short_ex = data["short_ex"]
+        target_ex = data["target_ex"]
+        oracle_ex = data["oracle_ex"]
         engine_res = data["engine_res"]
+        side = engine_res["side"]
 
         fsm = PositionFSM(
             sym=sym,
             route=route,
-            long_ex=long_ex,
-            short_ex=short_ex,
+            target_ex=target_ex,
+            oracle_ex=oracle_ex,
+            side=side,
             engine_res=engine_res,
             cfg=self.cfg,
             orders=self.orders,
@@ -226,14 +228,17 @@ class ExecutorProcess:
         self.active_fsm[sym] = fsm
         success = await fsm.run_open()
         if success:
-            spread_val = engine_res.get("vwap_spread", 0.0)
+            spread_val = engine_res.get("net_spread", 0.0)
             if sym not in self.analytics_map:
                 self.analytics_map[sym] = TradeAnalytics(sym, self.cfg["trading_risks"])
             self.analytics_map[sym].record_open(
-                route, "LONG_SHORT", long_ex, short_ex,
-                fsm.exec_res.get("entry_long_price", 0.0),
-                fsm.exec_res.get("entry_short_price", 0.0),
-                spread_val, 0.0
+                route=route,
+                direction=side,
+                target_ex=target_ex,
+                oracle_ex=oracle_ex,
+                target_price_in=fsm.exec_res.get("entry_price", 0.0),
+                spread_in=spread_val,
+                slippage_in=0.0
             )
         else:
             self.active_fsm.pop(sym, None)
@@ -249,13 +254,15 @@ class ExecutorProcess:
             # Restore FSM for positions loaded from state after bot restart
             state = self.pm.positions.get(route, {}).get(sym, {})
             details = state.get("details", {})
-            long_ex = details.get("long_ex") or route.split('_')[0]
-            short_ex = details.get("short_ex") or route.split('_')[1]
+            target_ex = details.get("target_ex")
+            oracle_ex = details.get("oracle_ex")
+            side = details.get("side", "LONG")
             fsm = PositionFSM(
                 sym=sym,
                 route=route,
-                long_ex=long_ex,
-                short_ex=short_ex,
+                target_ex=target_ex,
+                oracle_ex=oracle_ex,
+                side=side,
                 engine_res=details.get("engine_res", {}),
                 cfg=self.cfg,
                 orders=self.orders,
@@ -267,22 +274,19 @@ class ExecutorProcess:
             )
             fsm.open_time = details.get("open_time", time.time())
             fsm.open_time_ms = details.get("open_time_ms", int(fsm.open_time * 1000))
+            fsm.target_pos = {"size": details.get("qty", 0.0), "price": details.get("entry_price", 0.0)}
             fsm.exec_res = {
-                "entry_long_price": details.get("entry_long_price", 0.0),
-                "entry_short_price": details.get("entry_short_price", 0.0),
-                "long_executed_volume_rate": details.get("long_executed_volume_rate", 1.0),
-                "short_executed_volume_rate": details.get("short_executed_volume_rate", 1.0),
+                "entry_price": details.get("entry_price", 0.0),
+                "executed_volume_rate": details.get("executed_volume_rate", 1.0),
             }
 
         await fsm.run_close(exit_res, reason=reason)
         self.active_fsm.pop(sym, None)
 
 
-    async def _post_close_settlement(self, sym: str, route: str, long_ex: str, short_ex: str,
-                                     entry_long_price: float, entry_short_price: float,
-                                     exit_long_price: float, exit_short_price: float,
-                                     actual_long_usd: float, actual_short_usd: float,
-                                     exit_res: dict = None, reason: str = ""):
+    async def _post_close_settlement(self, sym: str, route: str, target_ex: str, oracle_ex: str,
+                                     entry_price: float, exit_price: float, side: str,
+                                     actual_usd: float, exit_res: dict = None, reason: str = ""):
         """Instant local PnL calculation in 0ms using actual execution prices."""
         try:
             if sym not in self.analytics_map:
@@ -290,22 +294,22 @@ class ExecutorProcess:
 
             if not self.analytics_map[sym].active_trade:
                 self.analytics_map[sym].record_open(
-                    route=route, direction="LONG_SHORT",
-                    long_ex=long_ex, short_ex=short_ex,
-                    long_price=entry_long_price, short_price=entry_short_price,
-                    spread=0.0, slippage=0.0
+                    route=route,
+                    direction=side,
+                    target_ex=target_ex,
+                    oracle_ex=oracle_ex,
+                    target_price_in=entry_price,
+                    spread_in=0.0,
+                    slippage_in=0.0
                 )
 
-            spread_out = exit_res.get("vwap_spread_out", 0.0) if exit_res else 0.0
             trade_obj = self.analytics_map[sym].record_close(
-                long_price_close=exit_long_price,
-                short_price_close=exit_short_price,
-                spread_out=spread_out,
+                target_price_close=exit_price,
+                spread_out=0.0,
                 slippage_out=0.0,
-                long_executed_usd=actual_long_usd,
-                short_executed_usd=actual_short_usd
+                target_executed_usd=actual_usd
             )
-
+            
             net_usd = trade_obj.get("Net_PnL_USD", 0.0) if trade_obj else 0.0
             net_yield = trade_obj.get("Net_PnL", 0.0) if trade_obj else 0.0
 

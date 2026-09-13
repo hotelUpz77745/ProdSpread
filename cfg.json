@@ -71,6 +71,17 @@
         "KUCOIN_BITGET": false,
         "OKX_BITGET": false
     },
+    "exchange_roles": {
+        "BINANCE_BITGET": {
+            "oracle": "BINANCE",
+            "target": "BITGET"
+        },
+        "BINANCE_KUCOIN": {
+            "oracle": "BINANCE",
+            "target": "KUCOIN"
+        }
+    },
+    "exchange_roles_desc": "Карта ролей: oracle — биржа-поводырь (только чтение стакана), target — биржа-мишень (исполнение ордеров).",
     "setup_margin_leverage": true,
     "margin_settings": {
         "BINANCE": {
@@ -158,9 +169,17 @@
                 "OKX_BITGET": 1.8
             },
             "close_confirm_timeout_sec_desc": "Max seconds to poll WS cache for zero-size position confirmation on exit. Configured per exchange pair.",
-            "hedged_exit": {
-                "desc": "Управление выходом из нормальной захеджированной позиции (обе ноги налиты).",
-                "normal_decay": [
+            "target_exit": {
+                "desc": "Управление выходом из одноногой позиции по локальному профиту на Мишени (v9).",
+                "stop_loss_pct": 0.005,
+                "stop_loss_pct_desc": "Макс. допустимый убыток (0.005 = 0.5%). При достижении — немедленный MARKET выход. Установить null для отключения.",
+                "ttl_sec": 60,
+                "ttl_sec_desc": "Максимальное время жизни позиции (сек). По истечении — принудительный MARKET выход.",
+                "exit_order_type": "LIMIT_IOC",
+                "exit_order_type_desc": "Тип ордера на выход: LIMIT_IOC (по стакану с проскальзыванием) или MARKET.",
+                "exit_slip_ratio": 0.001,
+                "exit_slip_ratio_desc": "Проскальзывание для выходного LIMIT_IOC ордера (0.001 = 0.1%).",
+                "decay_map": [
                     {
                         "step": 0,
                         "after_sec": 0,
@@ -192,34 +211,7 @@
                         "min_profit_ratio": -999.0
                     }
                 ],
-                "normal_decay_desc": "Карта снижения порога фиксации прибыли. min_profit_ratio — доля от фактического входного спреда. 0.8 = жду 80%% профита, 0.0 = безубыток, -999 = принудительный выход по маркету (TTL)."
-            },
-            "single_leg_exit": {
-                "desc": "Управление выходом из однобокой позиции (одна нога зависла, v8).",
-                "immediate_market": false,
-                "immediate_market_desc": "Если true — не чейзить стакан, а сразу сбросить по маркету.",
-                "max_chase_loss_ratio": 0.0050,
-                "max_chase_loss_ratio_desc": "Hard Stop-Loss: если текущий убыток по одиночной ноге превышает 0.50%, немедленный сброс по маркету.",
-                "chase_map": [
-                    {
-                        "step": 0,
-                        "after_sec": 0.0,
-                        "price_slip": -0.0005
-                    },
-                    {
-                        "step": 1,
-                        "after_sec": 0.35,
-                        "price_slip": -0.0015
-                    },
-                    {
-                        "step": 2,
-                        "after_sec": 0.8,
-                        "price_slip": -999.0
-                    }
-                ],
-                "chase_map_desc": "Карта чейзинга стакана с ультрабыстрыми HFT-интервалами (0.0с - 0.35с - 0.8с маркет).",
-                "limit_fill_wait_sec": 0.15,
-                "limit_fill_wait_sec_desc": "Пауза ожидания исполнения лимитного ордера чейзинга перед проверкой и отменой."
+                "decay_map_desc": "Карта снижения порога фиксации локальной прибыли. min_profit_ratio — доля от расчетного входного спреда."
             },
             "max_desync_ms": {
                 "BINANCE_KUCOIN": 350,

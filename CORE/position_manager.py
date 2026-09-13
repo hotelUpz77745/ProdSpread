@@ -52,9 +52,15 @@ class PositionManager:
                         
                         long_ex = state.get("details", {}).get("long_ex")
                         short_ex = state.get("details", {}).get("short_ex")
-                        if long_ex and short_ex:
-                            self.exchange_state[long_ex]["current"] += 1
-                            self.exchange_state[short_ex]["current"] += 1
+                        target_ex = state.get("details", {}).get("target_ex")
+                        oracle_ex = state.get("details", {}).get("oracle_ex")
+                        
+                        ex1 = long_ex or oracle_ex
+                        ex2 = short_ex or target_ex
+                        
+                        if ex1 and ex2:
+                            self.exchange_state[ex1]["current"] += 1
+                            self.exchange_state[ex2]["current"] += 1
                             
             self._update_locks()
         except Exception as e:
@@ -127,8 +133,8 @@ class PositionManager:
         
         self._update_locks()
         
-    def confirm_entry(self, long_ex: str, short_ex: str, sym: str, exec_res: dict, open_time: float):
-        route = self._normalize_route(long_ex, short_ex)
+    def confirm_entry(self, oracle_ex: str, target_ex: str, sym: str, exec_res: dict, open_time: float):
+        route = self._normalize_route(oracle_ex, target_ex)
         state = self.positions[route][sym]
         
         if state["pending_action"] != "OPEN":
@@ -137,23 +143,21 @@ class PositionManager:
         state["current_position"] = True
         state["pending_action"] = None
         state["details"].update({
-            "long_ex": long_ex,
-            "short_ex": short_ex,
-            "entry_long_price": exec_res.get("actual_long_price", 0.0) or exec_res.get("entry_long_price", 0.0),
-            "entry_short_price": exec_res.get("actual_short_price", 0.0) or exec_res.get("entry_short_price", 0.0),
-            "long_executed_volume_rate": exec_res.get("long_executed_volume_rate", 1.0),
-            "short_executed_volume_rate": exec_res.get("short_executed_volume_rate", 1.0),
-            "actual_gross_spread": exec_res.get("actual_gross_spread"),
-            "actual_net_spread": exec_res.get("actual_net_spread"),
-            "use_extreme_decay": exec_res.get("use_extreme_decay", False),
+            "oracle_ex": oracle_ex,
+            "target_ex": target_ex,
+            "side": exec_res.get("side", "LONG"),
+            "entry_price": exec_res.get("entry_price", 0.0),
+            "qty": exec_res.get("qty", 0.0),
+            "executed_volume_rate": exec_res.get("executed_volume_rate", 1.0),
+            "net_spread": exec_res.get("net_spread"),
             "open_time": open_time
         })
         
-        self.exchange_state[long_ex]["pending"] -= 1
-        self.exchange_state[short_ex]["pending"] -= 1
+        self.exchange_state[oracle_ex]["pending"] -= 1
+        self.exchange_state[target_ex]["pending"] -= 1
         
-        self.exchange_state[long_ex]["current"] += 1
-        self.exchange_state[short_ex]["current"] += 1
+        self.exchange_state[oracle_ex]["current"] += 1
+        self.exchange_state[target_ex]["current"] += 1
         
         self._update_locks()
         self._save_state()
@@ -182,15 +186,15 @@ class PositionManager:
             
         # If position was still in OPEN stage (emergency leg unwind during entry)
         if state["pending_action"] == "OPEN":
-            long_ex, short_ex = route.split('_')
-            self.rollback_entry(long_ex, short_ex, sym)
+            ex1, ex2 = route.split('_')
+            self.rollback_entry(ex1, ex2, sym)
             return
 
         if state["pending_action"] != "CLOSE":
             return
             
-        long_ex = state["details"].get("long_ex")
-        short_ex = state["details"].get("short_ex")
+        long_ex = state["details"].get("long_ex") or state["details"].get("oracle_ex")
+        short_ex = state["details"].get("short_ex") or state["details"].get("target_ex")
         if not long_ex or not short_ex:
             long_ex, short_ex = route.split('_')
         

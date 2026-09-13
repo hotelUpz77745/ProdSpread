@@ -13,33 +13,28 @@ from CORE.ipc_socket import async_write_msg
 from API.orders import InsufficientMarginError
 from CORE.trading_engine import TradingEngine
 
-
 class PositionState(str, Enum):
     IDLE = "IDLE"
-    SUBMITTING = "SUBMITTING"
-    RESTING_BOOK = "RESTING_BOOK"
-    CANCELLING = "CANCELLING"
-    VERIFYING_FILL = "VERIFYING_FILL"
-    ACTIVE_HEDGED = "ACTIVE_HEDGED"
-    SINGLE_LEG_EXPOSURE = "SINGLE_LEG_EXPOSURE"
-    EMERGENCY_UNWIND = "EMERGENCY_UNWIND"
-    CLOSING = "CLOSING"
-    SETTLED = "SETTLED"
-    ABORTED = "ABORTED"
-    FAILED = "FAILED"
-
+    SUBMITTING = "SUBMITTING"      # Ордер летит в Target
+    VERIFYING_FILL = "VERIFYING_FILL"  # Ждём WS-подтверждения налива
+    ACTIVE = "ACTIVE"              # Позиция открыта, мониторим P&L
+    CLOSING = "CLOSING"            # Закрываем позицию
+    SETTLED = "SETTLED"            # Позиция закрыта, PnL посчитан
+    ABORTED = "ABORTED"            # Нулевой налив / ошибка
+    FAILED = "FAILED"              # Критическая ошибка
 
 class PositionFSM:
     def __init__(
         self,
         sym: str,
         route: str,
-        long_ex: str,
-        short_ex: str,
-        engine_res: Dict[str, Any],
-        cfg: Dict[str, Any],
-        orders: Dict[str, Any],
-        coin_to_native: Dict[str, Dict[str, str]],
+        target_ex: str,        # v9: только Target (исполнитель)
+        oracle_ex: str,        # v9: только для логов (поводырь)
+        side: str,             # "LONG" | "SHORT"
+        engine_res: dict,
+        cfg: dict,
+        orders: dict,
+        coin_to_native: dict,
         pm: Any,
         writer: Optional[asyncio.StreamWriter],
         ban_coin_cb: Any,
@@ -47,8 +42,9 @@ class PositionFSM:
     ):
         self.sym = sym
         self.route = route
-        self.long_ex = long_ex
-        self.short_ex = short_ex
+        self.target_ex = target_ex
+        self.oracle_ex = oracle_ex
+        self.side = side
         self.engine_res = engine_res
         self.cfg = cfg
         self.orders = orders
@@ -57,608 +53,208 @@ class PositionFSM:
         self.writer = writer
         self.ban_coin_cb = ban_coin_cb
         self.on_settle_cb = on_settle_cb
-
-        self.native_long = self.coin_to_native[sym][long_ex] if sym in self.coin_to_native and long_ex in self.coin_to_native[sym] else sym
-        self.native_short = self.coin_to_native[sym][short_ex] if sym in self.coin_to_native and short_ex in self.coin_to_native[sym] else sym
-
+        
+        self.native_target = self.coin_to_native[sym][target_ex]
         self.state = PositionState.IDLE
-        self.engine = TradingEngine(self.cfg, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
+        self.engine = TradingEngine(self.cfg, {0:"BINANCE",1:"KUCOIN",2:"OKX",3:"BITGET"})
+        
         entry_cfg = self.cfg["trading_rules"]["entry"]
         parallel_cfg = entry_cfg["parallel_entry_logic"]
         ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
-
-        self.order_policy = entry_cfg["order_execution_type"].upper()
-        self.min_fill_rate = float(parallel_cfg["min_hedge_fill_rate"])
-
-        # Quarantines from configs (no magic constants)
+        
         self.q_entry_error = float(ban_q["entry_error"])
         self.q_zero_fill = float(ban_q["zero_fill"])
-        self.q_single_leg = float(ban_q["single_leg_exposure"])
-
-        # Fill confirmation parameters from parallel_entry_logic
+        
+        target_exit_cfg = self.cfg["trading_rules"]["exit"].get("target_exit", {})
+        self.ttl_sec = float(target_exit_cfg.get("ttl_sec", 60.0))
+        self.exit_order_type = target_exit_cfg.get("exit_order_type", "LIMIT_IOC")
+        self.exit_slip_ratio = float(target_exit_cfg.get("exit_slip_ratio", 0.001))
+        
         timeout_cfg = parallel_cfg["fill_confirm_timeout_sec"]
-        pair_key1 = f"{long_ex}_{short_ex}".upper()
-        pair_key2 = f"{short_ex}_{long_ex}".upper()
+        pair_key1 = f"{target_ex}_{oracle_ex}".upper()
+        pair_key2 = f"{oracle_ex}_{target_ex}".upper()
         if pair_key1 in timeout_cfg:
             self.fill_confirm_timeout = float(timeout_cfg[pair_key1])
         elif pair_key2 in timeout_cfg:
             self.fill_confirm_timeout = float(timeout_cfg[pair_key2])
         else:
-            raise KeyError(
-                f"fill_confirm_timeout_sec does not contain pair {pair_key1} or {pair_key2} in cfg.json"
-            )
-
+            self.fill_confirm_timeout = 0.5  # default
+        
         self.fill_confirm_poll_interval = float(parallel_cfg["fill_confirm_poll_interval_sec"])
         self.entry_api_timeout = float(parallel_cfg["entry_api_timeout_sec"])
-
-        # Position close confirmation parameters (from exit section with fallback to entry * 2)
-        exit_timeout_cfg = self.cfg["trading_rules"]["exit"]["close_confirm_timeout_sec"]
-        if exit_timeout_cfg:
-            if isinstance(exit_timeout_cfg, dict):
-                pair_key1 = f"{long_ex}_{short_ex}".upper()
-                pair_key2 = f"{short_ex}_{long_ex}".upper()
-                if pair_key1 in exit_timeout_cfg:
-                    self.close_confirm_timeout = float(exit_timeout_cfg[pair_key1])
-                elif pair_key2 in exit_timeout_cfg:
-                    self.close_confirm_timeout = float(exit_timeout_cfg[pair_key2])
-                else:
-                    self.close_confirm_timeout = self.fill_confirm_timeout * 2.0
-            else:
-                self.close_confirm_timeout = float(exit_timeout_cfg)
-        else:
-            self.close_confirm_timeout = self.fill_confirm_timeout * 2.0
-
-        # Emergency unwind parameters (from config strictly via [''])
+        
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
         self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
-        self.unwind_retry_pause = float(unwind_cfg["retry_pause_sec"])
         self.ws_verify_timeout = float(unwind_cfg["ws_verify_timeout_sec"])
-
-        sle_cfg = self.cfg["trading_rules"]["exit"]["single_leg_exit"]
-        self.single_leg_limit_fill_wait = float(sle_cfg["limit_fill_wait_sec"])
-        self.max_chase_loss_ratio = float(sle_cfg["max_chase_loss_ratio"])
+        self.unwind_retry_pause = float(unwind_cfg.get("retry_pause_sec", 0.05))
+        
         ban_cfg = self.cfg["trading_rules"]["ban_rules"]
         self.perm_ban_loss_pct = float(ban_cfg["perm_ban_loss_pct"])
-
-        self.exec_res: Dict[str, Any] = {}
-        self.long_pos: Dict[str, float] = {"size": 0.0, "price": 0.0}
-        self.short_pos: Dict[str, float] = {"size": 0.0, "price": 0.0}
+        
+        self.target_pos: dict = {"size": 0.0, "price": 0.0}
         self.open_time: float = 0.0
         self.open_time_ms: int = 0
-        self.ws_fill_timings: Dict[str, float] = {}
-        self.ws_close_timings: Dict[str, float] = {}
+        self.exec_res: dict = {}
 
     def _set_state(self, new_state: PositionState):
-        prev = self.state
         self.state = new_state
-        log(f"[{self.sym}][FSM] {prev} -> {new_state}", level="DEBUG")
-
-    async def _wait_for_fill_confirmation(
-        self,
-        req_long_qty: float,
-        req_short_qty: float,
-        ev_long: Optional[asyncio.Event] = None,
-        ev_short: Optional[asyncio.Event] = None,
-    ) -> Tuple[Dict[str, float], Dict[str, float], float, float]:
-        """
-        Event-driven reactive polling of local position WS-cache until both legs reach min_fill_rate
-        or fill_confirm_timeout_sec expires.
-        Zero timer jitter (0.05-0.15 ms).
-        """
-        start_time = time.perf_counter()
-        deadline = start_time + self.fill_confirm_timeout
-        l_rate = 0.0
-        s_rate = 0.0
-        self.ws_fill_timings = {self.long_ex: 0.0, self.short_ex: 0.0}
-
-        while True:
-            # Safe read from local WS cache
-            if self.long_ex in self.orders:
-                try:
-                    p_long = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
-                    if p_long and p_long.get("size", 0.0) > 0:
-                        self.long_pos = p_long
-                except Exception as e:
-                    log(f"[{self.sym}] Error reading WS cache {self.long_ex}: {e}", level="WARNING")
-
-            if self.short_ex in self.orders:
-                try:
-                    p_short = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
-                    if p_short and p_short.get("size", 0.0) > 0:
-                        self.short_pos = p_short
-                except Exception as e:
-                    log(f"[{self.sym}] Error reading WS cache {self.short_ex}: {e}", level="WARNING")
-
-            l_size = self.long_pos.get("size", 0.0)
-            s_size = self.short_pos.get("size", 0.0)
-
-            l_rate = (l_size / req_long_qty) if req_long_qty > 0 else 0.0
-            s_rate = (s_size / req_short_qty) if req_short_qty > 0 else 0.0
-
-            now = time.perf_counter()
-            elapsed_now_ms = (now - start_time) * 1000.0
-
-            if req_long_qty > 0 and l_rate >= self.min_fill_rate and self.ws_fill_timings.get(self.long_ex, 0.0) == 0.0:
-                self.ws_fill_timings[self.long_ex] = elapsed_now_ms
-            if req_short_qty > 0 and s_rate >= self.min_fill_rate and self.ws_fill_timings.get(self.short_ex, 0.0) == 0.0:
-                self.ws_fill_timings[self.short_ex] = elapsed_now_ms
-
-            # Readiness predicate: verify requested legs (> 0)
-            l_ok = (l_rate >= self.min_fill_rate) if req_long_qty > 0 else True
-            s_ok = (s_rate >= self.min_fill_rate) if req_short_qty > 0 else True
-
-            if l_ok and s_ok:
-                leg_desc = "Both legs" if (req_long_qty > 0 and req_short_qty > 0) else "Single leg"
-                log(f"[{self.sym}] {leg_desc} confirmed reactively in {elapsed_now_ms:.2f} ms (L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%)", level="INFO")
-                break
-
-            remaining = deadline - now
-            if remaining <= 0:
-                log(f"[{self.sym}] Fill confirmation timeout ({elapsed_now_ms:.1f} ms). L:{l_rate*100:.1f}%, S:{s_rate*100:.1f}%", level="WARNING")
-                break
-
-            # If event was already set before entering wait
-            if (ev_long and ev_long.is_set()) or (ev_short and ev_short.is_set()):
-                if ev_long:
-                    ev_long.clear()
-                if ev_short:
-                    ev_short.clear()
-                continue
-
-            # Reactive wait for push event from either leg with protective timeout
-            wait_tasks = []
-            if ev_long:
-                wait_tasks.append(asyncio.create_task(ev_long.wait()))
-            if ev_short:
-                wait_tasks.append(asyncio.create_task(ev_short.wait()))
-
-            if not wait_tasks:
+        
+    async def _wait_for_fill_v9(self, req_qty: float, ev_target: asyncio.Event) -> Tuple[dict, float]:
+        t0 = time.perf_counter()
+        filled_qty = 0.0
+        
+        # Reactive await via event
+        if ev_target:
+            try:
+                await asyncio.wait_for(ev_target.wait(), timeout=self.fill_confirm_timeout)
+            except asyncio.TimeoutError:
+                pass
+                
+        # Polling fallback
+        while (time.perf_counter() - t0) < self.fill_confirm_timeout:
+            pos = self.orders[self.target_ex].get_executed_position(self.native_target, self.side)
+            if pos:
+                filled_qty = pos.get("size", 0.0)
+                if filled_qty > 0.0:
+                    return pos, (filled_qty / req_qty if req_qty > 0 else 0.0)
+            if self.fill_confirm_poll_interval > 0:
                 await asyncio.sleep(self.fill_confirm_poll_interval)
-                continue
-
-            done, pending = await asyncio.wait(
-                wait_tasks,
-                timeout=remaining,
-                return_when=asyncio.FIRST_COMPLETED
-            )
-            for t in pending:
-                t.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-
-            if ev_long:
-                ev_long.clear()
-            if ev_short:
-                ev_short.clear()
-
-        return self.long_pos, self.short_pos, l_rate, s_rate
-
-    async def _wait_for_close_confirmation(
-        self,
-        ev_long: Optional[asyncio.Event] = None,
-        ev_short: Optional[asyncio.Event] = None,
-    ) -> Tuple[bool, float, float]:
-        """
-        Event-driven reactive polling of local WS cache until both legs are zeroed (size == 0.0)
-        or close_confirm_timeout_sec expires.
-        Returns (is_closed, close_price_long, close_price_short).
-        """
-        start_time = time.perf_counter()
-        deadline = start_time + self.close_confirm_timeout
-        close_p_long = 0.0
-        close_p_short = 0.0
-        self.ws_close_timings = {self.long_ex: 0.0, self.short_ex: 0.0}
-
-        while True:
-            l_closed = True
-            s_closed = True
-
-            if self.long_ex in self.orders:
-                try:
-                    p_long = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
-                    if p_long and p_long.get("size", 0.0) > 0:
-                        l_closed = False
-                    if hasattr(self.orders[self.long_ex], "get_last_close_price"):
-                        p = self.orders[self.long_ex].get_last_close_price(self.native_long)
-                        if p > 0:
-                            close_p_long = p
-                except Exception as e:
-                    log(f"[{self.sym}] Error reading WS close cache {self.long_ex}: {e}", level="WARNING")
-
-            if self.short_ex in self.orders:
-                try:
-                    p_short = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
-                    if p_short and p_short.get("size", 0.0) > 0:
-                        s_closed = False
-                    if hasattr(self.orders[self.short_ex], "get_last_close_price"):
-                        p = self.orders[self.short_ex].get_last_close_price(self.native_short)
-                        if p > 0:
-                            close_p_short = p
-                except Exception as e:
-                    log(f"[{self.sym}] Error reading WS close cache {self.short_ex}: {e}", level="WARNING")
-
-            now = time.perf_counter()
-            elapsed_now_ms = (now - start_time) * 1000.0
-
-            if l_closed and self.ws_close_timings.get(self.long_ex, 0.0) == 0.0:
-                self.ws_close_timings[self.long_ex] = elapsed_now_ms
-            if s_closed and self.ws_close_timings.get(self.short_ex, 0.0) == 0.0:
-                self.ws_close_timings[self.short_ex] = elapsed_now_ms
-
-            if l_closed and s_closed:
-                log(f"[{self.sym}] Both legs confirmed closed reactively in {elapsed_now_ms:.2f} ms (0.0)", level="INFO")
-                return True, close_p_long, close_p_short
-
-            remaining = deadline - now
-            if remaining <= 0:
-                log(f"[{self.sym}] WS close confirmation timeout ({elapsed_now_ms:.1f} ms), falling back to control check...", level="WARNING")
-                return False, close_p_long, close_p_short
-
-            if (ev_long and ev_long.is_set()) or (ev_short and ev_short.is_set()):
-                if ev_long:
-                    ev_long.clear()
-                if ev_short:
-                    ev_short.clear()
-                continue
-
-            wait_tasks = []
-            if ev_long:
-                wait_tasks.append(asyncio.create_task(ev_long.wait()))
-            if ev_short:
-                wait_tasks.append(asyncio.create_task(ev_short.wait()))
-
-            if not wait_tasks:
-                await asyncio.sleep(self.fill_confirm_poll_interval)
-                continue
-
-            done, pending = await asyncio.wait(
-                wait_tasks,
-                timeout=remaining,
-                return_when=asyncio.FIRST_COMPLETED
-            )
-            for t in pending:
-                t.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-
-            if ev_long:
-                ev_long.clear()
-            if ev_short:
-                ev_short.clear()
+            else:
+                await asyncio.sleep(0.005)
+                
+        log(f"[{self.sym}] v9 Fill confirmation timeout on {self.target_ex}.", level="WARNING")
+        
+        # REST fallback
+        try:
+            pos = await self.orders[self.target_ex].get_exact_position_guarded(self.native_target, self.side)
+            if pos:
+                filled_qty = pos.get("size", 0.0)
+                return pos, (filled_qty / req_qty if req_qty > 0 else 0.0)
+        except Exception as e:
+            log(f"[{self.sym}] Error fetching REST position on {self.target_ex}: {e}", level="ERROR")
+            
+        return {"size": 0.0, "price": 0.0}, 0.0
 
     async def run_open(self) -> bool:
         """
-        Start position opening pipeline (PARALLEL_LIMIT_IOC):
-        IDLE -> SUBMITTING (Both Legs) -> VERIFYING_FILL -> ACTIVE_HEDGED / SINGLE_LEG_EXPOSURE / ABORTED
+        v9: IDLE -> SUBMITTING -> VERIFYING_FILL -> ACTIVE / ABORTED
+        Кидаем 1 LIMIT_IOC в Target, ждём WS-подтверждения.
         """
         self._set_state(PositionState.SUBMITTING)
         
-        entry_cfg = self.cfg["trading_rules"]["entry"]
-        parallel_cfg = entry_cfg["parallel_entry_logic"]
+        entry_price = self.engine_res["entry_price"]
+        size_usd = float(self.cfg["trading_risks"][self.target_ex.lower()]["trade_size_usd"])
+        slip = float(self.cfg["trading_risks"][self.target_ex.lower()]["limit_slip_ratio"])
         
-        spread_val = self.engine_res.get("net_spread", self.engine_res.get("vwap_spread", 0.0))
-        log(f"[{self.sym}] Opening (PARALLEL_LIMIT_IOC): {self.long_ex} (L) / {self.short_ex} (S) | Net Spread: {spread_val * 100:.2f}%", level="INFO")
+        if self.side == "LONG":
+            order_side = "BUY"
+            limit_price = entry_price * (1 + slip)
+            position_side = "LONG"
+        else:
+            order_side = "SELL"
+            limit_price = entry_price * (1 - slip)
+            position_side = "SHORT"
         
-        size_long_usd = float(self.cfg["trading_risks"][self.long_ex.lower()]["trade_size_usd"])
-        size_short_usd = float(self.cfg["trading_risks"][self.short_ex.lower()]["trade_size_usd"])
+        log(f"[{self.sym}] v9 Opening {self.side} on {self.target_ex} | "
+            f"Price: {limit_price:.6f} (VWAP: {entry_price:.6f}) | "
+            f"Net Spread: {self.engine_res.get('net_spread', 0)*100:.3f}%", level="INFO")
         
-        # Calculate prices (current top book or VWAP depending on engine logic)
-        price_long_calc = self.engine_res.get("long_avg_price", 0.0)
-        price_short_calc = self.engine_res.get("short_avg_price", 0.0)
+        ev_target = None
+        if hasattr(self.orders[self.target_ex], "subscribe_position_update"):
+            ev_target = self.orders[self.target_ex].subscribe_position_update(
+                self.native_target, position_side
+            )
         
-        # Use slippage limits from trading_risks per exchange
-        long_slip = float(self.cfg["trading_risks"][self.long_ex.lower()]["limit_slip_ratio"])
-        short_slip = float(self.cfg["trading_risks"][self.short_ex.lower()]["limit_slip_ratio"])
-        
-        price_long_limit = price_long_calc * (1 + long_slip)
-        price_short_limit = price_short_calc * (1 - short_slip)
-        
-        ev_long = None
-        ev_short = None
-        
-        if self.long_ex in self.orders and hasattr(self.orders[self.long_ex], "subscribe_position_update"):
-            ev_long = self.orders[self.long_ex].subscribe_position_update(self.native_long, "LONG")
-        if self.short_ex in self.orders and hasattr(self.orders[self.short_ex], "subscribe_position_update"):
-            ev_short = self.orders[self.short_ex].subscribe_position_update(self.native_short, "SHORT")
-            
-        req_long_qty = self.engine_res.get("long_qty", 0.0)
-        req_short_qty = self.engine_res.get("short_qty", 0.0)
-        
-        log(f"[{self.sym}] Phase 1: Sending PARALLEL LIMIT_IOC | L: {price_long_limit:.6f}, S: {price_short_limit:.6f}", level="INFO")
-        
-        tasks = []
-        tasks.append(self.orders[self.long_ex].place_order(
-            self.native_long, "BUY", size_long_usd, price_long_limit, order_type="LIMIT_IOC", position_side="LONG"
-        ))
-        tasks.append(self.orders[self.short_ex].place_order(
-            self.native_short, "SELL", size_short_usd, price_short_limit, order_type="LIMIT_IOC", position_side="SHORT"
-        ))
+        req_qty = self.engine_res.get("qty", size_usd / entry_price)
         
         try:
-            results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=self.entry_api_timeout)
+            await asyncio.wait_for(
+                self.orders[self.target_ex].place_order(
+                    self.native_target, order_side, size_usd, limit_price,
+                    order_type="LIMIT_IOC", position_side=position_side
+                ),
+                timeout=self.entry_api_timeout
+            )
+        except InsufficientMarginError as e:
+            log(f"[{self.sym}] Target Insufficient Margin: {e}", level="WARNING")
+            self._set_state(PositionState.ABORTED)
+            self._notify_pos_failed("MARGIN_ERROR")
+            return False
         except asyncio.TimeoutError:
-            log(f"[{self.sym}] API Timeout during PARALLEL LIMIT_IOC. Launching emergency unwind just in case.", level="ERROR")
+            log(f"[{self.sym}] API Timeout on {self.target_ex}", level="ERROR")
             self.ban_coin_cb(self.sym, reason="Entry API Timeout", duration_sec=self.q_entry_error)
-            # Must explicitly unwind because exchange might have processed the order!
-            await self._emergency_unwind()
+            self._set_state(PositionState.ABORTED)
             self._notify_pos_failed("ENTRY_TIMEOUT")
             return False
-        
-        for i, res in enumerate(results):
-            ex_name = self.long_ex if i == 0 else self.short_ex
-            if isinstance(res, Exception):
-                log(f"[{self.sym}] Entry error ({ex_name}): {res}.", level="ERROR")
-                self.ban_coin_cb(self.sym, reason=str(res), duration_sec=self.q_entry_error)
+        except Exception as e:
+            log(f"[{self.sym}] Entry error on {self.target_ex}: {e}", level="ERROR")
+            self.ban_coin_cb(self.sym, reason=str(e), duration_sec=self.q_entry_error)
+            self._set_state(PositionState.ABORTED)
+            self._notify_pos_failed("ENTRY_ERROR")
+            return False
         
         self._set_state(PositionState.VERIFYING_FILL)
+        filled_pos, fill_rate = await self._wait_for_fill_v9(req_qty, ev_target)
         
-        l_pos, s_pos, l_rate, s_rate = await self._wait_for_fill_confirmation(
-            req_long_qty, req_short_qty, ev_long=ev_long, ev_short=ev_short
-        )
+        if hasattr(self.orders[self.target_ex], "unsubscribe_position_update"):
+            self.orders[self.target_ex].unsubscribe_position_update(self.native_target, position_side)
         
-        if hasattr(self.orders[self.long_ex], "unsubscribe_position_update"):
-            self.orders[self.long_ex].unsubscribe_position_update(self.native_long, "LONG")
-        if hasattr(self.orders[self.short_ex], "unsubscribe_position_update"):
-            self.orders[self.short_ex].unsubscribe_position_update(self.native_short, "SHORT")
-            
-        l_qty = l_pos.get("size", 0.0)
-        s_qty = s_pos.get("size", 0.0)
-        l_price = l_pos.get("price", 0.0)
-        s_price = s_pos.get("price", 0.0)
+        filled_qty = filled_pos.get("size", 0.0)
+        filled_price = filled_pos.get("price", 0.0)
         
-        need_l_rest = (req_long_qty > 0 and l_qty <= 0.0)
-        need_s_rest = (req_short_qty > 0 and s_qty <= 0.0)
-        
-        if need_l_rest or need_s_rest:
-            log(f"[{self.sym}] WS timeout reached with missing fills (L:{l_qty}, S:{s_qty}). Querying REST to avoid ghost positions...", level="WARNING")
-            rest_tasks = []
-            
-            if need_l_rest and self.long_ex in self.orders:
-                rest_tasks.append(self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG"))
-            else:
-                rest_tasks.append(asyncio.sleep(0, result={"size": 0.0, "price": 0.0}))
-                
-            if need_s_rest and self.short_ex in self.orders:
-                rest_tasks.append(self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT"))
-            else:
-                rest_tasks.append(asyncio.sleep(0, result={"size": 0.0, "price": 0.0}))
-                
-            rest_res = await asyncio.gather(*rest_tasks, return_exceptions=True)
-            
-            if need_l_rest and self.long_ex in self.orders:
-                l_rest = rest_res[0] if not isinstance(rest_res[0], Exception) else {"size": 0.0}
-                if l_rest.get("size", 0.0) > 0:
-                    l_qty = l_rest["size"]
-                    l_price = l_rest.get("price", l_price)
-                    l_rate = (l_qty / req_long_qty) if req_long_qty > 0 else 0.0
-                    self.long_pos = {"size": l_qty, "price": l_price}
-                    log(f"[{self.sym}] REST recovered LONG fill: {l_qty:.4f}", level="INFO")
-                    
-            if need_s_rest and self.short_ex in self.orders:
-                s_rest = rest_res[1] if not isinstance(rest_res[1], Exception) else {"size": 0.0}
-                if s_rest.get("size", 0.0) > 0:
-                    s_qty = s_rest["size"]
-                    s_price = s_rest.get("price", s_price)
-                    s_rate = (s_qty / req_short_qty) if req_short_qty > 0 else 0.0
-                    self.short_pos = {"size": s_qty, "price": s_price}
-                    log(f"[{self.sym}] REST recovered SHORT fill: {s_qty:.4f}", level="INFO")
-        
-        log(f"[{self.sym}] Phase 2: Fill results -> LONG: {l_qty:.4f} ({l_rate*100:.1f}%), SHORT: {s_qty:.4f} ({s_rate*100:.1f}%)", level="INFO")
-        
-        if l_qty <= 0.0 and s_qty <= 0.0:
-            log(f"[{self.sym}] Zero Fill: Neither leg filled. Quarantine {self.q_zero_fill:.0f}s.", level="WARNING")
-            self.ban_coin_cb(self.sym, reason="Zero Fill (Both Legs)", duration_sec=self.q_zero_fill)
+        if filled_qty <= 0.0:
+            log(f"[{self.sym}] Zero Fill on {self.target_ex}. Quarantine {self.q_zero_fill:.0f}s.", level="WARNING")
+            self.ban_coin_cb(self.sym, reason="Zero Fill (v9)", duration_sec=self.q_zero_fill)
             self._set_state(PositionState.ABORTED)
             self._notify_pos_failed("ZERO_FILL")
             return False
-            
-        # Check partial vs full hedge
-        # If both are somewhat filled, check if they are balanced enough
-        min_hedge_rate = self.min_fill_rate
         
-        if l_qty > 0 and s_qty > 0:
-            l_notional = l_qty * l_price
-            s_notional = s_qty * s_price
-            ratio = min(l_notional, s_notional) / max(l_notional, s_notional)
-            if ratio >= min_hedge_rate:
-                log(f"[{self.sym}] Both legs filled successfully. Balance ratio {ratio*100:.1f}%. State -> ACTIVE_HEDGED.", level="INFO")
-                # TODO: trim excess if needed (for now just finalize)
-                self._finalize_open(l_qty, s_qty, l_price, s_price)
-                return True
+        self.target_pos = filled_pos
+        self._finalize_open_v9(filled_qty, filled_price, fill_rate)
+        return True
+
+    def _finalize_open_v9(self, filled_qty: float, filled_price: float, fill_rate: float):
+        self.open_time = time.time()
+        self.open_time_ms = int(self.open_time * 1000)
         
-        # SINGLE LEG EXPOSURE
-        sle_cfg = self.cfg["trading_rules"]["exit"]["single_leg_exit"]
-        if sle_cfg["immediate_market"]:
-            log(f"[{self.sym}] Single leg exposure detected. Immediate market exit enabled.", level="WARNING")
-            if l_qty > 0:
-                await self._emergency_unwind_single(self.long_ex, self.native_long, l_qty, l_price, "BUY", "LONG")
-            if s_qty > 0:
-                await self._emergency_unwind_single(self.short_ex, self.native_short, s_qty, s_price, "SELL", "SHORT")
-            self._set_state(PositionState.ABORTED)
-            self._notify_pos_failed("SINGLE_LEG_IMMEDIATE_MARKET")
-            return False
-
-        log(f"[{self.sym}] Transitioning to SINGLE_LEG_EXPOSURE handling.", level="WARNING")
-        self._set_state(PositionState.SINGLE_LEG_EXPOSURE)
-        await self._run_single_leg_exposure(l_qty, s_qty, l_price, s_price)
-        return False
-
-    async def _run_single_leg_exposure(self, l_qty: float, s_qty: float, l_price: float, s_price: float):
-        """
-        Order book chasing for single leg exit.
-        """
-        # Determine exposed leg
-        if l_qty > 0 and s_qty <= 0.0:
-            open_ex = self.long_ex
-            native_sym = self.native_long
-            qty_to_close = l_qty
-            entry_price = l_price
-            close_side = "SELL"
-            pos_side = "LONG"
-            engine_price_key = "long_avg_price" 
-            ev_leg = self.orders[open_ex].subscribe_position_update(native_sym, "LONG") if hasattr(self.orders[open_ex], "subscribe_position_update") else None
-        elif s_qty > 0 and l_qty <= 0.0:
-            open_ex = self.short_ex
-            native_sym = self.native_short
-            qty_to_close = s_qty
-            entry_price = s_price
-            close_side = "BUY"
-            pos_side = "SHORT"
-            engine_price_key = "short_avg_price"
-            ev_leg = self.orders[open_ex].subscribe_position_update(native_sym, "SHORT") if hasattr(self.orders[open_ex], "subscribe_position_update") else None
-        else:
-            # Anomaly: unwind both if needed
-            if l_qty > 0:
-                await self._emergency_unwind_single(self.long_ex, self.native_long, l_qty, l_price, "BUY", "LONG")
-            if s_qty > 0:
-                await self._emergency_unwind_single(self.short_ex, self.native_short, s_qty, s_price, "SELL", "SHORT")
-            self.ban_coin_cb(self.sym, reason="Imbalanced Fill Both Legs Unwound", duration_sec=self.q_single_leg)
-            self._set_state(PositionState.ABORTED)
-            self._notify_pos_failed("IMBALANCED_FILL_UNWOUND")
-            return
-            
-        sle_cfg = self.cfg["trading_rules"]["exit"]["single_leg_exit"]
-        chase_map = sle_cfg["chase_map"]
+        target_fee = float(self.cfg["trading_risks"][self.target_ex.lower()]["taker_fee"])
         
-        qty_rem = qty_to_close
-        last_exit_price = entry_price
+        self.exec_res = {
+            "engine_res": self.engine_res,
+            "target_ex": self.target_ex,
+            "oracle_ex": self.oracle_ex,
+            "side": self.side,
+            "entry_price": filled_price,
+            "qty": filled_qty,
+            "executed_volume_rate": fill_rate,
+            "net_spread": self.engine_res.get("net_spread"),
+            "open_time": self.open_time,
+            "open_time_ms": self.open_time_ms
+        }
         
-        start_time = time.time()
-        for step in chase_map:
-            if qty_rem <= 0:
-                break
+        self._set_state(PositionState.ACTIVE)
+        if self.pm:
+            self.pm.confirm_entry(self.oracle_ex, self.target_ex, self.sym, self.exec_res, self.open_time)
             
-            price_slip = float(step["price_slip"])
-            wait_sec = float(step["after_sec"])
-            
-            now = time.time()
-            elapsed = now - start_time
-            if elapsed < wait_sec:
-                await asyncio.sleep(wait_sec - elapsed)
-                
-            # Get LIVE market orderbook price for chasing (best bid to sell, best ask to buy)
-            live_price = 0.0
-            if hasattr(self.orders[open_ex], "get_book_ticker"):
-                try:
-                    bt = await self.orders[open_ex].get_book_ticker(native_sym)
-                    live_price = bt.get("bid", 0.0) if close_side == "SELL" else bt.get("ask", 0.0)
-                except Exception as e:
-                    log(f"[{self.sym}] Error fetching book ticker on {open_ex}: {e}", level="WARNING")
-            if live_price <= 0:
-                live_price = self.orders[open_ex].get_last_close_price(native_sym) if hasattr(self.orders[open_ex], "get_last_close_price") else 0.0
-            if live_price <= 0:
-                live_price = self.engine_res.get(engine_price_key, entry_price)
-            current_calc_price = live_price
+        log(f"[{self.sym}] Position opened! Filled: {filled_qty:.4f} @ {filled_price:.6f}", level="INFO")
 
-            # HARD STOP-LOSS CIRCUIT BREAKER:
-            # If price moves against naked leg by >= max_chase_loss_ratio (e.g. 0.50%), immediately exit by market!
-            if current_calc_price > 0 and entry_price > 0:
-                if pos_side == "LONG":
-                    live_loss = (entry_price - current_calc_price) / entry_price
-                else:
-                    live_loss = (current_calc_price - entry_price) / entry_price
-                if live_loss >= self.max_chase_loss_ratio:
-                    log(f"[{self.sym}] Hard Stop-Loss triggered! Live loss {live_loss*100:.2f}% >= {self.max_chase_loss_ratio*100:.2f}%. Immediate market exit ({open_ex})!", level="ERROR")
-                    await self._emergency_unwind_single(open_ex, native_sym, qty_rem, entry_price, "BUY" if pos_side == "LONG" else "SELL", pos_side)
-                    last_exit_price = current_calc_price
-                    await asyncio.sleep(self.ws_verify_timeout)
-                    pos = await self.orders[open_ex].get_position_rest(native_sym, pos_side)
-                    qty_rem = pos.get("size", 0.0) if pos else 0.0
-                    break
-
-            if price_slip <= -900.0:
-                # Market fallback
-                log(f"[{self.sym}] Single Leg Fallback: MARKET exit ({open_ex}).", level="WARNING")
-                await self._emergency_unwind_single(open_ex, native_sym, qty_rem, entry_price, "BUY" if pos_side == "LONG" else "SELL", pos_side)
-                last_exit_price = current_calc_price if current_calc_price > 0 else entry_price
-                await asyncio.sleep(self.ws_verify_timeout)
-                pos = await self.orders[open_ex].get_position_rest(native_sym, pos_side)
-                qty_rem = pos.get("size", 0.0) if pos else 0.0
-                break
-                
-            # Try limit order
-            if close_side == "SELL":
-                limit_price = current_calc_price * (1 + price_slip)
-            else:
-                limit_price = current_calc_price * (1 - price_slip)
-                
-            usd_needed = qty_rem * limit_price
-            log(f"[{self.sym}] Single Leg Chasing (Step {step['step']}): {close_side} {qty_rem:.4f} @ {limit_price:.6f} (Live: {current_calc_price:.6f}, Slip: {price_slip})", level="INFO")
-            
-            try:
-                await self.orders[open_ex].place_order(
-                    native_sym, close_side, usd_needed, limit_price, order_type="LIMIT_IOC", position_side=pos_side, exact_qty=qty_rem, reduce_only=True
-                )
-                last_exit_price = limit_price
-            except Exception as e:
-                log(f"[{self.sym}] Chasing error on {open_ex}: {e}", level="ERROR")
-                continue
-                
-            await asyncio.sleep(self.single_leg_limit_fill_wait)  # Wait for limit fill from config
-            
-            # Check position
-            pos = await self.orders[open_ex].get_position_rest(native_sym, pos_side)
-            qty_rem = pos.get("size", 0.0) if pos else 0.0
-            
-        if ev_leg and hasattr(self.orders[open_ex], "unsubscribe_position_update"):
-            self.orders[open_ex].unsubscribe_position_update(native_sym, pos_side)
-            
-        # PnL calculation for single-leg closure
-        closed_qty = qty_to_close - qty_rem
-        taker_fee_rate = float(self.cfg["trading_risks"][open_ex.lower()]["taker_fee"])
-        
-        if closed_qty > 0:
-            if pos_side == "LONG":
-                gross_pnl = (last_exit_price - entry_price) * closed_qty
-            else:
-                gross_pnl = (entry_price - last_exit_price) * closed_qty
-            comm = (entry_price * closed_qty + last_exit_price * closed_qty) * taker_fee_rate
-            net_pnl = gross_pnl - comm
-            entry_usd = entry_price * closed_qty
-            net_yield = (net_pnl / entry_usd) if entry_usd > 0 else 0.0
-            
-            try:
-                from analytics import update_total_balance
-                update_total_balance(self.cfg, extra_pnl=net_pnl)
-            except Exception as e:
-                log(f"[{self.sym}] Error updating total balance on single leg: {e}", level="WARNING")
-        else:
-            net_pnl = 0.0
-            net_yield = 0.0
-
-        if net_pnl >= 0.0:
-            log(f"[{self.sym}] Single Leg Exit finished in PROFIT: Net {net_pnl:+.4f}$ ({net_yield*100:+.3f}%). Quarantine skipped.", level="INFO")
-            self.ban_coin_cb(self.sym, reason=f"Single Leg Profit ({net_pnl:+.4f}$)", duration_sec=0)
-        else:
-            if abs(net_yield) >= self.perm_ban_loss_pct:
-                log(f"[{self.sym}] Severe Single Leg Loss ({net_yield*100:+.2f}% <= -{self.perm_ban_loss_pct*100:.2f}%). PERMANENT BAN!", level="ERROR")
-                self.ban_coin_cb(self.sym, reason=f"Severe Single Leg Loss ({net_pnl:+.4f}$, {net_yield*100:+.2f}%)", duration_sec=None)
-            else:
-                log(f"[{self.sym}] Single Leg Exit finished in LOSS: Net {net_pnl:+.4f}$ ({net_yield*100:+.3f}%). Applying quarantine.", level="WARNING")
-                self.ban_coin_cb(self.sym, reason=f"Single Leg Loss ({net_pnl:+.4f}$)", duration_sec=self.q_single_leg)
-            
-        self._set_state(PositionState.ABORTED)
-        self._notify_pos_failed("SINGLE_LEG_EXPOSURE")
-
-    async def _emergency_unwind_single(self, ex: str, native_sym: str, qty: float, price: float, open_side: str, pos_side: str):
-        self._set_state(PositionState.EMERGENCY_UNWIND)
-        usd = qty * price
-        reduce_side = "SELL" if open_side == "BUY" else "BUY"
-        log(f"[{self.sym}] Immediate unwind {ex} ({qty} qty, {usd:.2f}$)...", level="WARNING")
-        try:
-            await self.orders[ex].place_order(native_sym, reduce_side, usd, price, order_type="MARKET", position_side=pos_side, reduce_only=True, is_full_unwind=True)
-        except Exception as e:
-            log(f"[{self.sym}] Unwind error on {ex}: {e}", level="ERROR")
+        if self.writer:
+            asyncio.create_task(async_write_msg(self.writer, "POS_OPENED", {
+                "route": self.route,
+                "sym": self.sym,
+                "exec_res": self.exec_res,
+                "open_time": self.open_time
+            }))
 
     def _notify_pos_failed(self, reason: str):
         if self.pm:
-            self.pm.rollback_entry(self.long_ex, self.short_ex, self.sym)
+            self.pm.rollback_entry(self.oracle_ex, self.target_ex, self.sym)
         if self.writer:
             asyncio.create_task(async_write_msg(self.writer, "POS_FAILED", {
                 "route": self.route,
                 "sym": self.sym,
-                "long_ex": self.long_ex,
-                "short_ex": self.short_ex,
+                "oracle_ex": self.oracle_ex,
+                "target_ex": self.target_ex,
                 "reason": reason
             }))
 
@@ -670,337 +266,155 @@ class PositionFSM:
                 "route": self.route,
                 "sym": self.sym
             }))
+
+    async def _wait_for_close_v9(self, ev_target: asyncio.Event) -> bool:
+        t0 = time.perf_counter()
+        
+        if ev_target:
+            try:
+                await asyncio.wait_for(ev_target.wait(), timeout=self.ws_verify_timeout)
+            except asyncio.TimeoutError:
+                pass
+                
+        while (time.perf_counter() - t0) < self.ws_verify_timeout:
+            pos = self.orders[self.target_ex].get_executed_position(self.native_target, self.side)
+            if pos and pos.get("size", 0.0) == 0.0:
+                return True
+            await asyncio.sleep(0.005)
             
-    def _finalize_open(self, qty_long: float, qty_short: float, p_long: float, p_short: float):
-        self.open_time = time.time()
-        self.open_time_ms = int(self.open_time * 1000)
-        
-        entry_fee_l = float(self.cfg["trading_risks"][self.long_ex.lower()]["taker_fee"])
-        entry_fee_s = float(self.cfg["trading_risks"][self.short_ex.lower()]["taker_fee"])
-        entry_comm = entry_fee_l + entry_fee_s
-        
-        actual_gross_spread = (p_short - p_long) / p_short if p_short > 0 else 0.0
-        actual_net_spread = actual_gross_spread - entry_comm
-        
-        # Calculate actual volume rates from fill vs requested quantities
-        req_l = self.engine_res.get("long_qty", 0.0)
-        req_s = self.engine_res.get("short_qty", 0.0)
-        long_vol_rate = (qty_long / req_l) if req_l > 0 else 1.0
-        short_vol_rate = (qty_short / req_s) if req_s > 0 else 1.0
-        
-        self.exec_res = {
-            "engine_res": self.engine_res,
-            "long_ex": self.long_ex,
-            "short_ex": self.short_ex,
-            "entry_long_price": p_long,
-            "entry_short_price": p_short,
-            "actual_long_price": p_long,
-            "actual_short_price": p_short,
-            "actual_gross_spread": actual_gross_spread,
-            "actual_net_spread": actual_net_spread,
-            "long_executed_volume_rate": long_vol_rate,
-            "short_executed_volume_rate": short_vol_rate,
-            "open_time": self.open_time,
-            "open_time_ms": self.open_time_ms
-        }
-        
-        self._set_state(PositionState.ACTIVE_HEDGED)
-        if self.pm:
-            self.pm.confirm_entry(self.long_ex, self.short_ex, self.sym, self.exec_res, self.open_time)
-            
-        log(f"[{self.sym}] Position opened! Actual Net Spread: {actual_net_spread*100:.3f}%", level="INFO")
+        return False
 
-        if self.writer:
-            asyncio.create_task(async_write_msg(self.writer, "POS_OPENED", {
-                "route": self.route,
-                "sym": self.sym,
-                "exec_res": self.exec_res,
-                "open_time": self.open_time
-            }))
-
-    async def _emergency_unwind(self):
+    async def run_close(self, exit_res: dict, reason: str = "TAKE_PROFIT") -> bool:
         """
-        Instant 1-Shot HFT Market Kill-Switch.
-        1. If one leg was filled, immediately send 1 counter MARKET order to liquidate it.
-        2. Confirm zero position via WS within 15-30 ms (emergency REST only on timeout).
-        """
-        self._set_state(PositionState.EMERGENCY_UNWIND)
-        log(f"[{self.sym}] Launching 1-Shot Market Kill-Switch (entry asymmetry liquidation)...", level="WARNING")
-
-        l_size = self.long_pos.get("size", 0.0)
-        s_size = self.short_pos.get("size", 0.0)
-
-        # Control read of local WS cache
-        if l_size <= 0 and self.long_ex in self.orders:
-            p_long = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
-            if p_long and p_long.get("size", 0.0) > 0:
-                l_size = p_long["size"]
-                self.long_pos = p_long
-
-        if s_size <= 0 and self.short_ex in self.orders:
-            p_short = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
-            if p_short and p_short.get("size", 0.0) > 0:
-                s_size = p_short["size"]
-                self.short_pos = p_short
-
-        kill_tasks = []
-        if l_size > 0 and self.long_ex in self.orders:
-            p = self.long_pos.get("price", 0.0) or self.engine_res.get("long_avg_price", 1.0)
-            usd = l_size * p
-            log(f"[{self.sym}] Immediate unwind of exposed long ({l_size} qty, {usd:.2f}$) on {self.long_ex}...", level="WARNING")
-            kill_tasks.append(self.orders[self.long_ex].place_order(
-                self.native_long, "SELL", usd, p, order_type="MARKET", position_side="LONG", reduce_only=True
-            ))
-
-        if s_size > 0 and self.short_ex in self.orders:
-            p = self.short_pos.get("price", 0.0) or self.engine_res.get("short_avg_price", 1.0)
-            usd = s_size * p
-            log(f"[{self.sym}] Immediate unwind of exposed short ({s_size} qty, {usd:.2f}$) on {self.short_ex}...", level="WARNING")
-            kill_tasks.append(self.orders[self.short_ex].place_order(
-                self.native_short, "BUY", usd, p, order_type="MARKET", position_side="SHORT", reduce_only=True
-            ))
-
-        if kill_tasks:
-            await asyncio.gather(*kill_tasks, return_exceptions=True)
-
-        # Fast verification of zero position via WS (up to ws_verify_timeout_sec)
-        is_flat = False
-        t_deadline = time.perf_counter() + self.ws_verify_timeout
-        while time.perf_counter() < t_deadline:
-            l_flat = True
-            s_flat = True
-            if self.long_ex in self.orders:
-                p = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG")
-                if p and p.get("size", 0.0) > 0:
-                    l_flat = False
-            if self.short_ex in self.orders:
-                p = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT")
-                if p and p.get("size", 0.0) > 0:
-                    s_flat = False
-            if l_flat and s_flat:
-                is_flat = True
-                break
-            await asyncio.sleep(0.01)
-
-        if not is_flat:
-            # Fallback control REST query only if WS did not confirm within 300 ms
-            log(f"[{self.sym}] WS did not confirm 0.0 within 300 ms, querying REST...", level="WARNING")
-            l_check = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0}
-            s_check = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT") if self.short_ex in self.orders else {"size": 0.0}
-            if l_check.get("size", 0.0) > 0:
-                p = l_check.get("price", 0.0) or self.engine_res.get("long_avg_price", 1.0)
-                await self.orders[self.long_ex].place_order(self.native_long, "SELL", l_check["size"] * p, p, order_type="MARKET", position_side="LONG", reduce_only=True)
-            if s_check.get("size", 0.0) > 0:
-                p = s_check.get("price", 0.0) or self.engine_res.get("short_avg_price", 1.0)
-                await self.orders[self.short_ex].place_order(self.native_short, "BUY", s_check["size"] * p, p, order_type="MARKET", position_side="SHORT", reduce_only=True)
-
-        self._set_state(PositionState.ABORTED)
-        self._notify_pos_failed("ASYMMETRIC_FILL_UNWOUND")
-        log(f"[{self.sym}] Asymmetry fully liquidated. Iteration finished.", level="INFO")
-
-    async def run_close(self, exit_res: Dict[str, Any], reason: str = "PROFIT_DECAY") -> bool:
-        """
-        Planned closure of both legs:
-        ACTIVE_HEDGED -> CLOSING -> SETTLED
+        v9: ACTIVE -> CLOSING -> SETTLED
+        1 ордер в Target (LIMIT_IOC или MARKET при TTL/SL).
         """
         self._set_state(PositionState.CLOSING)
-        log(f"[{self.sym}] Closing position: LONG {self.long_ex} | SHORT {self.short_ex} ({reason})", level="INFO")
-
-        # Check actual position volumes before close from local WS cache
-        l_ws = self.orders[self.long_ex].get_executed_position(self.native_long, "LONG") if self.long_ex in self.orders else {}
-        s_ws = self.orders[self.short_ex].get_executed_position(self.native_short, "SHORT") if self.short_ex in self.orders else {}
-
-        long_qty = l_ws.get("size", 0.0) or self.long_pos.get("size", 0.0)
-        short_qty = s_ws.get("size", 0.0) or self.short_pos.get("size", 0.0)
-
-        # If local cache is empty, fallback to REST
-        if long_qty <= 0 and self.long_ex in self.orders:
-            l_pos = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG")
-            long_qty = l_pos.get("size", 0.0)
-        if short_qty <= 0 and self.short_ex in self.orders:
-            s_pos = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT")
-            short_qty = s_pos.get("size", 0.0)
-
-        price_long = exit_res.get("long_close_price") or self.exec_res.get("entry_long_price", 1.0)
-        price_short = exit_res.get("short_close_price") or self.exec_res.get("entry_short_price", 1.0)
-
-        # 1. Register reactive events BEFORE sending close orders
-        ev_long = None
-        ev_short = None
-        if self.long_ex in self.orders and hasattr(self.orders[self.long_ex], "subscribe_position_update"):
-            ev_long = self.orders[self.long_ex].subscribe_position_update(self.native_long, "LONG")
-        if self.short_ex in self.orders and hasattr(self.orders[self.short_ex], "subscribe_position_update"):
-            ev_short = self.orders[self.short_ex].subscribe_position_update(self.native_short, "SHORT")
-
-        t_close_shot_start = time.perf_counter()
-        close_latencies: Dict[str, float] = {}
-
-        async def timed_close_order(ex: str, symbol: str, side: str, size_usd: float, price: float, order_type: str, position_side: str):
-            t0 = time.perf_counter()
-            try:
-                res = await self.orders[ex].place_order(
-                    symbol, side, size_usd, price, order_type=order_type, position_side=position_side, reduce_only=True
-                )
-                close_latencies[ex] = (time.perf_counter() - t0) * 1000.0
-                return res
-            except Exception as err:
-                close_latencies[ex] = (time.perf_counter() - t0) * 1000.0
-                raise err
-
-        try:
-            # Launch WS close monitoring concurrently with order submission
-            close_wait_task = asyncio.create_task(self._wait_for_close_confirmation(ev_long, ev_short))
-
-            tasks = []
-            if long_qty > 0 and self.long_ex in self.orders:
-                size_usd = long_qty * price_long
-                o_type = "MARKET" if reason == "TTL_EXPIRED" else "LIMIT_IOC"
-                tasks.append(timed_close_order(
-                    self.long_ex, self.native_long, "SELL", size_usd, price_long, o_type, "LONG"
-                ))
-            if short_qty > 0 and self.short_ex in self.orders:
-                size_usd = short_qty * price_short
-                o_type = "MARKET" if reason == "TTL_EXPIRED" else "LIMIT_IOC"
-                tasks.append(timed_close_order(
-                    self.short_ex, self.native_short, "BUY", size_usd, price_short, o_type, "SHORT"
-                ))
-
-            close_gather_ms = 0.0
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-                close_gather_ms = (time.perf_counter() - t_close_shot_start) * 1000.0
-
-            # 2. Await fast reactive zero confirmation via WS (< 0.1 ms)
-            is_closed_fast, fast_p_long, fast_p_short = await close_wait_task
-            total_close_ms = (time.perf_counter() - t_close_shot_start) * 1000.0
-            cl_rest_ms = close_latencies.get(self.long_ex, 0.0)
-            cs_rest_ms = close_latencies.get(self.short_ex, 0.0)
-            cl_ws_ms = self.ws_close_timings.get(self.long_ex, 0.0)
-            cs_ws_ms = self.ws_close_timings.get(self.short_ex, 0.0)
-            cl_lag = max(0.0, cl_ws_ms - cl_rest_ms) if cl_ws_ms > 0 else 0.0
-            cs_lag = max(0.0, cs_ws_ms - cs_rest_ms) if cs_ws_ms > 0 else 0.0
-            log(
-                f"[{self.sym}] EXIT TELEMETRY (Total: {total_close_ms:.1f} ms | HTTP Gather: {close_gather_ms:.1f} ms):\n"
-                f"      * {self.long_ex}: REST {cl_rest_ms:.1f} ms | WS close {cl_ws_ms:.1f} ms (socket lag: +{cl_lag:.1f} ms)\n"
-                f"      * {self.short_ex}: REST {cs_rest_ms:.1f} ms | WS close {cs_ws_ms:.1f} ms (socket lag: +{cs_lag:.1f} ms)",
-                level="INFO"
+        
+        pos_side = self.side
+        close_side = "SELL" if self.side == "LONG" else "BUY"
+        
+        ws_pos = self.orders[self.target_ex].get_executed_position(self.native_target, pos_side)
+        qty = ws_pos.get("size", 0.0) if ws_pos else self.target_pos.get("size", 0.0)
+        
+        if qty <= 0:
+            rest_pos = await self.orders[self.target_ex].get_exact_position_guarded(
+                self.native_target, pos_side
             )
-        finally:
-            if self.long_ex in self.orders and hasattr(self.orders[self.long_ex], "unsubscribe_position_update"):
-                self.orders[self.long_ex].unsubscribe_position_update(self.native_long, "LONG")
-            if self.short_ex in self.orders and hasattr(self.orders[self.short_ex], "unsubscribe_position_update"):
-                self.orders[self.short_ex].unsubscribe_position_update(self.native_short, "SHORT")
-
-        if is_closed_fast:
-            log(f"[{self.sym}] Position fully liquidated on both exchanges (0.0) via fast WS stream.", level="INFO")
-            if self.long_ex in self.orders:
-                await self.orders[self.long_ex].cancel_all_orders(self.native_long)
-            if self.short_ex in self.orders:
-                await self.orders[self.short_ex].cancel_all_orders(self.native_short)
-
+            qty = rest_pos.get("size", 0.0)
+        
+        if qty <= 0:
+            log(f"[{self.sym}] Position already flat on {self.target_ex}", level="WARNING")
             self._set_state(PositionState.SETTLED)
-            if self.pm:
-                self.pm.confirm_exit(self.route, self.sym)
-            if self.writer:
-                asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {
-                    "route": self.route, "sym": self.sym, "reason": reason
-                }))
-
-            if self.on_settle_cb:
-                entry_l = self.exec_res.get("entry_long_price", price_long)
-                entry_s = self.exec_res.get("entry_short_price", price_short)
-                exit_l = fast_p_long if fast_p_long > 0 else (exit_res.get("long_close_price") or price_long)
-                exit_s = fast_p_short if fast_p_short > 0 else (exit_res.get("short_close_price") or price_short)
-                actual_long_usd = long_qty * entry_l
-                actual_short_usd = short_qty * entry_s
-
-                asyncio.create_task(self.on_settle_cb(
-                    sym=self.sym,
-                    route=self.route,
-                    long_ex=self.long_ex,
-                    short_ex=self.short_ex,
-                    entry_long_price=entry_l,
-                    entry_short_price=entry_s,
-                    exit_long_price=exit_l,
-                    exit_short_price=exit_s,
-                    actual_long_usd=actual_long_usd,
-                    actual_short_usd=actual_short_usd,
-                    exit_res=exit_res,
-                    reason=reason
-                ))
+            self._finalize_close_v9(0.0, qty, reason)
             return True
-
-        # 3. Fallback: Control query and remnant cleanup via REST (if WS timed out)
-        for attempt in range(self.unwind_max_attempts):
-            await asyncio.sleep(self.unwind_retry_pause)
-            l_check = await self.orders[self.long_ex].get_exact_position_guarded(self.native_long, "LONG") if self.long_ex in self.orders else {"size": 0.0}
-            s_check = await self.orders[self.short_ex].get_exact_position_guarded(self.native_short, "SHORT") if self.short_ex in self.orders else {"size": 0.0}
-
-            l_rem = l_check.get("size", 0.0)
-            s_rem = s_check.get("size", 0.0)
-
-            if l_rem == 0.0 and s_rem == 0.0:
-                log(f"[{self.sym}] Position fully liquidated on both exchanges (0.0).", level="INFO")
+        
+        entry_price = self.exec_res.get("entry_price", self.engine_res["entry_price"])
+        exit_price = exit_res.get("exit_price") or entry_price
+        
+        if reason in ("TTL_EXPIRED", "STOP_LOSS", "TTL_EXPIRED_NO_LIQUIDITY", "TTL_EXPIRED_STALE_DATA"):
+            o_type = "MARKET"
+        else:
+            o_type = self.exit_order_type
+        
+        if o_type == "LIMIT_IOC" and exit_price > 0:
+            if close_side == "SELL":
+                limit_price = exit_price * (1 - self.exit_slip_ratio)
+            else:
+                limit_price = exit_price * (1 + self.exit_slip_ratio)
+        else:
+            limit_price = exit_price
+        
+        usd = qty * limit_price
+        
+        log(f"[{self.sym}] v9 Closing {self.side} on {self.target_ex} | "
+            f"{o_type} {close_side} {qty:.4f} @ {limit_price:.6f} | Reason: {reason}", level="INFO")
+        
+        ev_target = None
+        if hasattr(self.orders[self.target_ex], "subscribe_position_update"):
+            ev_target = self.orders[self.target_ex].subscribe_position_update(self.native_target, pos_side)
+        
+        try:
+            await self.orders[self.target_ex].place_order(
+                self.native_target, close_side, usd, limit_price,
+                order_type=o_type, position_side=pos_side, reduce_only=True
+            )
+        except Exception as e:
+            log(f"[{self.sym}] Close order error on {self.target_ex}: {e}", level="ERROR")
+        
+        is_closed = await self._wait_for_close_v9(ev_target)
+        
+        if hasattr(self.orders[self.target_ex], "unsubscribe_position_update"):
+            self.orders[self.target_ex].unsubscribe_position_update(self.native_target, pos_side)
+        
+        actual_exit_price = exit_price
+        if hasattr(self.orders[self.target_ex], "get_last_close_price"):
+            p = self.orders[self.target_ex].get_last_close_price(self.native_target)
+            if p > 0:
+                actual_exit_price = p
                 
-                if self.long_ex in self.orders:
-                    await self.orders[self.long_ex].cancel_all_orders(self.native_long)
-                if self.short_ex in self.orders:
-                    await self.orders[self.short_ex].cancel_all_orders(self.native_short)
-
-                self._set_state(PositionState.SETTLED)
-                if self.pm:
-                    self.pm.confirm_exit(self.route, self.sym)
-                if self.writer:
-                    asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {
-                        "route": self.route, "sym": self.sym, "reason": reason
-                    }))
-                if self.on_settle_cb:
-                    entry_l = self.exec_res.get("entry_long_price", price_long)
-                    entry_s = self.exec_res.get("entry_short_price", price_short)
-                    exit_l = fast_p_long if fast_p_long > 0 else (exit_res.get("long_close_price") or price_long)
-                    exit_s = fast_p_short if fast_p_short > 0 else (exit_res.get("short_close_price") or price_short)
-                    actual_long_usd = long_qty * entry_l
-                    actual_short_usd = short_qty * entry_s
-
-                    asyncio.create_task(self.on_settle_cb(
-                        sym=self.sym,
-                        route=self.route,
-                        long_ex=self.long_ex,
-                        short_ex=self.short_ex,
-                        entry_long_price=entry_l,
-                        entry_short_price=entry_s,
-                        exit_long_price=exit_l,
-                        exit_short_price=exit_s,
-                        actual_long_usd=actual_long_usd,
-                        actual_short_usd=actual_short_usd,
-                        exit_res=exit_res,
-                        reason=reason
-                    ))
-                return True
+        if not is_closed:
+            # REST fallback
+            for attempt in range(self.unwind_max_attempts):
+                rest_pos = await self.orders[self.target_ex].get_exact_position_guarded(self.native_target, pos_side)
+                rem = rest_pos.get("size", 0.0)
+                if rem <= 0:
+                    break
+                p = rest_pos.get("price", exit_price)
+                if p <= 0: p = entry_price
+                log(f"[{self.sym}] Remainder {rem} on {self.target_ex}. Emergency MARKET close (attempt {attempt+1}).", level="WARNING")
+                try:
+                    await self.orders[self.target_ex].place_order(
+                        self.native_target, close_side, rem * p, p,
+                        order_type="MARKET", position_side=pos_side, reduce_only=True
+                    )
+                except Exception as e:
+                    pass
+                await asyncio.sleep(self.unwind_retry_pause)
                 
-            if attempt == self.unwind_max_attempts - 1:
-                log(f"[{self.sym}] CRITICAL ERROR: Failed to close position (run_close) after {self.unwind_max_attempts} attempts! Remainder L:{l_rem} S:{s_rem}. Re-queuing close!", level="ERROR")
-                self._set_state(PositionState.CLOSING)
+            rest_pos = await self.orders[self.target_ex].get_exact_position_guarded(self.native_target, pos_side)
+            if rest_pos.get("size", 0.0) > 0:
+                log(f"[{self.sym}] CRITICAL ERROR: Failed to close position on {self.target_ex}! Remainder: {rest_pos.get('size')}", level="ERROR")
                 self._notify_pos_exit_failed()
                 return False
 
-            log(f"[{self.sym}] Remainder detected after close: L:{l_rem} S:{s_rem}. Emergency unwind attempt #{attempt+1}...", level="WARNING")
-            cleanup_tasks = []
-            if l_rem > 0 and self.long_ex in self.orders:
-                p = l_check.get("price", 0.0)
-                if p <= 0: p = self.engine_res.get("long_avg_price", 1.0)
-                usd = l_rem * p
-                cleanup_tasks.append(self.orders[self.long_ex].place_order(
-                    self.native_long, "SELL", usd, p, order_type="MARKET", position_side="LONG"
-                ))
-            if s_rem > 0 and self.short_ex in self.orders:
-                p = s_check.get("price", 0.0)
-                if p <= 0: p = self.engine_res.get("short_avg_price", 1.0)
-                usd = s_rem * p
-                cleanup_tasks.append(self.orders[self.short_ex].place_order(
-                    self.native_short, "BUY", usd, p, order_type="MARKET", position_side="SHORT"
-                ))
-            if cleanup_tasks:
-                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+        log(f"[{self.sym}] Position fully liquidated on {self.target_ex}.", level="INFO")
+        
+        if hasattr(self.orders[self.target_ex], "cancel_all_orders"):
+            await self.orders[self.target_ex].cancel_all_orders(self.native_target)
+            
+        self._set_state(PositionState.SETTLED)
+        self._finalize_close_v9(actual_exit_price, qty, reason)
+        return True
 
+    def _finalize_close_v9(self, exit_price: float, qty: float, reason: str):
+        if self.pm:
+            self.pm.confirm_exit(self.route, self.sym)
+        if self.writer:
+            asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {
+                "route": self.route, "sym": self.sym, "reason": reason
+            }))
+        if self.on_settle_cb:
+            entry_price = self.exec_res.get("entry_price", 0.0)
+            actual_usd = qty * exit_price
+            asyncio.create_task(self.on_settle_cb(
+                sym=self.sym,
+                route=self.route,
+                target_ex=self.target_ex,
+                oracle_ex=self.oracle_ex,
+                side=self.side,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                actual_usd=actual_usd,
+                reason=reason
+            ))
 
+    async def _emergency_unwind_single(self, ex: str, native_sym: str, qty: float, price: float, open_side: str, pos_side: str):
+        self._set_state(PositionState.EMERGENCY_UNWIND)
+        usd = qty * price
+        reduce_side = "SELL" if open_side == "BUY" else "BUY"
+        log(f"[{self.sym}] Immediate unwind {ex} ({qty} qty, {usd:.2f}$)...", level="WARNING")
+        try:
+            await self.orders[ex].place_order(native_sym, reduce_side, usd, price, order_type="MARKET", position_side=pos_side, reduce_only=True, is_full_unwind=True)
+        except Exception as e:
+            log(f"[{self.sym}] Unwind error on {ex}: {e}", level="ERROR")
