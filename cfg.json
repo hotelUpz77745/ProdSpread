@@ -5,6 +5,7 @@
         "note": "Все процентные значения (fee, spread, pnl) задаются как доли от единицы (например, 0.01 это 1%). Убраны лишние умножения на 100 для скорости."
     },
     "SYMBOLS_GLOBAL_WHITELIST": [],
+    "SYMBOLS_GLOBAL_WHITELIST_desc": "Глобальный белый список монет. Формат: список базовых тикеров, например [\"BTC\", \"ETH\", \"XRP\"] (или с суффиксом [\"BTCUSDT\", \"ETHUSDT\"]). Пустой список [] означает торговлю ВСЕМИ монетами, прошедшими volume_filters.",
     "QUOTE": "USDT",
     "MAIN_LOOP_DELAY": 0.0,
     "measure_loop_speed": false,

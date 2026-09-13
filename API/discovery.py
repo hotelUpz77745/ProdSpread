@@ -6,7 +6,7 @@
 import asyncio
 from typing import Dict, List, Set, Tuple
 from itertools import combinations
-from consts import VOLUME_FILTERS, ACTIVE_ROUTES
+from consts import VOLUME_FILTERS, ACTIVE_ROUTES, SYMBOLS_GLOBAL_WHITELIST
 
 from API.BINANCE.symbol import BinanceSymbols
 from API.KUCOIN.symbol import KucoinSymbols
@@ -38,8 +38,9 @@ def to_native(coin: str, exchange: str, quote: str = "USDT") -> str:
         return f"{coin}{quote}"
 
 class DiscoveryManager:
-    def __init__(self, timeout_sec: float = 20.0, quote: str = "USDT"):
+    def __init__(self, timeout_sec: float = 20.0, quote: str = "USDT", whitelist: list = None):
         self.quote = quote
+        self.whitelist = whitelist if whitelist is not None else SYMBOLS_GLOBAL_WHITELIST
         self.apis = {
             "BINANCE": BinanceSymbols(timeout_sec=timeout_sec),
             "KUCOIN": KucoinSymbols(timeout_sec=timeout_sec),
@@ -106,9 +107,22 @@ class DiscoveryManager:
                 raw_pairs_map.setdefault(coin, set()).add(ex_name)
                 
         # Step 4: Route Validation
+        whitelist_set = set()
+        for s in (self.whitelist or []):
+            if isinstance(s, str) and s.strip():
+                clean = s.strip().upper()
+                whitelist_set.add(clean)
+                if clean.endswith(self.quote.upper()):
+                    whitelist_set.add(clean[:-len(self.quote.upper())])
+
+        if whitelist_set:
+            logger.info(f"Applying SYMBOLS_GLOBAL_WHITELIST filter: {sorted(list(whitelist_set))}")
+
         self.active_pairs_map = {}
         for coin, exchanges in raw_pairs_map.items():
             if banned_symbols and coin in banned_symbols:
+                continue
+            if whitelist_set and coin.upper() not in whitelist_set:
                 continue
                 
             valid_coin_exchanges = set()

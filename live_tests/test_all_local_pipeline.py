@@ -368,5 +368,29 @@ class TestPipelineMathCore(unittest.TestCase):
         self.assertEqual(res_price, "1.3485")
 
 
+class TestDiscoveryWhitelist(unittest.IsolatedAsyncioTestCase):
+    async def test_whitelist_filtering(self):
+        """Проверка работы SYMBOLS_GLOBAL_WHITELIST (базовые тикеры и суффиксы USDT)."""
+        from API.discovery import DiscoveryManager
+        from unittest.mock import AsyncMock
+        
+        dm = DiscoveryManager(quote="USDT", whitelist=["BTC", "ETHUSDT"])
+        for ex in dm.apis:
+            dm.apis[ex].get_volumes = AsyncMock(return_value={"BTC": 10000000.0, "ETH": 10000000.0, "SOL": 10000000.0})
+            
+        await dm.build_topology()
+        self.assertIn("BTC", dm.active_pairs_map)
+        self.assertIn("ETH", dm.active_pairs_map)
+        self.assertNotIn("SOL", dm.active_pairs_map)
+        
+        # Verify ws_routes only contain whitelisted symbols
+        for ex, routes in dm.ws_routes.items():
+            for r in routes:
+                self.assertTrue("BTC" in r or "ETH" in r or "XBT" in r)
+                self.assertFalse("SOL" in r)
+                
+        await dm.aclose()
+
+
 if __name__ == "__main__":
     unittest.main()

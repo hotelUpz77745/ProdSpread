@@ -63,7 +63,7 @@ class Main:
         self.banned_symbols = {}
         self._load_banned()
 
-        self.discovery = DiscoveryManager(quote=self.cfg["QUOTE"])
+        self.discovery = DiscoveryManager(quote=self.cfg["QUOTE"], whitelist=self.cfg.get("SYMBOLS_GLOBAL_WHITELIST", []))
         self.pm = None
         
         self.books = {ex: {} for ex in EXCHANGES}
