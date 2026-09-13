@@ -276,3 +276,75 @@ def is_stale_jit(binance_ts: float, kucoin_ts: float, now_ts: float, timeout: fl
     if (now_ts - binance_ts) > timeout or (now_ts - kucoin_ts) > timeout:
         return True
     return False
+
+from collections import deque
+from typing import Dict, Tuple
+
+class ImpulseDetector:
+    def __init__(self, cfg: dict):
+        try:
+            impulse_cfg = cfg["trading_rules"]["entry"]["impulse_detector"]
+            self.is_enabled = bool(impulse_cfg["enabled"])
+            self.buffer_window_sec = float(impulse_cfg["buffer_window_ms"]) / 1000.0
+            self.static_leg = str(impulse_cfg.get("static_leg", "TARGET")).upper()
+            self.max_static_leg_ratio = float(impulse_cfg.get("max_static_leg_ratio", 0.25))
+        except KeyError:
+            self.is_enabled = False
+            self.buffer_window_sec = 0.250
+            self.static_leg = "TARGET"
+            self.max_static_leg_ratio = 0.25
+            
+        # Хранилище тиков: (symbol, exchange) -> deque of (timestamp_mono, price)
+        self._buffers: Dict[Tuple[str, str], deque] = {}
+
+    def update(self, sym: str, ex: str, vwap_price: float, ts_mono: float):
+        key = (sym, ex)
+        if key not in self._buffers:
+            self._buffers[key] = deque()
+        buf = self._buffers[key]
+        buf.append((ts_mono, vwap_price))
+        
+        # Очистка устаревших тиков за пределами окна
+        cutoff = ts_mono - self.buffer_window_sec
+        while buf and buf[0][0] < cutoff:
+            buf.popleft()
+
+    def get_delta(self, sym: str, ex: str, current_price: float) -> float:
+        key = (sym, ex)
+        buf = self._buffers.get(key)
+        if not buf:
+            return 0.0
+        base_price = buf[0][1]
+        if base_price <= 0:
+            return 0.0
+        return (current_price - base_price) / base_price
+
+    def check_impulse(
+        self,
+        sym: str,
+        oracle_ex: str,
+        target_ex: str,
+        oracle_price: float,
+        target_price: float
+    ) -> Tuple[bool, str, float, float]:
+        """
+        Проверяет, что статичная нога (TARGET или ORACLE) изменилась 
+        не более чем на max_static_leg_ratio от общего изменения спреда.
+        """
+        if not self.is_enabled:
+            return True, "IMPULSE_DISABLED", 0.0, 0.0
+            
+        o_delta = self.get_delta(sym, oracle_ex, oracle_price)
+        t_delta = self.get_delta(sym, target_ex, target_price)
+        
+        spread_delta = abs(o_delta - t_delta)
+        allowed_noise = spread_delta * self.max_static_leg_ratio
+        
+        if self.static_leg == "TARGET":
+            if abs(t_delta) > allowed_noise:
+                return False, f"TARGET_NOT_STATIC (noise {abs(t_delta)*100:+.3f}% > allowed {allowed_noise*100:+.3f}%)", o_delta, t_delta
+        elif self.static_leg == "ORACLE":
+            if abs(o_delta) > allowed_noise:
+                return False, f"ORACLE_NOT_STATIC (noise {abs(o_delta)*100:+.3f}% > allowed {allowed_noise*100:+.3f}%)", o_delta, t_delta
+                
+        return True, "VALID_IMPULSE", o_delta, t_delta

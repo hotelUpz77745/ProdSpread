@@ -122,7 +122,7 @@ class TestTradingEngine(unittest.TestCase):
             "bids": [[49995.0, 5.0]],
             "asks": [[50005.0, 5.0]]
         }
-        passed, res = self.engine.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "BITGET", 1000.0)
+        passed, res = self.engine.evaluate_entry_v9("BTC", oracle_book, target_book, "BINANCE", "BITGET", 1000.0)
         self.assertTrue(passed)
         self.assertEqual(res["side"], "LONG")
         self.assertEqual(res["target_ex"], "BITGET")
@@ -140,7 +140,7 @@ class TestTradingEngine(unittest.TestCase):
             "bids": [[50045.0, 5.0]],
             "asks": [[50055.0, 5.0]]
         }
-        passed, res = self.engine.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "BITGET", 1000.0)
+        passed, res = self.engine.evaluate_entry_v9("BTC", oracle_book, target_book, "BINANCE", "BITGET", 1000.0)
         self.assertTrue(passed)
         self.assertEqual(res["side"], "SHORT")
         self.assertEqual(res["target_ex"], "BITGET")
@@ -153,31 +153,31 @@ class TestTradingEngine(unittest.TestCase):
 
         # 1. Диапазон [0.005, 0.03] -> спред ~1.9% попадает
         cfg1 = dict(self.cfg)
-        cfg1["trading_rules"]["entry"]["signal_filters"]["spread_entry"] = [0.005, 0.03]
+        cfg1["trading_rules"]["entry"]["signal_filters"]["spread_entry_pre"] = [0.005, 0.03]
         eng1 = TradingEngine(cfg1, {0: "BINANCE", 1: "BITGET"})
-        ok, res = eng1.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "BITGET", 25.0)
+        ok, res = eng1.evaluate_entry_v9("BTC", oracle_book, target_book, "BINANCE", "BITGET", 25.0)
         self.assertTrue(ok)
 
         # 2. Диапазон [0.005, None] (null max) -> спред ~1.9% попадает, верхнего порога нет
         cfg2 = dict(self.cfg)
-        cfg2["trading_rules"]["entry"]["signal_filters"]["spread_entry"] = [0.005, None]
+        cfg2["trading_rules"]["entry"]["signal_filters"]["spread_entry_pre"] = [0.005, None]
         eng2 = TradingEngine(cfg2, {0: "BINANCE", 1: "BITGET"})
-        ok, res = eng2.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "BITGET", 25.0)
+        ok, res = eng2.evaluate_entry_v9("BTC", oracle_book, target_book, "BINANCE", "BITGET", 25.0)
         self.assertTrue(ok)
 
         # 3. Диапазон [0.025, None] (слишком высокий min) -> LOW_SPREAD
         cfg3 = dict(self.cfg)
-        cfg3["trading_rules"]["entry"]["signal_filters"]["spread_entry"] = [0.025, None]
+        cfg3["trading_rules"]["entry"]["signal_filters"]["spread_entry_pre"] = [0.025, None]
         eng3 = TradingEngine(cfg3, {0: "BINANCE", 1: "BITGET"})
-        ok, res = eng3.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "BITGET", 25.0)
+        ok, res = eng3.evaluate_entry_v9("BTC", oracle_book, target_book, "BINANCE", "BITGET", 25.0)
         self.assertFalse(ok)
         self.assertIn("LOW_SPREAD", res["reason"])
 
         # 4. Диапазон [None, 0.010] (слишком низкий max) -> HIGH_SPREAD
         cfg4 = dict(self.cfg)
-        cfg4["trading_rules"]["entry"]["signal_filters"]["spread_entry"] = [None, 0.010]
+        cfg4["trading_rules"]["entry"]["signal_filters"]["spread_entry_pre"] = [None, 0.010]
         eng4 = TradingEngine(cfg4, {0: "BINANCE", 1: "BITGET"})
-        ok, res = eng4.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "BITGET", 25.0)
+        ok, res = eng4.evaluate_entry_v9("BTC", oracle_book, target_book, "BINANCE", "BITGET", 25.0)
         self.assertFalse(ok)
         self.assertIn("HIGH_SPREAD", res["reason"])
 

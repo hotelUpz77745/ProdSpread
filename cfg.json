@@ -109,15 +109,22 @@
     "trading_rules": {
         "entry": {
             "order_execution_type": "TARGET_LIMIT_IOC",
+            "impulse_detector": {
+                "enabled": true,
+                "buffer_window_ms": 250,
+                "static_leg": "TARGET",
+                "max_static_leg_ratio": 0.25
+            },
             "signal_filters": {
-                "spread_entry": [
-                    0.008,
+                "spread_entry_pre": [
+                    0.013,
                     0.05
                 ],
-                "spread_entry_desc": "Диапазон входного спреда [min, max] (доли от 1, т.е. [0.008, 0.05] = 0.8%..5.0%). null отключает соответствующую границу (например [0.008, null] для работы без потолка).",
+                "spread_entry_base": 0.008,
+                "spread_entry_desc": "spread_entry_pre: Диапазон [min, max] грубого префильтра (триггер запуска таймера задержки dwell_ms). spread_entry_base: Финальный порог входа в эвалюаторе. Позволяет спреду слегка откатиться во время удержания сигнала, но не ниже base.",
                 "min_top_depth_usd": 50.0,
                 "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
-                "min_signal_dwell_ms": 100,
+                "min_signal_dwell_ms": 15,
                 "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
                 "top_n_candidates": 4,
                 "max_desync_ms": {
@@ -144,7 +151,6 @@
                 }
             },
             "target_entry_logic": {
-                "limit_slip_desc": "Дальность заброса LIMIT_IOC ордера от текущего расчетного центра (читается из trading_risks для каждой биржи индивидуально).",
                 "fill_confirm_timeout_sec": {
                     "BINANCE_KUCOIN": 0.3,
                     "BINANCE_BITGET": 0.3,

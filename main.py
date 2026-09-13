@@ -115,6 +115,14 @@ class Main:
                 self.books[exchange_name][base_coin] = {"bids": bids, "asks": asks}
                 self.ts[exchange_name][base_coin] = time.monotonic()
                 self.event_ts[exchange_name][base_coin] = getattr(d, 'event_time_ms', time.time()*1000)
+                
+                # Pipe tick data to engine for impulse detection
+                self.engine.update_market_data(
+                    sym=base_coin, 
+                    ex=exchange_name, 
+                    book=self.books[exchange_name][base_coin], 
+                    ts_mono=self.ts[exchange_name][base_coin]
+                )
         return on_depth
 
     def _is_funding_skip(self) -> bool:
@@ -383,7 +391,7 @@ class Main:
                                     size_usd = float(self.cfg["trading_risks"][target_ex.lower()]["trade_size_usd"])
                                     
                                     is_valid_entry, engine_res = self.engine.evaluate_entry_v9(
-                                        oracle_book, target_book, oracle_ex, target_ex, size_usd
+                                        sym, oracle_book, target_book, oracle_ex, target_ex, size_usd
                                     )
                                     
                                     sig_key = (route_key, sym)
@@ -392,12 +400,18 @@ class Main:
                                         if self.min_signal_dwell_ms > 0:
                                             first_seen = self._signal_first_seen.get(sig_key)
                                             if first_seen is None:
-                                                self._signal_first_seen[sig_key] = now_mono
+                                                # Pre-filter: MUST meet spread_entry_pre_min to start dwelling
+                                                if engine_res["net_spread"] >= self.engine.spread_entry_pre_min:
+                                                    self._signal_first_seen[sig_key] = now_mono
                                                 continue
                                             dwell_ms = (now_mono - first_seen) * 1000.0
                                             if dwell_ms < self.min_signal_dwell_ms:
                                                 continue
                                             self._signal_first_seen.pop(sig_key, None)
+                                        else:
+                                            # Instant entry requires strict pre-filter
+                                            if engine_res["net_spread"] < self.engine.spread_entry_pre_min:
+                                                continue
                                             
                                         canonical_route = self.pm._normalize_route(oracle_ex, target_ex)
                                         self.pm.lock_for_entry(oracle_ex, target_ex, sym, engine_res)

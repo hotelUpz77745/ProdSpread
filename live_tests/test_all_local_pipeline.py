@@ -52,7 +52,7 @@ def get_base_cfg():
                     "entry_api_timeout_sec": 2.0
                 },
                 "signal_filters": {
-                    "spread_entry": [0.004, 0.03],
+                    "spread_entry_pre": [0.004, 0.03],
                     "min_top_depth_usd": 50.0,
                     "orderbook_imbalance": {"enabled": True, "depth_levels": 5, "max_adverse_imbalance": 0.55}
                 }
@@ -101,7 +101,7 @@ class TestPipelineTradingEngine(unittest.TestCase):
         """Ветка LONG: Oracle (Binance) выше аска Target (KuCoin) -> покупаем на Target."""
         oracle_book = {"bids": [[102.0, 1000]], "asks": [[102.02, 1000]]} # mid = 102.01
         target_book = {"bids": [[100.0, 1000]], "asks": [[100.05, 1000]]} # vwap_ask ~ 100.05
-        ok, res = self.engine.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "KUCOIN", 25.0)
+        ok, res = self.engine.evaluate_entry_v9("BTC", oracle_book, target_book, "BINANCE", "KUCOIN", 25.0)
         self.assertTrue(ok)
         self.assertEqual(res["side"], "LONG")
         self.assertEqual(res["target_ex"], "KUCOIN")
@@ -112,7 +112,7 @@ class TestPipelineTradingEngine(unittest.TestCase):
         """Ветка SHORT: Oracle (Binance) ниже бида Target (KuCoin) -> шортим на Target."""
         oracle_book = {"bids": [[98.0, 1000]], "asks": [[98.02, 1000]]}   # mid = 98.01
         target_book = {"bids": [[100.0, 1000]], "asks": [[100.05, 1000]]} # vwap_bid ~ 100.00
-        ok, res = self.engine.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "KUCOIN", 25.0)
+        ok, res = self.engine.evaluate_entry_v9("BTC", oracle_book, target_book, "BINANCE", "KUCOIN", 25.0)
         self.assertTrue(ok)
         self.assertEqual(res["side"], "SHORT")
         self.assertEqual(res["target_ex"], "KUCOIN")
@@ -122,7 +122,7 @@ class TestPipelineTradingEngine(unittest.TestCase):
         """Ветка отклонения по низкому спреду."""
         oracle_book = {"bids": [[100.0, 1000]], "asks": [[100.02, 1000]]}
         target_book = {"bids": [[100.0, 1000]], "asks": [[100.02, 1000]]}
-        ok, res = self.engine.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "KUCOIN", 25.0)
+        ok, res = self.engine.evaluate_entry_v9("BTC", oracle_book, target_book, "BINANCE", "KUCOIN", 25.0)
         self.assertFalse(ok)
         self.assertIn("LOW_SPREAD", res.get("reason", ""))
 
@@ -130,7 +130,7 @@ class TestPipelineTradingEngine(unittest.TestCase):
         """Ветка отклонения по аномально высокому спреду (> spread_entry_max 3%)."""
         oracle_book = {"bids": [[110.0, 1000]], "asks": [[110.02, 1000]]}
         target_book = {"bids": [[100.0, 1000]], "asks": [[100.05, 1000]]}
-        ok, res = self.engine.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "KUCOIN", 25.0)
+        ok, res = self.engine.evaluate_entry_v9("BTC", oracle_book, target_book, "BINANCE", "KUCOIN", 25.0)
         self.assertFalse(ok)
         self.assertIn("HIGH_SPREAD", res.get("reason", ""))
 
@@ -138,7 +138,7 @@ class TestPipelineTradingEngine(unittest.TestCase):
         """Ветка фильтра дисбаланса стакана (OBI)."""
         oracle_book = {"bids": [[102.0, 1000]], "asks": [[102.02, 1000]]}
         target_book = {"bids": [[100.0, 10]], "asks": [[100.05, 10000]]}
-        ok, res = self.engine.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "KUCOIN", 25.0)
+        ok, res = self.engine.evaluate_entry_v9("BTC", oracle_book, target_book, "BINANCE", "KUCOIN", 25.0)
         self.assertFalse(ok)
         self.assertIn("ADVERSE_OBI_LONG", res.get("reason", ""))
 

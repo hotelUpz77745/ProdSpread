@@ -4,7 +4,7 @@
 # ============================================================
 
 from typing import Tuple, Dict, Any, Optional
-from CORE.math_core import OrderbookUtils
+from CORE.math_core import OrderbookUtils, ImpulseDetector
 
 class TradingEngine:
     def __init__(self, cfg: dict, exchanges: dict):
@@ -15,20 +15,33 @@ class TradingEngine:
         self.cfg = cfg
         self.exchanges = exchanges
         
+        self.impulse = ImpulseDetector(cfg)
+        
         entry_rules = self.cfg["trading_rules"]["entry"]
         signal_cfg = entry_rules["signal_filters"]
         
-        # Support [min, max] list format, separate spread_entry / spread_entry_max, and null values
-        spread_val = signal_cfg["spread_entry"]
+        # Support [min, max] list format, separate spread_entry_pre / spread_entry_max, and null values
+        spread_val = signal_cfg.get("spread_entry_pre")
+        if spread_val is None:
+            # Fallback for old configs
+            spread_val = signal_cfg.get("spread_entry")
+
         if isinstance(spread_val, (list, tuple)):
-            self.spread_entry_min = float(spread_val[0]) if len(spread_val) > 0 and spread_val[0] is not None else None
+            self.spread_entry_pre_min = float(spread_val[0]) if len(spread_val) > 0 and spread_val[0] is not None else None
             self.spread_entry_max = float(spread_val[1]) if len(spread_val) > 1 and spread_val[1] is not None else None
         else:
-            self.spread_entry_min = float(spread_val) if spread_val is not None else None
+            self.spread_entry_pre_min = float(spread_val) if spread_val is not None else None
             max_val = signal_cfg["spread_entry_max"] if "spread_entry_max" in signal_cfg else None
             self.spread_entry_max = float(max_val) if max_val is not None else None
             
-        self.spread_entry = self.spread_entry_min if self.spread_entry_min is not None else 0.0
+        self.spread_entry = self.spread_entry_pre_min if self.spread_entry_pre_min is not None else 0.0
+        
+        # Load spread_entry_base, default to spread_entry_pre_min if not present
+        if "spread_entry_base" in signal_cfg:
+            self.spread_entry_base = float(signal_cfg["spread_entry_base"])
+        else:
+            self.spread_entry_base = self.spread_entry_pre_min
+            
         self.min_top_depth_usd = float(signal_cfg["min_top_depth_usd"])
         
         # v9: exchange roles
@@ -99,8 +112,27 @@ class TradingEngine:
     def _get_fee(self, exchange_name: str) -> float:
         return float(self.trading_risks[exchange_name.lower()]["taker_fee"])
 
+    def update_market_data(self, sym: str, ex: str, book: dict, ts_mono: float):
+        """Called on every incoming websocket tick to maintain impulse detector state."""
+        if not self.impulse.is_enabled:
+            return
+            
+        bids = book.get("bids", [])[:3]
+        asks = book.get("asks", [])[:3]
+        
+        # Calculate VWAP of top 3 levels for noise reduction
+        sum_bid_vol = sum(float(b[1]) for b in bids)
+        sum_ask_vol = sum(float(a[1]) for a in asks)
+        
+        if sum_bid_vol > 0 and sum_ask_vol > 0:
+            vwap_bid = sum(float(b[0]) * float(b[1]) for b in bids) / sum_bid_vol
+            vwap_ask = sum(float(a[0]) * float(a[1]) for a in asks) / sum_ask_vol
+            mid_vwap = (vwap_bid + vwap_ask) / 2.0
+            self.impulse.update(sym, ex, mid_vwap, ts_mono)
+
     def evaluate_entry_v9(
         self,
+        sym: str,
         oracle_book: dict,
         target_book: dict,
         oracle_ex: str,
@@ -161,9 +193,9 @@ class TradingEngine:
         # Чистый спред = расчетный спред - комиссия за вход + выход (2x taker_fee)
         net_spread = raw_spread - (target_fee * 2.0)
         
-        if self.spread_entry_min is not None and net_spread < self.spread_entry_min:
+        if self.spread_entry_base is not None and net_spread < self.spread_entry_base:
             return False, {
-                "reason": f"LOW_SPREAD (Net: {net_spread*100:.3f}% < {self.spread_entry_min*100:.3f}%, "
+                "reason": f"LOW_SPREAD (Net: {net_spread*100:.3f}% < {self.spread_entry_base*100:.3f}%, "
                           f"Raw: {raw_spread*100:+.3f}%, Fee: {target_fee*200:.3f}%)"
             }
         
@@ -189,6 +221,17 @@ class TradingEngine:
                 if side == "SHORT" and imbalance > self.max_adverse_imbalance:
                     return False, {"reason": f"ADVERSE_OBI_SHORT (imb={imbalance:+.2f})"}
         
+        # Check Impulse (Case B or Case V depending on config)
+        is_impulse, reason, o_delta, t_delta = self.impulse.check_impulse(
+            sym=sym,
+            oracle_ex=oracle_ex,
+            target_ex=target_ex,
+            oracle_price=oracle_mid,
+            target_price=target_mid
+        )
+        if not is_impulse:
+            return False, {"reason": reason}
+            
         return True, {
             "side": side,
             "target_ex": target_ex,
