@@ -100,6 +100,64 @@ async def main():
                     
         except Exception as e:
             print(f"Binance ERROR: {e}")
+
+        # ============================================================
+        # KUCOIN TEST
+        # ============================================================
+        print("\n" + "=" * 50)
+        print("-> KUCOIN (TESTING AGGRESSIVE LIMIT_IOC)")
+        print("=" * 50)
+        ku_sym = "XRPUSDTM"
+        
+        try:
+            # Fetch active contracts to get real specs for XRPUSDTM
+            async with session.get("https://api-futures.kucoin.com/api/v1/contracts/active") as resp:
+                data = await resp.json()
+                if data.get("code") == "200000":
+                    kucoin.symbol_info = data.get("data", [])
             
+            # Fetch Kucoin ticker
+            async with session.get(f"https://api-futures.kucoin.com/api/v1/ticker?symbol={ku_sym}") as resp:
+                data = await resp.json()
+                ku_ticker = data.get("data", {})
+                ku_price = float(ku_ticker.get("price", 0.0))
+                
+            print(f"Текущая рыночная цена {ku_sym} на KuCoin: {ku_price}")
+            if ku_price <= 0:
+                print("ERROR: Kucoin ticker returned 0 price.")
+                return
+                
+            ku_aggressive_price = ku_price * 1.02
+            print(f"Агрессивная тестовая цена BUY для KuCoin: {ku_aggressive_price:.4f} (+2% к рынку)")
+            
+            # Switch margin mode to CROSS (as leverage_setter does)
+            await kucoin.set_margin_type(ku_sym, "CROSS", leverage=20)
+            
+            # Place LIMIT_IOC on KuCoin (XRP contract is 10 XRP = ~$13.5, so we need >= $15)
+            ku_size_usd = 16.0
+            k_res = await kucoin.place_order(ku_sym, "BUY", ku_size_usd, ku_aggressive_price, order_type="LIMIT_IOC", position_side="LONG")
+            print(f"KuCoin Place Response: {k_res}")
+            
+            await asyncio.sleep(1.0)
+            
+            # Verify fill via get_position_rest
+            pos = await kucoin.get_position_rest(ku_sym, "LONG")
+            print(f"KuCoin Position Check: {pos}")
+            
+            pos_size = float(pos.get("size", 0.0))
+            if pos_size > 0:
+                print(f"SUCCESS: KuCoin Order filled! Position size: {pos_size}")
+                print("Closing KuCoin position via MARKET order...")
+                close_k = await kucoin.place_order(ku_sym, "SELL", ku_size_usd, ku_aggressive_price, order_type="MARKET", position_side="LONG", reduce_only=True)
+                print(f"KuCoin Close Response: {close_k}")
+                await asyncio.sleep(1.0)
+                pos_after = await kucoin.get_position_rest(ku_sym, "LONG")
+                print(f"KuCoin Position after close: {pos_after}")
+            else:
+                print("FAILURE: KuCoin Order did not fill (Position size = 0).")
+                
+        except Exception as e:
+            print(f"KuCoin ERROR: {e}")
+
 if __name__ == "__main__":
     asyncio.run(main())

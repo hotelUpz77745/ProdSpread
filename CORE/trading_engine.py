@@ -18,6 +18,7 @@ class TradingEngine:
         # Read signal filter parameters from signal_filters directly
         signal_cfg = self.cfg["trading_rules"]["entry"]["signal_filters"]
         self.spread_entry = float(signal_cfg["spread_entry"])
+        self.spread_entry_max = float(signal_cfg["spread_entry_max"])
         synth_cfg = signal_cfg["synthetic_exit"]
         self.check_synthetic_exit = bool(synth_cfg["enabled"])
         self.check_synthetic_slippage = bool(synth_cfg["check_slippage"])
@@ -101,6 +102,11 @@ class TradingEngine:
         if net_spread < self.spread_entry:
             return False, {
                 "reason": f"LOW_SPREAD (Net: {net_spread * 100:.3f}% < {self.spread_entry * 100:.3f}%, Gross: {vwap_spread * 100:.3f}%, Fee: {entry_comm * 100:.3f}%)"
+            }
+            
+        if net_spread > self.spread_entry_max:
+            return False, {
+                "reason": f"HIGH_SPREAD (Net: {net_spread * 100:.3f}% > Max: {self.spread_entry_max * 100:.3f}%, Gross: {vwap_spread * 100:.3f}%, Fee: {entry_comm * 100:.3f}%)"
             }
             
         # ORDERBOOK IMBALANCE FILTER (OBI) - Evaluate on BOTH legs

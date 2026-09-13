@@ -24,7 +24,7 @@
             "paper_start_balance": 11.77,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0005,
-            "limit_slip_ratio": 0.0015,
+            "limit_slip_ratio": 0.0025,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -33,7 +33,7 @@
             "paper_start_balance": 5.83,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0006,
-            "limit_slip_ratio": 0.0015,
+            "limit_slip_ratio": 0.0025,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -42,7 +42,7 @@
             "paper_start_balance": 0.0,
             "trade_size_usd": 0.0,
             "taker_fee": 0.0006,
-            "limit_slip_ratio": 0.0015,
+            "limit_slip_ratio": 0.0025,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -51,7 +51,7 @@
             "paper_start_balance": 11.43,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0006,
-            "limit_slip_ratio": 0.0015,
+            "limit_slip_ratio": 0.0025,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -99,6 +99,8 @@
             "order_execution_type": "PARALLEL_LIMIT_IOC",
             "signal_filters": {
                 "spread_entry": 0.008,
+                "spread_entry_max": 0.025,
+                "spread_entry_max_desc": "Максимально допустимый спред для входа (0.025 = 2.5%). Отсекает токсичные дампы, аномалии и рассинхроны стаканов.",
                 "min_top_depth_usd": 50.0,
                 "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
                 "min_signal_dwell_ms": 0,
@@ -202,26 +204,21 @@
                     {
                         "step": 0,
                         "after_sec": 0.0,
-                        "price_slip": -0.0
+                        "price_slip": -0.0005
                     },
                     {
                         "step": 1,
-                        "after_sec": 1.0,
-                        "price_slip": -0.0008
-                    },
-                    {
-                        "step": 2,
-                        "after_sec": 2.5,
+                        "after_sec": 0.35,
                         "price_slip": -0.0015
                     },
                     {
-                        "step": 3,
-                        "after_sec": 4.0,
+                        "step": 2,
+                        "after_sec": 0.8,
                         "price_slip": -999.0
                     }
                 ],
-                "chase_map_desc": "Карта чейзинга стакана с HFT-интервалами (1.0с - 2.5с - 4.0с маркет).",
-                "limit_fill_wait_sec": 0.35,
+                "chase_map_desc": "Карта чейзинга стакана с ультрабыстрыми HFT-интервалами (0.0с - 0.35с - 0.8с маркет).",
+                "limit_fill_wait_sec": 0.15,
                 "limit_fill_wait_sec_desc": "Пауза ожидания исполнения лимитного ордера чейзинга перед проверкой и отменой."
             },
             "max_desync_ms": {
