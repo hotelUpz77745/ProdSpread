@@ -160,7 +160,7 @@
             }
         },
         "exit": {
-            "close_confirm_timeout_sec": {
+            "market_close_confirm_timeout_sec": {
                 "BINANCE_KUCOIN": 1.8,
                 "BINANCE_BITGET": 1.8,
                 "KUCOIN_BITGET": 1.8,
@@ -168,10 +168,10 @@
                 "KUCOIN_OKX": 1.8,
                 "OKX_BITGET": 1.8
             },
-            "close_confirm_timeout_sec_desc": "Max seconds to poll WS cache for zero-size position confirmation on exit. Configured per exchange pair.",
+            "market_close_confirm_timeout_sec_desc": "Макс. время ожидания (сек) подтверждения закрытия позиции по WS при выходе ордером MARKET.",
             "target_exit": {
                 "desc": "Управление выходом из одноногой позиции по локальному профиту на Мишени (v9).",
-                "stop_loss_pct": 0.005,
+                "stop_loss_pct": null,
                 "stop_loss_pct_desc": "Макс. допустимый убыток (0.005 = 0.5%). При достижении — немедленный MARKET выход. Установить null для отключения.",
                 "exit_order_type": "MARKET",
                 "exit_order_type_desc": "Тип ордера на выход: MARKET (рекомендуется для сайзов до 300$, исполнение в 1 RTT без проскальзывания и зависаний) или LIMIT_IOC (для сайзов от 300$ до 3000$ как Cap-Market с 200мс фоллбеком в маркет). Свыше 3000$ требуется алгоритмический слайсинг/чейзинг.",

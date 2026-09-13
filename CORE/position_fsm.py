@@ -117,7 +117,11 @@ class PositionFSM:
         self.ws_verify_timeout = float(unwind_cfg.get("ws_verify_timeout_sec", 0.3))
         self.unwind_retry_pause = float(unwind_cfg.get("retry_pause_sec", 0.05))
         
-        close_timeout_cfg = self.cfg.get("trading_rules", {}).get("exit", {}).get("close_confirm_timeout_sec", {})
+        exit_cfg = self.cfg.get("trading_rules", {}).get("exit", {})
+        close_timeout_cfg = (
+            exit_cfg.get("market_close_confirm_timeout_sec")
+            or exit_cfg.get("close_confirm_timeout_sec", {})
+        )
         if isinstance(close_timeout_cfg, dict):
             self.close_confirm_timeout = float(close_timeout_cfg.get(pair_key1) or close_timeout_cfg.get(pair_key2) or 1.8)
         elif close_timeout_cfg:
