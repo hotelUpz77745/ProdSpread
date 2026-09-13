@@ -97,93 +97,152 @@
 
 4. Когда возьмем за основу один из кейсов варианта 3 (возможно и оба), торговать, как я уже сказал ранее будем только ведомую биржу которая будет жестко задана в карте конфигов (уже указал выше). Для этого нужно будет видоизменить формулы математики сигналов (наверное предварительный сигнал оставим но возможно для него введем отдельный spread_entry_pre а уже для базового сигнала spread_entry_base который будет пониже). И. Нужно будет каким то образом фиксировать что та или иная биржа стоит и движение происходит по одному из трех кейсов пункта 3, детерминировать нужный нам пункт (кстати это наверное должно задаваться в конфигах). Чтобы фиксировать стояк одной из ног бирж нужно писать в память тики за последнюю секунду или пол секунды (должно тоже быть прописано в конфигах) и лучший параметр надо обсудить тоже. И когда тригернет нужный нам кейс (например B п.3) отдавать сигнал и сторону.
 
-  Детект поводыря (Все таки Кейс Б -- обсудил с другим агентом): Тебе не нужен статичный спред. Тебе нужен импульс. Ты должен сравнивать не просто стаканы между собой, а следить за дельтой Binance.
-  Пример: Binance за 100 мс делает рывок на $+0.4\%$. Ты смотришь на KuCoin — а он стоит на месте (или сдвинулся всего на $0.1\%$).
+4. Рефакторинг генератора сигналов (v9.1 Signal Engine): Переход от статического спреда к Детектору Импульса Поводыря (Кейс Б).
 
-  Важно: наверное пока оставим старую логику с расчетом сигнала. А новые идеи просто пометишь тут в тех долге и сразу предложешь решение реализации. Например:
+---
 
-  (Импульсный детектор для v9.1): 
-  Проблема: Статический расчет спреда не отличает истинный импульс Поводыря от локального прострела стакана Мишени. 
-  Решение (Импульсный фильтр):
-  
-  **Подробное руководство по внедрению для v9.1:**
-  На этапе v9.0 мы пока оставляем старый спред, но держим в уме, что иногда бот будет стрелять по Кейсу В (что плохо). В версии 9.1 нужно внедрить кольцевой буфер.
+### 🚨 Пост-мортем боевого инцидента (2026-09-13: Сделка FLOCK, PnL: -2.90% / -0.70$)
 
-  **1. Добавляем параметры в `cfg.json`:**
-  ```json
-  "trading_rules": {
-      "entry": {
-          "impulse_detector": {
-              "enabled": true,
-              "buffer_window_ms": 300,
-              "oracle_min_delta_pct": 0.001,  // 0.1% рывок оракула
-              "target_max_delta_pct": 0.0005  // не более 0.05% изменения мишени
-          }
-      }
-  }
-  ```
+#### 1. Хронология инцидента по логам:
+* **18:02:46**: `[FLOCK] v9 Opening LONG on BITGET | Price: 0.072724 (VWAP: 0.072543) | Net Spread: 1.796%`.
+* **18:02:46**: Мгновенный налив на Bitget: `Filled: 343.0000 @ 0.072410` ($24.83).
+* **18:02:46 (dur=0s)**: Первичная оценка выхода: `net = -0.2305%` (локальный bid/ask спред стакана + 2x taker_fee).
+* **18:02:51 .. 18:03:41 (dur=5s..55s)**: Цена на Bitget не пошла вверх за Оракулом, а стремительно покатилась вниз:
+  `-1.97% (5s) -> -1.47% (10s) -> -2.71% (20s) -> -2.08% (30s) -> -3.00% (55s)`.
+* **18:03:46 (dur=60s)**: Истек TTL шага деградации: `TTL forced exit -> MARKET SELL 343 @ 0.072410`.
+* **18:03:46**: Сделка закрыта с убытком `-2.90% (-0.6993$)`. Сработал перманентный бан монеты (`Severe loss trade <= -0.75%`).
 
-  **2. Хранение тиков в `CORE/trading_engine.py`:**
-  В `__init__` создаем буфер, индексируемый по связке (символ, биржа):
-  ```python
-  from collections import deque
-  import time
-  
-  self.tick_buffer = {}  # { (sym, ex): deque() }
-  ```
-  Функция обновления и очистки буфера:
-  ```python
-  def _update_ticks(self, sym: str, ex: str, mid_price: float):
-      now = time.time() * 1000
-      key = (sym, ex)
-      if key not in self.tick_buffer:
-          self.tick_buffer[key] = deque()
-      
-      self.tick_buffer[key].append((now, mid_price))
-      
-      # Очистка старых тиков (старше buffer_window_ms)
-      window = self.cfg["trading_rules"]["entry"]["impulse_detector"]["buffer_window_ms"]
-      while self.tick_buffer[key] and (now - self.tick_buffer[key][0][0]) > window:
-          self.tick_buffer[key].popleft()
-  ```
+#### 2. Анализ коренных причин (Root Cause Analysis):
+1. **Ловушка Кейса В (Спуфинг / Падающий нож):**
+   Вход произошел чисто по моментальному статическому спреду (`(oracle_mid - target_vwap_ask) / oracle_mid = 1.796%`). Движок **не проверял**, ПОЧЕМУ возник этот спред:
+   - Если спред возник из-за мгновенного спайка на Binance, который тут же исчез (микро-выколка стакана на 10 мс), вход в лонг на Bitget обречен на убыток.
+   - Если спред возник из-за того, что на Bitget агрессивный продавец давил рынок вниз, а на Binance цена стояла — бот купил падающий нож.
+2. **Отсутствие проверки устойчивости сигнала (`min_signal_dwell_ms: 0`):**
+   Ордер был отправлен по первому же входящему пакету WS без фильтрации шума.
+3. **Отключенный стоп-лосс (`stop_loss_pct: null`):**
+   При просадке -1.97% на 5-й секунде бот не имел права резать убыток и удерживал позицию целую минуту до TTL-дедлайна.
+4. **Токсичный микрокап:**
+   Монета `FLOCK` с тонким стаканом подвержена манипуляциям маркет-мейкеров и высоким проскальзываниям.
 
-  **3. Расчет дельты (`_calculate_delta`):**
-  ```python
-  def _calculate_delta(self, sym: str, ex: str, current_price: float) -> float:
-      key = (sym, ex)
-      if key not in self.tick_buffer or not self.tick_buffer[key]:
-          return 0.0
-      oldest_price = self.tick_buffer[key][0][1]
-      return (current_price - oldest_price) / oldest_price if oldest_price > 0 else 0.0
-  ```
+---
 
-  **4. Интеграция в `evaluate_entry_v9`:**
-  ```python
-  # Обновляем буферы при каждой оценке конкретного символа
-  self._update_ticks(sym, oracle_ex, oracle_mid)
-  self._update_ticks(sym, target_ex, target_mid)
-  
-  impulse_cfg = self.cfg["trading_rules"]["entry"].get("impulse_detector", {})
-  if impulse_cfg.get("enabled"):
-      o_delta = self._calculate_delta(sym, oracle_ex, oracle_mid)
-      t_delta = self._calculate_delta(sym, target_ex, target_mid)
-      
-      min_o_delta = impulse_cfg["oracle_min_delta_pct"]
-      max_t_delta = impulse_cfg["target_max_delta_pct"]
-      
-      # Для входа в LONG (Target дешевле Oracle)
-      # Ожидаем рывок Oracle ВВЕРХ
-      if spread > 0: 
-          if o_delta < min_o_delta or abs(t_delta) > max_t_delta:
-              return None, "NO_IMPULSE"
-              
-      # Для входа в SHORT (Target дороже Oracle)
-      # Ожидаем рывок Oracle ВНИЗ
-      elif spread < 0:
-          if o_delta > -min_o_delta or abs(t_delta) > max_t_delta:
-              return None, "NO_IMPULSE"
-  ```
-  Сигнал валиден только если Оракул сделал направленный рывок $\ge X\%$ за последние $300$ мс, а Мишень изменилась $\le Y\%$.
+### 📐 Архитектурный план: Lead-Lag Momentum Engine (v9.1)
+
+#### 1. Концепция: Торговля СТРОГО Кейса Б (Опережающий Импульс Поводыря)
+* **Запрещен Кейс А (Обе биржи в хаотичном движении):** Высокий риск ложного арбитража.
+* **Категорически запрещен Кейс В (Движение на ведомой бирже):** Попытка ловить падающие ножи или заходить против локального давления стакана.
+* **Разрешен ТОЛЬКО Кейс Б:** 
+  1. Биржа-Поводырь (Binance) совершает резкий направленный импульс: $|\Delta_{oracle}| \ge \delta_{min}$ за последние $T_{window}$ миллисекунд (например, $\ge +0.25\%$ за 200 мс).
+  2. Биржа-Мишень (Bitget/KuCoin) еще **находится в покое**: $|\Delta_{target}| \le \delta_{max}$ (например, не более $\pm 0.05\%$).
+  3. Суммарный чистый спред после учета комиссий и локального bid/ask спреда удовлетворяет `spread_entry`.
+
+#### 2. Объектно-ориентированная архитектура (ООП по Протоколу разработки)
+Создается выделенный независимый модуль `CORE/impulse_detector.py` с классом `ImpulseDetector`:
+* **Заголовок:** `# FILE: CORE/impulse_detector.py` / `# ROLE: ...`
+* **Инициализация:** Прямое чтение параметров `cfg["trading_rules"]["entry"]["impulse_detector"]` без `.get()`.
+* **Хранилище тиков:** Двусторонние очереди `collections.deque` с метками времени высокого разрешения `time.monotonic_ns()`.
+* **Подавление фантомных тиков:** Расчет дельты не по 1-му уровню стакана (который можно спуфить 1 контрактом), а по средневзвешенной цене VWAP первых 3 уровней стакана.
+
+```python
+# ============================================================
+# FILE: CORE/impulse_detector.py
+# ROLE: Lead-lag momentum and impulse verification engine for Oracle-Target pairs.
+# ============================================================
+from collections import deque
+import time
+from typing import Dict, Tuple, Optional
+
+class ImpulseDetector:
+    def __init__(self, cfg: dict):
+        impulse_cfg = cfg["trading_rules"]["entry"]["impulse_detector"]
+        self.is_enabled = bool(impulse_cfg["enabled"])
+        self.buffer_window_sec = float(impulse_cfg["buffer_window_ms"]) / 1000.0
+        self.oracle_min_delta = float(impulse_cfg["oracle_min_delta_pct"])
+        self.target_max_delta = float(impulse_cfg["target_max_delta_pct"])
+        
+        # Хранилище тиков: (symbol, exchange) -> deque of (timestamp_mono, price)
+        self._buffers: Dict[Tuple[str, str], deque] = {}
+
+    def update(self, sym: str, ex: str, vwap_price: float, ts_mono: float):
+        key = (sym, ex)
+        if key not in self._buffers:
+            self._buffers[key] = deque()
+        buf = self._buffers[key]
+        buf.append((ts_mono, vwap_price))
+        
+        # Очистка устаревших тиков за пределами окна
+        cutoff = ts_mono - self.buffer_window_sec
+        while buf and buf[0][0] < cutoff:
+            buf.popleft()
+
+    def get_delta(self, sym: str, ex: str, current_price: float) -> float:
+        key = (sym, ex)
+        buf = self._buffers.get(key)
+        if not buf or len(buf) < 2:
+            return 0.0
+        base_price = buf[0][1]
+        if base_price <= 0:
+            return 0.0
+        return (current_price - base_price) / base_price
+
+    def check_impulse(
+        self,
+        sym: str,
+        oracle_ex: str,
+        target_ex: str,
+        side: str,
+        oracle_price: float,
+        target_price: float
+    ) -> Tuple[bool, str, float, float]:
+        """
+        Проверяет соблюдение Кейса Б:
+        - Для LONG: Oracle вырос >= +oracle_min_delta, Target изменился не более target_max_delta
+        - Для SHORT: Oracle упал <= -oracle_min_delta, Target изменился не более target_max_delta
+        """
+        if not self.is_enabled:
+            return True, "IMPULSE_DISABLED", 0.0, 0.0
+            
+        o_delta = self.get_delta(sym, oracle_ex, oracle_price)
+        t_delta = self.get_delta(sym, target_ex, target_price)
+        
+        if side == "LONG":
+            if o_delta < self.oracle_min_delta:
+                return False, f"ORACLE_NO_MOMENTUM ({o_delta*100:+.2f}% < {self.oracle_min_delta*100:+.2f}%)", o_delta, t_delta
+            if abs(t_delta) > self.target_max_delta:
+                return False, f"TARGET_NOT_STATIC ({abs(t_delta)*100:+.2f}% > {self.target_max_delta*100:+.2f}%)", o_delta, t_delta
+        else: # SHORT
+            if o_delta > -self.oracle_min_delta:
+                return False, f"ORACLE_NO_MOMENTUM ({o_delta*100:+.2f}% > -{self.oracle_min_delta*100:+.2f}%)", o_delta, t_delta
+            if abs(t_delta) > self.target_max_delta:
+                return False, f"TARGET_NOT_STATIC ({abs(t_delta)*100:+.2f}% > {self.target_max_delta*100:+.2f}%)", o_delta, t_delta
+                
+        return True, "VALID_IMPULSE_CASE_B", o_delta, t_delta
+```
+
+#### 3. Конфигурация в `cfg.json` (Структура без магических чисел)
+```json
+"trading_rules": {
+    "entry": {
+        "impulse_detector": {
+            "enabled": true,
+            "enabled_desc": "Включение фильтра истинного импульса Поводыря (Кейс Б). Блокирует вход при отсутствии импульса на Оракуле.",
+            "buffer_window_ms": 250,
+            "buffer_window_ms_desc": "Длина скользящего окна анализа импульса (мс).",
+            "oracle_min_delta_pct": 0.002,
+            "oracle_min_delta_pct_desc": "Минимальное направленное изменение цены на Оракуле за окно buffer_window_ms (0.002 = 0.2%).",
+            "target_max_delta_pct": 0.0006,
+            "target_max_delta_pct_desc": "Максимально допустимое смещение цены на Мишени (0.0006 = 0.06%). Гарантирует стояк на ведомой бирже."
+        }
+    }
+}
+```
+
+#### 4. Этапы внедрения (Инженерный роадмап):
+1. **Шаг 1:** Реализация `CORE/impulse_detector.py` со строгой типизацией и соответствием Dev Protocol.
+2. **Шаг 2:** Написание модульных тестов `live_tests/test_impulse_detector.py` (проверка сценариев Кейса А, Кейса Б, Кейса В, очистки буфера, сброса по таймауту).
+3. **Шаг 3:** Интеграция вызова `impulse_detector.check_impulse` в `CORE/trading_engine.py -> evaluate_entry_v9`.
+4. **Шаг 4:** Добавление параметров в `cfg.json` и мок-конфиги юнит-тестов.
+5. **Шаг 5:** Запуск сухого прогона (Dry-run / Paper logging) на живом рынке для калибровки порогов `oracle_min_delta_pct` под реальную волатильность.
 
 
 5. В связи с этим вырезаем всю логику хеджирования. Вторая биржа (доминанта) превращается чисто в компас.
