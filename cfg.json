@@ -25,7 +25,7 @@
             "paper_start_balance": 0.0,
             "trade_size_usd": 0.0,
             "taker_fee": 0.0005,
-            "limit_slip_ratio": 0.0025,
+            "limit_slip_ratio": 0.0015,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -34,7 +34,7 @@
             "paper_start_balance": 5.95,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0006,
-            "limit_slip_ratio": 0.0025,
+            "limit_slip_ratio": 0.0015,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -43,7 +43,7 @@
             "paper_start_balance": 0.0,
             "trade_size_usd": 0.0,
             "taker_fee": 0.0006,
-            "limit_slip_ratio": 0.0025,
+            "limit_slip_ratio": 0.0015,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -52,7 +52,7 @@
             "paper_start_balance": 11.45,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0006,
-            "limit_slip_ratio": 0.0025,
+            "limit_slip_ratio": 0.0015,
             "volatility_discount_entry": 0.4,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -155,6 +155,8 @@
                 }
             },
             "target_entry_logic": {
+                "entry_slip_ratio": 0.0015,
+                "entry_slip_ratio_desc": "Дальность заброса лимитной заявки LIMIT_IOC (проскальзывание входа). Например 0.0015 = 0.15% вглубь стакана от расчетной VWAP цены для гарантированного моментального налива.",
                 "fill_confirm_timeout_sec": {
                     "BINANCE_KUCOIN": 0.3,
                     "BINANCE_BITGET": 0.3,

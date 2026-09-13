@@ -114,6 +114,18 @@ class PositionFSM:
         self.fill_confirm_poll_interval = float(target_entry_cfg["fill_confirm_poll_interval_sec"])
         self.entry_api_timeout = float(target_entry_cfg["entry_api_timeout_sec"])
         
+        # Entry slip ratio / дальность заброса лимитной заявки LIMIT_IOC
+        slip_cfg = target_entry_cfg.get("entry_slip_ratio") if "entry_slip_ratio" in target_entry_cfg else target_entry_cfg.get("limit_slip_ratio")
+        if slip_cfg is not None:
+            if isinstance(slip_cfg, dict):
+                self.entry_slip_ratio = float(slip_cfg.get(self.target_ex, slip_cfg.get(self.target_ex.lower(), 0.0025)))
+            else:
+                self.entry_slip_ratio = float(slip_cfg)
+        elif self.target_ex.lower() in self.cfg.get("trading_risks", {}) and "limit_slip_ratio" in self.cfg["trading_risks"][self.target_ex.lower()]:
+            self.entry_slip_ratio = float(self.cfg["trading_risks"][self.target_ex.lower()]["limit_slip_ratio"])
+        else:
+            self.entry_slip_ratio = 0.0025
+        
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
         self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
         self.ws_verify_timeout = float(unwind_cfg["ws_verify_timeout_sec"])
@@ -191,7 +203,7 @@ class PositionFSM:
         
         entry_price = self.engine_res["entry_price"]
         size_usd = float(self.cfg["trading_risks"][self.target_ex.lower()]["trade_size_usd"])
-        slip = float(self.cfg["trading_risks"][self.target_ex.lower()]["limit_slip_ratio"])
+        slip = self.entry_slip_ratio
         
         if self.side == "LONG":
             order_side = "BUY"

@@ -5,6 +5,7 @@
 import unittest
 from unittest.mock import MagicMock, AsyncMock
 import asyncio
+import copy
 import os
 import sys
 
@@ -182,6 +183,44 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fsm.state, PositionState.CLOSING)
         self.pm_mock.confirm_exit.assert_not_called()
         self.pm_mock.rollback_exit.assert_called_once()
+
+    async def test_entry_slip_ratio_override(self):
+        cfg_custom = copy.deepcopy(self.cfg)
+        cfg_custom["trading_rules"]["entry"]["target_entry_logic"] = {
+            "entry_slip_ratio": 0.0015,
+            "fill_confirm_timeout_sec": {"BINANCE_BITGET": 0.05},
+            "fill_confirm_poll_interval_sec": 0.0,
+            "entry_api_timeout_sec": 1.0
+        }
+        engine_res = {
+            "side": "LONG",
+            "entry_price": 50000.0,
+            "qty": 0.002,
+            "net_spread": 0.015
+        }
+        fsm = PositionFSM(
+            sym="BTCUSDT",
+            route="BINANCE_BITGET",
+            target_ex="BITGET",
+            oracle_ex="BINANCE",
+            side="LONG",
+            engine_res=engine_res,
+            cfg=cfg_custom,
+            orders=self.orders_mock,
+            coin_to_native={"BTCUSDT": {"BITGET": "BTCUSDT"}},
+            pm=self.pm_mock,
+            writer=self.writer_mock
+        )
+        self.assertEqual(fsm.entry_slip_ratio, 0.0015)
+        
+        self.mock_bitget.get_executed_position.return_value = {"size": 0.002, "price": 50075.0}
+        self.mock_bitget.get_exact_position_guarded.return_value = {"size": 0.002, "price": 50075.0}
+        
+        await fsm.run_open()
+        # Verify order was placed with limit_price = 50000 * (1 + 0.0015) = 50075.0
+        self.mock_bitget.place_order.assert_called_once_with(
+            "BTCUSDT", "BUY", 100.0, 50075.0, order_type="LIMIT_IOC", position_side="LONG"
+        )
 
 if __name__ == '__main__':
     unittest.main()
