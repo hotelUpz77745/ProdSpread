@@ -102,7 +102,86 @@
 
   Важно: наверное пока оставим старую логику с расчетом сигнала. А новые идеи просто пометишь тут в тех долге и сразу предложешь решение реализации. Например:
 
-  (Импульсный детектор для v9.1):Проблема: Статический расчет спреда не отличает истинный импульс Поводыря от локального прострела стакана Мишени.Решение (Импульсный фильтр):В main.py заводим кольцевой буфер (Ring Buffer / collections.deque) на 500 мс для хранения (timestamp, mid_price) по Оракулу.В момент превышения spread_entry дополнительно проверяем дельту Оракула: (Oracle_now / Oracle_T_minus_300ms) - 1.Сигнал валиден только если Оракул сделал направленный рывок $\ge X\%$ за последние $300$ мс, а Мишень изменилась $\le Y\%$.На этапе v9.0 мы пока оставляем старый спред, но держим в уме, что иногда бот будет стрелять по Кейсу В.
+  (Импульсный детектор для v9.1): 
+  Проблема: Статический расчет спреда не отличает истинный импульс Поводыря от локального прострела стакана Мишени. 
+  Решение (Импульсный фильтр):
+  
+  **Подробное руководство по внедрению для v9.1:**
+  На этапе v9.0 мы пока оставляем старый спред, но держим в уме, что иногда бот будет стрелять по Кейсу В (что плохо). В версии 9.1 нужно внедрить кольцевой буфер.
+
+  **1. Добавляем параметры в `cfg.json`:**
+  ```json
+  "trading_rules": {
+      "entry": {
+          "impulse_detector": {
+              "enabled": true,
+              "buffer_window_ms": 300,
+              "oracle_min_delta_pct": 0.001,  // 0.1% рывок оракула
+              "target_max_delta_pct": 0.0005  // не более 0.05% изменения мишени
+          }
+      }
+  }
+  ```
+
+  **2. Хранение тиков в `CORE/trading_engine.py`:**
+  В `__init__` создаем буфер:
+  ```python
+  from collections import deque
+  import time
+  
+  self.tick_buffer = {}  # { 'BINANCE': deque(), 'KUCOIN': deque() }
+  ```
+  Функция обновления и очистки буфера:
+  ```python
+  def _update_ticks(self, ex: str, mid_price: float):
+      now = time.time() * 1000
+      if ex not in self.tick_buffer:
+          self.tick_buffer[ex] = deque()
+      
+      self.tick_buffer[ex].append((now, mid_price))
+      
+      # Очистка старых тиков (старше buffer_window_ms)
+      window = self.cfg["trading_rules"]["entry"]["impulse_detector"]["buffer_window_ms"]
+      while self.tick_buffer[ex] and (now - self.tick_buffer[ex][0][0]) > window:
+          self.tick_buffer[ex].popleft()
+  ```
+
+  **3. Расчет дельты (`_calculate_delta`):**
+  ```python
+  def _calculate_delta(self, ex: str, current_price: float) -> float:
+      if ex not in self.tick_buffer or not self.tick_buffer[ex]:
+          return 0.0
+      oldest_price = self.tick_buffer[ex][0][1]
+      return (current_price - oldest_price) / oldest_price
+  ```
+
+  **4. Интеграция в `evaluate_entry_v9`:**
+  ```python
+  # Обновляем буферы при каждой оценке
+  self._update_ticks(oracle_ex, oracle_mid)
+  self._update_ticks(target_ex, target_mid)
+  
+  impulse_cfg = self.cfg["trading_rules"]["entry"].get("impulse_detector", {})
+  if impulse_cfg.get("enabled"):
+      o_delta = self._calculate_delta(oracle_ex, oracle_mid)
+      t_delta = self._calculate_delta(target_ex, target_mid)
+      
+      min_o_delta = impulse_cfg["oracle_min_delta_pct"]
+      max_t_delta = impulse_cfg["target_max_delta_pct"]
+      
+      # Для входа в LONG (Target дешевле Oracle)
+      # Ожидаем рывок Oracle ВВЕРХ
+      if spread > 0: 
+          if o_delta < min_o_delta or abs(t_delta) > max_t_delta:
+              return None, "NO_IMPULSE"
+              
+      # Для входа в SHORT (Target дороже Oracle)
+      # Ожидаем рывок Oracle ВНИЗ
+      elif spread < 0:
+          if o_delta > -min_o_delta or abs(t_delta) > max_t_delta:
+              return None, "NO_IMPULSE"
+  ```
+  Сигнал валиден только если Оракул сделал направленный рывок $\ge X\%$ за последние $300$ мс, а Мишень изменилась $\le Y\%$.
 
 
 5. В связи с этим вырезаем всю логику хеджирования. Вторая биржа (доминанта) превращается чисто в компас.
