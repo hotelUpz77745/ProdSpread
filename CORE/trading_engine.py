@@ -17,22 +17,46 @@ class TradingEngine:
         
         entry_rules = self.cfg.get("trading_rules", {}).get("entry", {})
         signal_cfg = entry_rules.get("signal_filters", {})
-        self.spread_entry = float(signal_cfg.get("spread_entry", 0.008))
-        self.spread_entry_max = float(signal_cfg.get("spread_entry_max", 0.025))
+        
+        # Support [min, max] list format, separate spread_entry / spread_entry_max, and null values
+        spread_val = signal_cfg.get("spread_entry")
+        if isinstance(spread_val, (list, tuple)):
+            self.spread_entry_min = float(spread_val[0]) if len(spread_val) > 0 and spread_val[0] is not None else None
+            self.spread_entry_max = float(spread_val[1]) if len(spread_val) > 1 and spread_val[1] is not None else None
+        else:
+            self.spread_entry_min = float(spread_val) if spread_val is not None else 0.008
+            max_val = signal_cfg.get("spread_entry_max")
+            self.spread_entry_max = float(max_val) if max_val is not None else None
+            
+        self.spread_entry = self.spread_entry_min if self.spread_entry_min is not None else 0.0
         self.min_top_depth_usd = float(signal_cfg.get("min_top_depth_usd", 50.0))
         
         # v9: exchange roles
         self.exchange_roles = self.cfg.get("exchange_roles", {})
         
-        # v9: target exit params
+        # v9: target exit params (TTL is derived directly from decay_map)
         target_exit_cfg = self.cfg.get("trading_rules", {}).get("exit", {}).get("target_exit", {})
         
         # v9: stop loss can be null
         stop_loss_val = target_exit_cfg.get("stop_loss_pct")
         self.stop_loss_pct = float(stop_loss_val) if stop_loss_val is not None else None
         
-        self.ttl_sec = float(target_exit_cfg.get("ttl_sec", 60.0))
         self.decay_map = target_exit_cfg.get("decay_map", [])
+        derived_ttl = None
+        for rule in self.decay_map:
+            ratio = rule.get("min_profit_ratio")
+            spread = rule.get("target_spread")
+            if (ratio is None and spread is None) or (isinstance(ratio, (int, float)) and ratio <= -900.0):
+                derived_ttl = float(rule.get("after_sec", 60.0))
+                break
+        if derived_ttl is not None:
+            self.ttl_sec = derived_ttl
+        elif "ttl_sec" in target_exit_cfg and target_exit_cfg["ttl_sec"] is not None:
+            self.ttl_sec = float(target_exit_cfg["ttl_sec"])
+        elif self.decay_map:
+            self.ttl_sec = float(self.decay_map[-1].get("after_sec", 60.0))
+        else:
+            self.ttl_sec = 60.0
         
         # Backward compatibility for old configs
         synth_cfg = signal_cfg.get("synthetic_exit", {})
@@ -119,13 +143,13 @@ class TradingEngine:
         # Чистый спред = расчетный спред - комиссия за вход + выход (2x taker_fee)
         net_spread = raw_spread - (target_fee * 2.0)
         
-        if net_spread < self.spread_entry:
+        if self.spread_entry_min is not None and net_spread < self.spread_entry_min:
             return False, {
-                "reason": f"LOW_SPREAD (Net: {net_spread*100:.3f}% < {self.spread_entry*100:.3f}%, "
+                "reason": f"LOW_SPREAD (Net: {net_spread*100:.3f}% < {self.spread_entry_min*100:.3f}%, "
                           f"Raw: {raw_spread*100:+.3f}%, Fee: {target_fee*200:.3f}%)"
             }
         
-        if net_spread > self.spread_entry_max:
+        if self.spread_entry_max is not None and net_spread > self.spread_entry_max:
             return False, {
                 "reason": f"HIGH_SPREAD (Net: {net_spread*100:.3f}% > Max: {self.spread_entry_max*100:.3f}%)"
             }
@@ -254,27 +278,33 @@ class TradingEngine:
         if actual_net_spread_entry is None:
             actual_net_spread_entry = 0.0
         if "target_spread" in m[0]:
-            target = float(m[0]["target_spread"])
-            idx = int(m[0]["step"])
+            first_ts = m[0].get("target_spread")
+            target = float(first_ts) if first_ts is not None else -999.0
+            idx = int(m[0].get("step", 0))
             for rule in m:
                 if duration_sec >= float(rule["after_sec"]):
-                    target = float(rule["target_spread"])
-                    idx = int(rule["step"])
+                    val = rule.get("target_spread")
+                    target = float(val) if val is not None else -999.0
+                    idx = int(rule.get("step", idx))
         elif "price_slip" in m[0]:
-            target = float(m[0]["price_slip"])
-            idx = int(m[0]["step"])
+            first_ps = m[0].get("price_slip")
+            target = float(first_ps) if first_ps is not None else -999.0
+            idx = int(m[0].get("step", 0))
             for rule in m:
                 if duration_sec >= float(rule["after_sec"]):
-                    target = float(rule["price_slip"])
-                    idx = int(rule["step"])
+                    val = rule.get("price_slip")
+                    target = float(val) if val is not None else -999.0
+                    idx = int(rule.get("step", idx))
         else:
-            ratio = float(m[0]["min_profit_ratio"])
-            idx = int(m[0]["step"])
+            first_r = m[0].get("min_profit_ratio")
+            ratio = float(first_r) if first_r is not None else None
+            idx = int(m[0].get("step", 0))
             for rule in m:
                 if duration_sec >= float(rule["after_sec"]):
-                    ratio = float(rule["min_profit_ratio"])
-                    idx = int(rule["step"])
-            if ratio <= -900.0:
+                    r_val = rule.get("min_profit_ratio")
+                    ratio = float(r_val) if r_val is not None else None
+                    idx = int(rule.get("step", idx))
+            if ratio is None or (isinstance(ratio, (int, float)) and ratio <= -900.0):
                 target = -999.0
             else:
                 target = actual_net_spread_entry * ratio
@@ -334,10 +364,10 @@ class TradingEngine:
         entry_comm = entry_long_fee + entry_short_fee
         net_spread = vwap_spread - entry_comm
         
-        if net_spread < self.spread_entry:
-            return False, {"reason": f"LOW_SPREAD (Net: {net_spread * 100:.3f}% < {self.spread_entry * 100:.3f}%)"}
+        if self.spread_entry_min is not None and net_spread < self.spread_entry_min:
+            return False, {"reason": f"LOW_SPREAD (Net: {net_spread * 100:.3f}% < {self.spread_entry_min * 100:.3f}%)"}
             
-        if net_spread > self.spread_entry_max:
+        if self.spread_entry_max is not None and net_spread > self.spread_entry_max:
             return False, {"reason": f"HIGH_SPREAD (Net: {net_spread * 100:.3f}% > Max: {self.spread_entry_max * 100:.3f}%)"}
             
         if self.check_obi_filter:

@@ -70,18 +70,33 @@ class PositionFSM:
         self.engine = TradingEngine(self.cfg, {0:"BINANCE",1:"KUCOIN",2:"OKX",3:"BITGET"})
         
         entry_cfg = self.cfg.get("trading_rules", {}).get("entry", {})
-        parallel_cfg = entry_cfg.get("parallel_entry_logic", {})
+        target_entry_cfg = entry_cfg.get("target_entry_logic") or entry_cfg.get("parallel_entry_logic", {})
         ban_q = self.cfg.get("trading_rules", {}).get("ban_rules", {}).get("quarantine_sec", {})
         
         self.q_entry_error = float(ban_q.get("entry_error", 3600))
         self.q_zero_fill = float(ban_q.get("zero_fill", 10))
         
         target_exit_cfg = self.cfg.get("trading_rules", {}).get("exit", {}).get("target_exit", {})
-        self.ttl_sec = float(target_exit_cfg.get("ttl_sec", 60.0))
+        decay_map = target_exit_cfg.get("decay_map", [])
+        derived_ttl = None
+        for rule in decay_map:
+            ratio = rule.get("min_profit_ratio")
+            spread = rule.get("target_spread")
+            if (ratio is None and spread is None) or (isinstance(ratio, (int, float)) and ratio <= -900.0):
+                derived_ttl = float(rule.get("after_sec", 60.0))
+                break
+        if derived_ttl is not None:
+            self.ttl_sec = derived_ttl
+        elif "ttl_sec" in target_exit_cfg and target_exit_cfg["ttl_sec"] is not None:
+            self.ttl_sec = float(target_exit_cfg["ttl_sec"])
+        elif decay_map:
+            self.ttl_sec = float(decay_map[-1].get("after_sec", 60.0))
+        else:
+            self.ttl_sec = 60.0
         self.exit_order_type = target_exit_cfg.get("exit_order_type", "LIMIT_IOC")
         self.exit_slip_ratio = float(target_exit_cfg.get("exit_slip_ratio", 0.001))
         
-        timeout_cfg = parallel_cfg.get("fill_confirm_timeout_sec", {})
+        timeout_cfg = target_entry_cfg.get("fill_confirm_timeout_sec", {})
         pair_key1 = f"{self.target_ex}_{self.oracle_ex}".upper()
         pair_key2 = f"{self.oracle_ex}_{self.target_ex}".upper()
         if isinstance(timeout_cfg, dict):
@@ -94,8 +109,8 @@ class PositionFSM:
         else:
             self.fill_confirm_timeout = float(timeout_cfg) if timeout_cfg else 0.5
         
-        self.fill_confirm_poll_interval = float(parallel_cfg.get("fill_confirm_poll_interval_sec", 0.0))
-        self.entry_api_timeout = float(parallel_cfg.get("entry_api_timeout_sec", 5.0))
+        self.fill_confirm_poll_interval = float(target_entry_cfg.get("fill_confirm_poll_interval_sec", 0.0))
+        self.entry_api_timeout = float(target_entry_cfg.get("entry_api_timeout_sec", 5.0))
         
         unwind_cfg = self.cfg.get("trading_rules", {}).get("emergency_unwind", {})
         self.unwind_max_attempts = int(unwind_cfg.get("max_attempts", 2))
@@ -432,17 +447,22 @@ class PositionFSM:
         if self.on_settle_cb:
             entry_price = self.exec_res.get("entry_price", 0.0)
             actual_usd = qty * exit_price
-            asyncio.create_task(self.on_settle_cb(
-                sym=self.sym,
-                route=self.route,
-                target_ex=self.target_ex,
-                oracle_ex=self.oracle_ex,
-                side=self.side,
-                entry_price=entry_price,
-                exit_price=exit_price,
-                actual_usd=actual_usd,
-                reason=reason
-            ))
+            try:
+                res = self.on_settle_cb(
+                    sym=self.sym,
+                    route=self.route,
+                    target_ex=self.target_ex,
+                    oracle_ex=self.oracle_ex,
+                    side=self.side,
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    actual_usd=actual_usd,
+                    reason=reason
+                )
+                if asyncio.iscoroutine(res):
+                    asyncio.create_task(res)
+            except Exception as e:
+                log(f"[{self.sym}] Error invoking on_settle_cb: {e}", level="ERROR")
 
     async def _emergency_unwind_single(self, ex: str, native_sym: str, qty: float, price: float, open_side: str, pos_side: str):
         self._set_state(PositionState.EMERGENCY_UNWIND)

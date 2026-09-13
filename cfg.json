@@ -21,8 +21,8 @@
     },
     "trading_risks": {
         "binance": {
-            "paper_start_balance": 11.77,
-            "trade_size_usd": 25.0,
+            "paper_start_balance": 0.0,
+            "trade_size_usd": 0.0,
             "taker_fee": 0.0005,
             "limit_slip_ratio": 0.0025,
             "volatility_discount_entry": 0.4,
@@ -107,11 +107,10 @@
     },
     "trading_rules": {
         "entry": {
-            "order_execution_type": "PARALLEL_LIMIT_IOC",
+            "order_execution_type": "TARGET_LIMIT_IOC",
             "signal_filters": {
-                "spread_entry": 0.008,
-                "spread_entry_max": 0.025,
-                "spread_entry_max_desc": "Максимально допустимый спред для входа (0.025 = 2.5%). Отсекает токсичные дампы, аномалии и рассинхроны стаканов.",
+                "spread_entry": [0.008, 0.025],
+                "spread_entry_desc": "Диапазон входного спреда [min, max] (доли от 1, т.е. [0.008, 0.025] = 0.8%..2.5%). null отключает соответствующую границу (например [0.008, null] для работы без потолка).",
                 "min_top_depth_usd": 50.0,
                 "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
                 "min_signal_dwell_ms": 0,
@@ -127,7 +126,7 @@
                 },
                 "max_desync_ms_desc": "Пороги рассинхрона стаканов (мс) для каждой связки. Настроены индивидуально под скорость стримов бирж.",
                 "orderbook_imbalance": {
-                    "enabled": true,
+                    "enabled": false,
                     "max_adverse_imbalance": 0.55,
                     "depth_levels": 5,
                     "desc": "Отсекает вход, если на одной из ног стакан перекошен против направления удара (на Long-бирже тяжелые аски, на Short-бирже тяжелые биды)."
@@ -140,10 +139,8 @@
                     "desc": "Симуляция немедленного закрытия. Защита от входа в спреды, где обратный bid/ask спред съест большую часть расчетной прибыли."
                 }
             },
-            "parallel_entry_logic": {
+            "target_entry_logic": {
                 "limit_slip_desc": "Дальность заброса LIMIT_IOC ордера от текущего расчетного центра (читается из trading_risks для каждой биржи индивидуально).",
-                "min_hedge_fill_rate": 0.60,
-                "min_hedge_fill_rate_desc": "Сбалансированность налива. Если соотношение объемов налитых ног >= 0.60, переходим в ACTIVE_HEDGED. Иначе - SINGLE_LEG_EXPOSURE.",
                 "fill_confirm_timeout_sec": {
                     "BINANCE_KUCOIN": 0.1,
                     "BINANCE_BITGET": 0.1,
@@ -152,11 +149,11 @@
                     "KUCOIN_OKX": 0.1,
                     "OKX_BITGET": 0.1
                 },
-                "fill_confirm_timeout_sec_desc": "Макс. время ожидания подтверждения налива по WS после IOC. Настроено по связкам.",
+                "fill_confirm_timeout_sec_desc": "Макс. время ожидания подтверждения налива по WS после IOC на Target бирже.",
                 "fill_confirm_poll_interval_sec": 0.0,
                 "fill_confirm_poll_interval_sec_desc": "Интервал опроса WS-кэша в цикле ожидания (0.0 = чисто реактивный Event-driven).",
                 "entry_api_timeout_sec": 5.0,
-                "entry_api_timeout_sec_desc": "Таймаут (сек) параллельного запроса отправки ордеров LIMIT_IOC в asyncio.wait_for."
+                "entry_api_timeout_sec_desc": "Таймаут (сек) запроса отправки ордера LIMIT_IOC в asyncio.wait_for."
             }
         },
         "exit": {
@@ -173,8 +170,6 @@
                 "desc": "Управление выходом из одноногой позиции по локальному профиту на Мишени (v9).",
                 "stop_loss_pct": 0.005,
                 "stop_loss_pct_desc": "Макс. допустимый убыток (0.005 = 0.5%). При достижении — немедленный MARKET выход. Установить null для отключения.",
-                "ttl_sec": 60,
-                "ttl_sec_desc": "Максимальное время жизни позиции (сек). По истечении — принудительный MARKET выход.",
                 "exit_order_type": "LIMIT_IOC",
                 "exit_order_type_desc": "Тип ордера на выход: LIMIT_IOC (по стакану с проскальзыванием) или MARKET.",
                 "exit_slip_ratio": 0.001,
@@ -208,10 +203,10 @@
                     {
                         "step": 5,
                         "after_sec": 60,
-                        "min_profit_ratio": -999.0
+                        "min_profit_ratio": null
                     }
                 ],
-                "decay_map_desc": "Карта снижения порога фиксации локальной прибыли. min_profit_ratio — доля от расчетного входного спреда."
+                "decay_map_desc": "Карта снижения порога прибыли во времени. Шаг с min_profit_ratio: null (after_sec: 60) задает TTL дедлайн для принудительного MARKET выхода."
             },
             "max_desync_ms": {
                 "BINANCE_KUCOIN": 350,
