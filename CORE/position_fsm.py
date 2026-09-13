@@ -93,8 +93,9 @@ class PositionFSM:
             self.ttl_sec = float(decay_map[-1].get("after_sec", 60.0))
         else:
             self.ttl_sec = 60.0
-        self.exit_order_type = target_exit_cfg.get("exit_order_type", "LIMIT_IOC")
-        self.exit_slip_ratio = float(target_exit_cfg.get("exit_slip_ratio", 0.001))
+        self.exit_order_type = target_exit_cfg["exit_order_type"]
+        self.exit_slip_ratio = float(target_exit_cfg["exit_slip_ratio"])
+        self.ioc_chase_timeout_sec = float(target_exit_cfg["ioc_chase_timeout_sec"])
         
         timeout_cfg = target_entry_cfg.get("fill_confirm_timeout_sec", {})
         pair_key1 = f"{self.target_ex}_{self.oracle_ex}".upper()
@@ -394,9 +395,9 @@ class PositionFSM:
             log(f"[{self.sym}] Close order error on {self.target_ex}: {e}", level="ERROR")
         
         if o_type == "LIMIT_IOC":
-            # For IOC, match engine execution is instant. If WS event not received in 0.2s,
-            # remainder was cancelled by exchange -> immediately fall back without 1.8s lag
-            is_closed = await self._wait_for_close_v9(ev_target, timeout=min(0.2, self.close_confirm_timeout))
+            # For IOC, match engine execution is instant. If WS event not received in ioc_chase_timeout_sec,
+            # remainder was cancelled by exchange -> immediately fall back without lag
+            is_closed = await self._wait_for_close_v9(ev_target, timeout=min(self.ioc_chase_timeout_sec, self.close_confirm_timeout))
         else:
             is_closed = await self._wait_for_close_v9(ev_target)
         

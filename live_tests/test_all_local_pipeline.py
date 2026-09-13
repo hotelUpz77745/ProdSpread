@@ -64,6 +64,7 @@ def get_base_cfg():
                     "ttl_sec": 60.0,
                     "exit_order_type": "LIMIT_IOC",
                     "exit_slip_ratio": 0.001,
+                    "ioc_chase_timeout_sec": 0.2,
                     "stop_loss_pct": 0.015,
                     "decay_map": [
                         {"step": 1, "after_sec": 0, "target_spread": 0.005},

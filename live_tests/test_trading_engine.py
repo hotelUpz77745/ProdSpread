@@ -40,6 +40,9 @@ class TestTradingEngine(unittest.TestCase):
                     "target_exit": {
                         "stop_loss_pct": 0.01,
                         "ttl_sec": 60.0,
+                        "exit_order_type": "LIMIT_IOC",
+                        "exit_slip_ratio": 0.001,
+                        "ioc_chase_timeout_sec": 0.2,
                         "decay_map": [
                             {"step": 0, "after_sec": 0, "min_profit_ratio": 0.8},
                             {"step": 1, "after_sec": 5, "min_profit_ratio": 0.5},

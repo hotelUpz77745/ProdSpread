@@ -28,7 +28,8 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
                     "target_exit": {
                         "ttl_sec": 60.0,
                         "exit_order_type": "LIMIT_IOC",
-                        "exit_slip_ratio": 0.001
+                        "exit_slip_ratio": 0.001,
+                        "ioc_chase_timeout_sec": 0.2
                     }
                 },
                 "ban_rules": {
