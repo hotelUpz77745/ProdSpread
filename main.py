@@ -397,11 +397,12 @@ class Main:
                                     sig_key = (route_key, sym)
                                     
                                     if is_valid_entry:
+                                        pre_min = self.engine.spread_entry_pre_min if self.engine.spread_entry_pre_min is not None else self.engine.spread_entry_base
                                         if self.min_signal_dwell_ms > 0:
                                             first_seen = self._signal_first_seen.get(sig_key)
                                             if first_seen is None:
                                                 # Pre-filter: MUST meet spread_entry_pre_min to start dwelling
-                                                if engine_res["net_spread"] >= self.engine.spread_entry_pre_min:
+                                                if pre_min is None or engine_res["net_spread"] >= pre_min:
                                                     self._signal_first_seen[sig_key] = now_mono
                                                 continue
                                             dwell_ms = (now_mono - first_seen) * 1000.0
@@ -410,7 +411,7 @@ class Main:
                                             self._signal_first_seen.pop(sig_key, None)
                                         else:
                                             # Instant entry requires strict pre-filter
-                                            if engine_res["net_spread"] < self.engine.spread_entry_pre_min:
+                                            if pre_min is not None and engine_res["net_spread"] < pre_min:
                                                 continue
                                             
                                         canonical_route = self.pm._normalize_route(oracle_ex, target_ex)
@@ -429,11 +430,11 @@ class Main:
                                     else:
                                         self._signal_first_seen.pop(sig_key, None)
 
-                            if len(self._signal_first_seen) > 100:
-                                self._signal_first_seen = {
-                                    k: v for k, v in self._signal_first_seen.items()
-                                    if (now_mono - v) <= 1.0
-                                }
+                        if len(self._signal_first_seen) > 100:
+                            self._signal_first_seen = {
+                                k: v for k, v in self._signal_first_seen.items()
+                                if (now_mono - v) <= 1.0
+                            }
 
                 except asyncio.CancelledError:
                     raise

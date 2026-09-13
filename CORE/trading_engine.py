@@ -35,6 +35,7 @@ class TradingEngine:
             self.spread_entry_max = float(max_val) if max_val is not None else None
             
         self.spread_entry = self.spread_entry_pre_min if self.spread_entry_pre_min is not None else 0.0
+        self.spread_entry_min = self.spread_entry_pre_min
         
         # Load spread_entry_base, default to spread_entry_pre_min if not present
         if "spread_entry_base" in signal_cfg:
@@ -227,7 +228,8 @@ class TradingEngine:
             oracle_ex=oracle_ex,
             target_ex=target_ex,
             oracle_price=oracle_mid,
-            target_price=target_mid
+            target_price=target_mid,
+            side=side
         )
         if not is_impulse:
             return False, {"reason": reason}

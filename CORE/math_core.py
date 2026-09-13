@@ -278,7 +278,7 @@ def is_stale_jit(binance_ts: float, kucoin_ts: float, now_ts: float, timeout: fl
     return False
 
 from collections import deque
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
 class ImpulseDetector:
     def __init__(self, cfg: dict):
@@ -286,7 +286,15 @@ class ImpulseDetector:
             impulse_cfg = cfg["trading_rules"]["entry"]["impulse_detector"]
             self.is_enabled = bool(impulse_cfg["enabled"])
             self.buffer_window_sec = float(impulse_cfg["buffer_window_ms"]) / 1000.0
-            self.static_leg = str(impulse_cfg.get("static_leg", "TARGET")).upper()
+            
+            if "static_leg" in impulse_cfg:
+                self.static_leg = str(impulse_cfg["static_leg"]).upper()
+            elif "impulse_leg" in impulse_cfg:
+                imp = str(impulse_cfg["impulse_leg"]).upper()
+                self.static_leg = "TARGET" if imp == "ORACLE" else "ORACLE"
+            else:
+                self.static_leg = "TARGET"
+                
             self.max_static_leg_ratio = float(impulse_cfg.get("max_static_leg_ratio", 0.25))
         except KeyError:
             self.is_enabled = False
@@ -325,11 +333,14 @@ class ImpulseDetector:
         oracle_ex: str,
         target_ex: str,
         oracle_price: float,
-        target_price: float
+        target_price: float,
+        side: Optional[str] = None
     ) -> Tuple[bool, str, float, float]:
         """
-        Проверяет, что статичная нога (TARGET или ORACLE) изменилась 
-        не более чем на max_static_leg_ratio от общего изменения спреда.
+        Проверяет соблюдение условий импульса (Кейс Б или Кейс В):
+        - Для LONG: спред расширяется в пользу покупки на Target (o_delta - t_delta > 0).
+        - Для SHORT: спред расширяется в пользу продажи на Target (t_delta - o_delta > 0).
+        - Статичная нога (TARGET или ORACLE) не должна иметь шум более max_static_leg_ratio от дельты спреда.
         """
         if not self.is_enabled:
             return True, "IMPULSE_DISABLED", 0.0, 0.0
@@ -337,7 +348,19 @@ class ImpulseDetector:
         o_delta = self.get_delta(sym, oracle_ex, oracle_price)
         t_delta = self.get_delta(sym, target_ex, target_price)
         
-        spread_delta = abs(o_delta - t_delta)
+        if side is None:
+            spread_delta = abs(o_delta - t_delta)
+        elif side.upper() == "LONG":
+            spread_delta = o_delta - t_delta
+        elif side.upper() == "SHORT":
+            spread_delta = t_delta - o_delta
+        else:
+            spread_delta = abs(o_delta - t_delta)
+
+        # Импульс обязан быть строго положительным (спред расширяется в направлении сделки)
+        if spread_delta <= 1e-7:
+            return False, f"NO_IMPULSE_MOMENTUM ({side or 'DELTA'} requires spread_delta > 0, got {spread_delta*100:+.3f}%)", o_delta, t_delta
+
         allowed_noise = spread_delta * self.max_static_leg_ratio
         
         if self.static_leg == "TARGET":

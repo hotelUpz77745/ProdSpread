@@ -111,9 +111,13 @@
             "order_execution_type": "TARGET_LIMIT_IOC",
             "impulse_detector": {
                 "enabled": true,
+                "enabled_desc": "Включение детектора истинного направленного импульса. Блокирует вход при отсутствии импульса или движении против сделки.",
                 "buffer_window_ms": 250,
+                "buffer_window_ms_desc": "Длина скользящего окна анализа импульса (мс).",
                 "static_leg": "TARGET",
-                "max_static_leg_ratio": 0.25
+                "static_leg_desc": "Статичная нога ('TARGET' для Кейса Б, когда импульс на Поводыре; 'ORACLE' для Кейса В, когда импульс на Мишени). Также поддерживается ключ impulse_leg ('ORACLE' | 'TARGET').",
+                "max_static_leg_ratio": 0.25,
+                "max_static_leg_ratio_desc": "Допустимый зазор шума для стоячей ноги (0.25 = 25% от величины изменения спреда)."
             },
             "signal_filters": {
                 "spread_entry_pre": [
