@@ -117,7 +117,7 @@
                 "spread_entry_desc": "Диапазон входного спреда [min, max] (доли от 1, т.е. [0.008, 0.05] = 0.8%..5.0%). null отключает соответствующую границу (например [0.008, null] для работы без потолка).",
                 "min_top_depth_usd": 50.0,
                 "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
-                "min_signal_dwell_ms": 0,
+                "min_signal_dwell_ms": 100,
                 "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
                 "top_n_candidates": 4,
                 "max_desync_ms": {
