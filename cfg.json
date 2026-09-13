@@ -224,21 +224,13 @@
             "max_consecutive_losses": 2,
             "max_consecutive_losses_desc": "Количество убыточных сделок подряд по монете до пожизненного бана.",
             "quarantine_sec": {
-                "entry_error": 3600,
-                "entry_error_desc": "Ошибка API при отправке ордера на вход.",
+                "entry_error": 60,
+                "entry_error_desc": "Ошибка биржи/сети при отправке ордера на вход (сек).",
                 "zero_fill": 10,
-                "zero_fill_desc": "Ни одна нога не налилась (обе 0).",
-                "single_leg_exposure": 1800,
-                "single_leg_exposure_desc": "Зависла одна нога, пришлось чейзить/сбрасывать.",
-                "spread_collapse_step1": 120,
-                "spread_collapse_step2": 120,
-                "spread_collapse_step3": 120,
-                "spread_collapse_desc": "Последовательные коллапсы спреда (A1). Шаг 1→2→3 = нарастающий карантин.",
-                "loss_trade": 3600,
-                "loss_trade_desc": "Сделка закрылась в убыток."
-            },
-            "ban_if_exit_level_ge": null,
-            "ban_if_exit_level_ge_desc": "Бан монеты, если уровень выхода >= этого значения (null = отключено)."
+                "zero_fill_desc": "Ордер в Target не налился (zero fill) (сек).",
+                "loss_trade": 300,
+                "loss_trade_desc": "Сделка закрылась в убыток (сек)."
+            }
         },
         "funding_filter": {
             "is_active": true,

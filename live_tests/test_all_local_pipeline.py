@@ -84,10 +84,7 @@ def get_base_cfg():
                 "quarantine_sec": {
                     "entry_error": 60,
                     "zero_fill": 10,
-                    "loss_trade": 300,
-                    "spread_collapse_step1": 60,
-                    "spread_collapse_step2": 300,
-                    "spread_collapse_step3": 900
+                    "loss_trade": 300
                 }
             }
         }

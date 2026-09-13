@@ -84,9 +84,11 @@ class MockPM:
 def get_test_cfg():
     cfg = copy.deepcopy(BASE_CFG)
     cfg["EXECUTION_PAUSE"] = 0.005
-    cfg["trading_rules"]["entry"]["parallel_entry_logic"]["min_hedge_fill_rate"] = 0.5
-    for k in cfg["trading_rules"]["entry"]["parallel_entry_logic"]["fill_confirm_timeout_sec"]:
-        cfg["trading_rules"]["entry"]["parallel_entry_logic"]["fill_confirm_timeout_sec"][k] = 0.05
+    entry_cfg = cfg["trading_rules"]["entry"]
+    t_cfg = entry_cfg.get("target_entry_logic") or entry_cfg.get("parallel_entry_logic", {})
+    t_cfg["min_hedge_fill_rate"] = 0.5
+    for k in t_cfg.get("fill_confirm_timeout_sec", {}):
+        t_cfg["fill_confirm_timeout_sec"][k] = 0.05
     for k in cfg["trading_rules"]["exit"]["close_confirm_timeout_sec"]:
         cfg["trading_rules"]["exit"]["close_confirm_timeout_sec"][k] = 0.05
     cfg["trading_rules"]["emergency_unwind"]["retry_pause_sec"] = 0.01

@@ -104,7 +104,6 @@ class ExecutorProcess:
         self.analytics_map = {}
         self.active_fsm = {}
         self.banned_symbols = {}
-        self.a1_collapse_counts = {}
         self.consecutive_loss_counts = {}
         self.coin_to_native = {}
         self._running = True
@@ -133,17 +132,6 @@ class ExecutorProcess:
         ban_cfg = self.cfg["trading_rules"]["ban_rules"]
         if not ban_cfg["is_active"]:
             return
-        ban_q = ban_cfg["quarantine_sec"]
-        if "Spread Collapsed" in reason:
-            count = self.a1_collapse_counts.get(sym, 0) + 1
-            self.a1_collapse_counts[sym] = count
-            if count == 1:
-                duration_sec = float(ban_q["spread_collapse_step1"])
-            elif count == 2:
-                duration_sec = float(ban_q["spread_collapse_step2"])
-            else:
-                duration_sec = float(ban_q["spread_collapse_step3"])
-            reason = f"{reason} (A1 consecutive collapse #{count})"
             
         if duration_sec is not None and duration_sec <= 0:
             self.consecutive_loss_counts.pop(sym, None)
@@ -338,7 +326,6 @@ class ExecutorProcess:
                     ban_q = ban_rules["quarantine_sec"]
                     self.ban_coin(sym, reason=f"Loss trade ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", duration_sec=float(ban_q["loss_trade"]))
             else:
-                self.a1_collapse_counts.pop(sym, None)
                 self.consecutive_loss_counts.pop(sym, None)
                 log(f"[{sym}] Profitable trade ({reason}): Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", level="INFO")
         except Exception as e:

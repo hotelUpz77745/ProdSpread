@@ -308,16 +308,17 @@ class PositionFSM:
                 "sym": self.sym
             }))
 
-    async def _wait_for_close_v9(self, ev_target: asyncio.Event) -> bool:
+    async def _wait_for_close_v9(self, ev_target: asyncio.Event, timeout: float = None) -> bool:
         t0 = time.perf_counter()
+        wait_timeout = timeout if timeout is not None else self.close_confirm_timeout
         
         if isinstance(ev_target, asyncio.Event):
             try:
-                await asyncio.wait_for(ev_target.wait(), timeout=self.close_confirm_timeout)
+                await asyncio.wait_for(ev_target.wait(), timeout=wait_timeout)
             except asyncio.TimeoutError:
                 pass
                 
-        while (time.perf_counter() - t0) < self.close_confirm_timeout:
+        while (time.perf_counter() - t0) < wait_timeout:
             pos = self.orders[self.target_ex].get_executed_position(self.native_target, self.side)
             if pos and pos.get("size", 0.0) == 0.0:
                 return True
@@ -388,7 +389,12 @@ class PositionFSM:
         except Exception as e:
             log(f"[{self.sym}] Close order error on {self.target_ex}: {e}", level="ERROR")
         
-        is_closed = await self._wait_for_close_v9(ev_target)
+        if o_type == "LIMIT_IOC":
+            # For IOC, match engine execution is instant. If WS event not received in 0.2s,
+            # remainder was cancelled by exchange -> immediately fall back without 1.8s lag
+            is_closed = await self._wait_for_close_v9(ev_target, timeout=min(0.2, self.close_confirm_timeout))
+        else:
+            is_closed = await self._wait_for_close_v9(ev_target)
         
         if hasattr(self.orders[self.target_ex], "unsubscribe_position_update"):
             self.orders[self.target_ex].unsubscribe_position_update(self.native_target, pos_side)
