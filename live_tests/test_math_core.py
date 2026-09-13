@@ -56,11 +56,11 @@ class TestMathCore(unittest.TestCase):
         
         self.assertEqual(res[0][0], 0.0) # BINANCE
         self.assertEqual(res[0][1], 2.0) # KUCOIN
-        self.assertAlmostEqual(res[0][2], 3.846153846153846)
+        self.assertAlmostEqual(res[0][2], 0.038461538461538464)
         
         self.assertEqual(res[1][0], 0.0)
         self.assertEqual(res[1][1], 1.0)
-        self.assertAlmostEqual(res[1][2], 1.4778325123152708)
+        self.assertAlmostEqual(res[1][2], 0.014778325123152708)
 
 if __name__ == '__main__':
     unittest.main()

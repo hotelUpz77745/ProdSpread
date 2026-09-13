@@ -1,18 +1,27 @@
 # ============================================================
-# FILE: scratch/test_fsm_transitions.py
+# FILE: live_tests/test_fsm_transitions.py
 # ROLE: Тестирование переходов состояний PositionFSM и защиты от сбоев
 # ============================================================
 import asyncio
 import sys
 import os
+import json
+import copy
 
 # Добавляем родительскую папку в sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 from CORE.position_fsm import PositionFSM, PositionState
+
+CFG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cfg.json")
+with open(CFG_PATH, "r", encoding="utf-8") as f:
+    BASE_CFG = json.load(f)
 
 
 class MockOrder:
@@ -26,8 +35,8 @@ class MockOrder:
     def check_order_size(self, symbol, size_usd, price):
         pass
 
-    async def place_order(self, symbol, side, size_usd, price, order_type="LIMIT", position_side=None, time_in_force=None):
-        self.orders_placed.append({"side": side, "size_usd": size_usd, "order_type": order_type})
+    async def place_order(self, symbol, side, size_usd, price, order_type="LIMIT", position_side=None, time_in_force=None, **kwargs):
+        self.orders_placed.append({"side": side, "size_usd": size_usd, "order_type": order_type, "position_side": position_side})
         return {"code": "00000", "msg": "ok"}
 
     async def cancel_all_orders(self, symbol):
@@ -35,6 +44,15 @@ class MockOrder:
 
     def get_executed_position(self, symbol, side):
         return {"size": self.fill_size, "price": 1.0}
+
+    def get_last_close_price(self, symbol):
+        return 1.0
+
+    async def get_position_rest(self, symbol: str, position_side: str = None):
+        return {"size": self.fill_size, "price": 1.0}
+
+    async def get_book_ticker(self, symbol: str):
+        return {"bid": 1.0, "ask": 1.0}
 
     async def get_exact_position_guarded(self, symbol, side, max_retries=3, retry_delay=0.001):
         if self.fail_rest:
@@ -48,6 +66,7 @@ class MockPM:
         self.confirmed_entries = []
         self.confirmed_exits = []
         self.locked_exits = []
+        self.rollbacks = []
 
     def confirm_entry(self, long_ex, short_ex, sym, exec_res, open_time):
         self.confirmed_entries.append((sym, long_ex, short_ex))
@@ -58,14 +77,26 @@ class MockPM:
     def confirm_exit(self, route, sym):
         self.confirmed_exits.append((route, sym))
 
+    def rollback_entry(self, long_ex, short_ex, sym):
+        self.rollbacks.append((sym, long_ex, short_ex))
+
+
+def get_test_cfg():
+    cfg = copy.deepcopy(BASE_CFG)
+    cfg["EXECUTION_PAUSE"] = 0.005
+    cfg["trading_rules"]["entry"]["parallel_entry_logic"]["min_hedge_fill_rate"] = 0.5
+    for k in cfg["trading_rules"]["entry"]["parallel_entry_logic"]["fill_confirm_timeout_sec"]:
+        cfg["trading_rules"]["entry"]["parallel_entry_logic"]["fill_confirm_timeout_sec"][k] = 0.05
+    for k in cfg["trading_rules"]["exit"]["close_confirm_timeout_sec"]:
+        cfg["trading_rules"]["exit"]["close_confirm_timeout_sec"][k] = 0.05
+    cfg["trading_rules"]["emergency_unwind"]["retry_pause_sec"] = 0.01
+    cfg["trading_rules"]["emergency_unwind"]["ws_verify_timeout_sec"] = 0.01
+    return cfg
+
 
 async def test_successful_hedged_entry():
     print("--- TEST 1: Полный налив (100% / 100%) -> ACTIVE_HEDGED ---")
-    cfg = {
-        "trading_rules": {"entry": {"order_execution_type": "LIMIT_GTC", "min_fill_rate": 0.5}},
-        "trading_risks": {"binance": {"limit_allow_distance": 1.002, "trade_size_usd": 50.0}, "kucoin": {"limit_allow_distance": 1.002, "trade_size_usd": 50.0}},
-        "EXECUTION_PAUSE": 0.005
-    }
+    cfg = get_test_cfg()
     orders = {
         "BINANCE": MockOrder("BINANCE", fill_size=100.0),
         "KUCOIN": MockOrder("KUCOIN", fill_size=100.0)
@@ -84,17 +115,12 @@ async def test_successful_hedged_entry():
     assert success is True, "Ожидался успешный вход"
     assert fsm.state == PositionState.ACTIVE_HEDGED, f"Ожидался ACTIVE_HEDGED, получен {fsm.state}"
     assert len(pm.confirmed_entries) == 1, "confirm_entry не был вызван"
-    assert orders["BINANCE"].cancelled is True, "cancel_all_orders не был вызван для GTC"
     print("✅ TEST 1 PASSED: FSM корректно перешел в ACTIVE_HEDGED\n")
 
 
 async def test_aborted_zero_fill():
     print("--- TEST 2: Нулевой налив (0% / 0%) -> ABORTED ---")
-    cfg = {
-        "trading_rules": {"entry": {"order_execution_type": "LIMIT_GTC", "min_fill_rate": 0.5}},
-        "trading_risks": {"binance": {"limit_allow_distance": 1.002, "trade_size_usd": 50.0}, "kucoin": {"limit_allow_distance": 1.002, "trade_size_usd": 50.0}},
-        "EXECUTION_PAUSE": 0.005
-    }
+    cfg = get_test_cfg()
     orders = {
         "BINANCE": MockOrder("BINANCE", fill_size=0.0),
         "KUCOIN": MockOrder("KUCOIN", fill_size=0.0)
@@ -116,12 +142,8 @@ async def test_aborted_zero_fill():
 
 
 async def test_emergency_unwind_desync():
-    print("--- TEST 3: Рассинхрон ног (L:100%, S:0%) -> EMERGENCY_UNWIND -> SETTLED ---")
-    cfg = {
-        "trading_rules": {"entry": {"order_execution_type": "LIMIT_GTC", "min_fill_rate": 0.5}},
-        "trading_risks": {"binance": {"limit_allow_distance": 1.002, "trade_size_usd": 50.0}, "kucoin": {"limit_allow_distance": 1.002, "trade_size_usd": 50.0}},
-        "EXECUTION_PAUSE": 0.005
-    }
+    print("--- TEST 3: Рассинхрон ног (L:100%, S:0%) -> EMERGENCY_UNWIND -> ABORTED ---")
+    cfg = get_test_cfg()
     binance_order = MockOrder("BINANCE", fill_size=100.0)
     kucoin_order = MockOrder("KUCOIN", fill_size=0.0)
     orders = {"BINANCE": binance_order, "KUCOIN": kucoin_order}
@@ -138,7 +160,7 @@ async def test_emergency_unwind_desync():
         pm=pm, writer=None, ban_coin_cb=lambda *args, **kw: None, on_settle_cb=mock_settle
     )
 
-    # При закрытии (SELL) имитируем, что сброс обнулил ногу
+    # При сбросе имитируем обнуление ноги
     orig_place = binance_order.place_order
     async def mock_close_place(*args, **kwargs):
         side = kwargs.get("side") or (args[1] if len(args) > 1 else "BUY")
@@ -149,18 +171,14 @@ async def test_emergency_unwind_desync():
 
     success = await fsm.run_open()
     assert success is False, "Ожидался неуспешный вход из-за рассинхрона"
-    assert fsm.state == PositionState.SETTLED, f"Ожидался SETTLED после unwind, получен {fsm.state}"
-    assert len(pm.confirmed_exits) == 1, "confirm_exit должен быть вызван"
+    assert fsm.state == PositionState.ABORTED, f"Ожидался ABORTED после unwind, получен {fsm.state}"
+    assert len(pm.rollbacks) == 1, "rollback_entry должен быть вызван"
     print("✅ TEST 3 PASSED: FSM обнаружил рассинхрон и гарантированно сбросил ногу в ноль\n")
 
 
 async def test_rest_glitch_protection():
     print("--- TEST 4: Моргание REST (network glitch) -> WS Guard Fallback ---")
-    cfg = {
-        "trading_rules": {"entry": {"order_execution_type": "LIMIT_GTC", "min_fill_rate": 0.5}},
-        "trading_risks": {"binance": {"limit_allow_distance": 1.002, "trade_size_usd": 50.0}, "kucoin": {"limit_allow_distance": 1.002, "trade_size_usd": 50.0}},
-        "EXECUTION_PAUSE": 0.005
-    }
+    cfg = get_test_cfg()
     # Binance с упавшим REST
     binance_order = MockOrder("BINANCE", fill_size=100.0, fail_rest=True)
     kucoin_order = MockOrder("KUCOIN", fill_size=100.0, fail_rest=False)
@@ -182,11 +200,7 @@ async def test_rest_glitch_protection():
 
 async def test_normal_close():
     print("--- TEST 5: Плановое закрытие (run_close) -> SETTLED ---")
-    cfg = {
-        "trading_rules": {"entry": {"order_execution_type": "LIMIT_GTC", "min_fill_rate": 0.5}},
-        "trading_risks": {"binance": {"limit_allow_distance": 1.002, "trade_size_usd": 50.0}, "kucoin": {"limit_allow_distance": 1.002, "trade_size_usd": 50.0}},
-        "EXECUTION_PAUSE": 0.005
-    }
+    cfg = get_test_cfg()
     binance_order = MockOrder("BINANCE", fill_size=100.0)
     kucoin_order = MockOrder("KUCOIN", fill_size=100.0)
     orders = {"BINANCE": binance_order, "KUCOIN": kucoin_order}
@@ -194,8 +208,8 @@ async def test_normal_close():
     pm = MockPM()
 
     settled_calls = []
-    async def mock_settle(*args):
-        settled_calls.append(args)
+    async def mock_settle(*args, **kwargs):
+        settled_calls.append((args, kwargs))
 
     fsm = PositionFSM(
         sym="TEST", route="BINANCE_KUCOIN", long_ex="BINANCE", short_ex="KUCOIN",

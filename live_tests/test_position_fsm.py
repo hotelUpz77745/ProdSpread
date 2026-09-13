@@ -12,21 +12,18 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from CORE.position_fsm import PositionFSM, PositionState
 
+import json
+
 class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.cfg = {
-            "EXECUTION_PAUSE": 0.02,
-            "trading_rules": {
-                "entry": {
-                    "order_execution_type": "IOC",
-                    "min_fill_rate": 0.5,
-                }
-            },
-            "trading_risks": {
-                "binance": {"limit_allow_distance": 1.002},
-                "bitget": {"limit_allow_distance": 1.002}
-            }
-        }
+        cfg_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cfg.json")
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            self.cfg = json.load(f)
+        self.cfg["EXECUTION_PAUSE"] = 0.01
+        self.cfg["trading_rules"]["emergency_unwind"]["retry_pause_sec"] = 0.01
+        self.cfg["trading_rules"]["emergency_unwind"]["ws_verify_timeout_sec"] = 0.01
+        for k in self.cfg["trading_rules"]["exit"]["close_confirm_timeout_sec"]:
+            self.cfg["trading_rules"]["exit"]["close_confirm_timeout_sec"][k] = 0.01
         
         self.pm_mock = MagicMock()
         self.writer_mock = MagicMock()
@@ -110,7 +107,7 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
         result = await fsm.run_open()
         
         self.assertFalse(result)
-        self.assertEqual(fsm.state, PositionState.SETTLED)
+        self.assertEqual(fsm.state, PositionState.ABORTED)
         
         # Check that place_order was called twice for each exchange (1 open, 1 unwind)
         self.assertEqual(self.mock_binance.place_order.call_count, 2)
@@ -145,11 +142,13 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
         fsm.long_pos = {"size": 0.001, "price": 50000.0}
         fsm.short_pos = {"size": 0.001, "price": 50010.0}
         
-        # Simulate position STUCK (always returns 0.001 despite market closes)
+        # Simulate position STUCK on both WS and REST (always returns 0.001 despite market closes)
+        self.mock_binance.get_executed_position.return_value = {"size": 0.001, "price": 50000.0}
+        self.mock_bitget.get_executed_position.return_value = {"size": 0.001, "price": 50010.0}
         self.mock_binance.get_exact_position_guarded.return_value = {"size": 0.001, "price": 50000.0}
         self.mock_bitget.get_exact_position_guarded.return_value = {"size": 0.001, "price": 50010.0}
         
-        await fsm._emergency_unwind()
+        await fsm.run_close({})
         
         # State should be CLOSING, not SETTLED!
         self.assertEqual(fsm.state, PositionState.CLOSING)
