@@ -5,6 +5,7 @@
 import unittest
 import os
 import sys
+import copy
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -231,6 +232,29 @@ class TestTradingEngine(unittest.TestCase):
         )
         self.assertTrue(should_exit)
         self.assertEqual(res["reason"], "TTL_EXPIRED")
+
+    def test_evaluate_exit_v9_stop_loss_disabled_null(self):
+        # When stop_loss_pct is None/null, drawdown does not trigger STOP_LOSS
+        cfg_copy = copy.deepcopy(self.cfg)
+        cfg_copy["trading_rules"]["exit"]["target_exit"]["stop_loss_pct"] = None
+        engine = TradingEngine(cfg_copy, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
+        self.assertIsNone(engine.stop_loss_pct)
+
+        target_book = {
+            "bids": [[49000.0, 5.0]],
+            "asks": [[49010.0, 5.0]]
+        }
+        should_exit, res = engine.evaluate_exit_v9(
+            target_book=target_book,
+            target_ex="BITGET",
+            entry_price=50000.0,
+            qty=0.02,
+            side="LONG",
+            duration_sec=1.0,
+            actual_net_spread_entry=0.001
+        )
+        self.assertFalse(should_exit)
+        self.assertEqual(res["reason"], "HOLD")
 
 if __name__ == '__main__':
     unittest.main()

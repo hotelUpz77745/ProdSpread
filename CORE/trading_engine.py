@@ -37,9 +37,16 @@ class TradingEngine:
         # v9: target exit params (TTL is derived directly from decay_map)
         target_exit_cfg = self.cfg.get("trading_rules", {}).get("exit", {}).get("target_exit", {})
         
-        # v9: stop loss can be null
+        # v9: stop loss can be null / <= 0 (disabled)
         stop_loss_val = target_exit_cfg.get("stop_loss_pct")
-        self.stop_loss_pct = float(stop_loss_val) if stop_loss_val is not None else None
+        if stop_loss_val is not None and not isinstance(stop_loss_val, bool):
+            try:
+                val = float(stop_loss_val)
+                self.stop_loss_pct = val if val > 0 else None
+            except (ValueError, TypeError):
+                self.stop_loss_pct = None
+        else:
+            self.stop_loss_pct = None
         
         self.decay_map = target_exit_cfg.get("decay_map", [])
         derived_ttl = None
