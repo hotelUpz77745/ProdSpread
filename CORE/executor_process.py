@@ -143,12 +143,14 @@ class ExecutorProcess:
             
         if "Loss" in reason or "loss" in reason:
             if duration_sec is not None:
-                max_consec = int(ban_cfg["max_consecutive_losses"])
-                l_count = self.consecutive_loss_counts.get(sym, 0) + 1
-                self.consecutive_loss_counts[sym] = l_count
-                if l_count >= max_consec:
-                    duration_sec = None
-                    reason = f"{reason} ({l_count} consecutive losses >= {max_consec} limit -> PERMANENT BAN)"
+                raw_max = ban_cfg.get("max_consecutive_losses")
+                if raw_max is not None and int(raw_max) > 0:
+                    max_consec = int(raw_max)
+                    l_count = self.consecutive_loss_counts.get(sym, 0) + 1
+                    self.consecutive_loss_counts[sym] = l_count
+                    if l_count >= max_consec:
+                        duration_sec = None
+                        reason = f"{reason} ({l_count} consecutive losses >= {max_consec} limit -> PERMANENT BAN)"
             
         expire_time = (time.time() + duration_sec) if duration_sec is not None else None
         self.banned_symbols[sym] = expire_time
@@ -317,14 +319,16 @@ class ExecutorProcess:
             update_total_balance(self.cfg, extra_pnl=net_usd)
 
             if net_usd < 0:
-                ban_rules = self.cfg["trading_rules"]["ban_rules"]
-                perm_ban_pct = float(ban_rules["perm_ban_loss_pct"])
-                if abs(net_yield) >= perm_ban_pct:
+                ban_rules = self.cfg.get("trading_rules", {}).get("ban_rules", {})
+                raw_perm_pct = ban_rules.get("perm_ban_loss_pct")
+                perm_ban_pct = float(raw_perm_pct) if raw_perm_pct is not None and float(raw_perm_pct) > 0 else None
+                if perm_ban_pct is not None and abs(net_yield) >= perm_ban_pct:
                     log(f"[{sym}] Severe loss trade ({net_yield*100:+.2f}% <= -{perm_ban_pct*100:.2f}%). PERMANENT BAN!", level="ERROR")
                     self.ban_coin(sym, reason=f"Severe loss trade ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.2f}%)", duration_sec=None)
                 else:
-                    ban_q = ban_rules["quarantine_sec"]
-                    self.ban_coin(sym, reason=f"Loss trade ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", duration_sec=float(ban_q["loss_trade"]))
+                    ban_q = ban_rules.get("quarantine_sec", {})
+                    q_loss = float(ban_q.get("loss_trade", 300))
+                    self.ban_coin(sym, reason=f"Loss trade ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", duration_sec=q_loss)
             else:
                 self.consecutive_loss_counts.pop(sym, None)
                 log(f"[{sym}] Profitable trade ({reason}): Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", level="INFO")
