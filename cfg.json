@@ -145,12 +145,12 @@
             "target_entry_logic": {
                 "limit_slip_desc": "Дальность заброса LIMIT_IOC ордера от текущего расчетного центра (читается из trading_risks для каждой биржи индивидуально).",
                 "fill_confirm_timeout_sec": {
-                    "BINANCE_KUCOIN": 0.1,
-                    "BINANCE_BITGET": 0.1,
-                    "KUCOIN_BITGET": 0.1,
-                    "BINANCE_OKX": 0.1,
-                    "KUCOIN_OKX": 0.1,
-                    "OKX_BITGET": 0.1
+                    "BINANCE_KUCOIN": 0.3,
+                    "BINANCE_BITGET": 0.3,
+                    "KUCOIN_BITGET": 0.3,
+                    "BINANCE_OKX": 0.3,
+                    "KUCOIN_OKX": 0.3,
+                    "OKX_BITGET": 0.3
                 },
                 "fill_confirm_timeout_sec_desc": "Макс. время ожидания подтверждения налива по WS после IOC на Target бирже.",
                 "fill_confirm_poll_interval_sec": 0.0,
