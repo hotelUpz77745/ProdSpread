@@ -98,22 +98,31 @@ class TradeAnalytics:
         
         target_price_in = t_in["target_price_in"]
         
-        if direction == "LONG":
-            target_pnl = (target_price_close - target_price_in) / target_price_in if target_price_in else 0.0
+        if target_price_in <= 0 or target_price_close <= 0:
+            target_pnl = 0.0
+        elif direction == "LONG":
+            target_pnl = (target_price_close - target_price_in) / target_price_in
         else:
-            target_pnl = (target_price_in - target_price_close) / target_price_in if target_price_in else 0.0
+            target_pnl = (target_price_in - target_price_close) / target_price_in
             
-        target_cfg = self.risks_cfg[target_ex.lower()]
+        target_cfg = self.risks_cfg.get(target_ex.lower(), {})
+        default_trade_size = float(target_cfg.get("trade_size_usd", 25.0))
+        taker_fee_rate = float(target_cfg.get("taker_fee", 0.0006))
         
-        actual_target_usd = target_executed_usd if target_executed_usd is not None and target_executed_usd > 0 else target_cfg["trade_size_usd"]
+        actual_target_usd = target_executed_usd if target_executed_usd is not None and target_executed_usd > 0 else default_trade_size
         
-        t_fee_usd = actual_target_usd * (target_cfg["taker_fee"] * 2.0)
-        
-        target_pnl_usd = actual_target_usd * target_pnl - t_fee_usd
-        
-        net_pnl_usd = target_pnl_usd
-        total_investment = actual_target_usd
-        net_pnl = net_pnl_usd / total_investment if total_investment > 0 else 0
+        if target_price_close <= 0:
+            t_fee_usd = 0.0
+            target_pnl_usd = 0.0
+            net_pnl_usd = 0.0
+            net_pnl = 0.0
+            total_investment = actual_target_usd
+        else:
+            t_fee_usd = actual_target_usd * (taker_fee_rate * 2.0)
+            target_pnl_usd = actual_target_usd * target_pnl - t_fee_usd
+            net_pnl_usd = target_pnl_usd
+            total_investment = actual_target_usd
+            net_pnl = net_pnl_usd / total_investment if total_investment > 0 else 0
         
         self.cumulative_pnl_usd += net_pnl_usd
         self.trade_counter += 1

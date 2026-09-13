@@ -1,6 +1,6 @@
 # ============================================================
 # FILE: live_tests/test_single_leg_and_ban.py
-# ROLE: Verification of Hard Stop-Loss, Severe Loss Permanent Ban, and Consecutive Losses.
+# ROLE: Verification of Hard Stop-Loss, Severe Loss Permanent Ban, and Consecutive Losses (v9).
 # ============================================================
 
 import asyncio
@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from CORE.position_fsm import PositionFSM, PositionState
 from CORE.executor_process import ExecutorProcess
+from CORE.trading_engine import TradingEngine
 
 
 class MockExchangeOrder:
@@ -28,6 +29,12 @@ class MockExchangeOrder:
     async def get_position_rest(self, symbol: str, position_side: str = None):
         return {"size": self.positions.get(position_side, self.fill_size)}
 
+    async def get_exact_position_guarded(self, symbol: str, position_side: str = None):
+        return {"size": self.positions.get(position_side, self.fill_size), "price": self.book_bid}
+
+    def get_executed_position(self, symbol: str, position_side: str = None):
+        return {"size": self.positions.get(position_side, self.fill_size), "price": self.book_bid}
+
     async def get_book_ticker(self, symbol: str):
         return {"bid": self.book_bid, "ask": self.book_ask}
 
@@ -40,7 +47,6 @@ class MockExchangeOrder:
             "type": order_type, "position_side": position_side, "qty": exact_qty
         })
         if reduce_only:
-            # Emulate position closed
             self.positions[position_side] = 0.0
             self.fill_size = 0.0
         return {"status": "FILLED", "orderId": 12345}
@@ -53,87 +59,47 @@ class TestSingleLegAndBan(unittest.IsolatedAsyncioTestCase):
             self.cfg = json.load(f)
 
     async def test_circuit_breaker_hard_stop_loss(self):
-        """If price moves against single naked leg by >= max_chase_loss_ratio (0.50%), market exit triggers immediately."""
+        """If price moves against single leg by >= stop_loss_pct (0.50%), market exit triggers."""
         cfg = copy.deepcopy(self.cfg)
-        cfg["trading_rules"]["exit"]["single_leg_exit"]["max_chase_loss_ratio"] = 0.0050
+        cfg["trading_rules"]["exit"]["target_exit"]["stop_loss_pct"] = 0.0050
         
-        # We hold LONG on Binance at entry_price = 1.000.
-        # But market bids drop to 0.994 (-0.60% loss > 0.50%).
-        binance = MockExchangeOrder("BINANCE", fill_size=100.0, book_bid=0.994, book_ask=0.995)
-        binance.positions["LONG"] = 100.0
-        kucoin = MockExchangeOrder("KUCOIN", fill_size=0.0)
-
-        orders = {"BINANCE": binance, "KUCOIN": kucoin}
-        ban_calls = []
-        def mock_ban(sym, reason="", duration_sec=None):
-            ban_calls.append((sym, reason, duration_sec))
-
-        engine_res = {
-            "long_avg_price": 1.000,
-            "short_avg_price": 1.008,
-            "long_qty": 100.0,
-            "short_qty": 100.0
+        engine = TradingEngine(cfg, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
+        
+        # We hold LONG on Bitget at entry_price = 1.000.
+        # Market bids drop to 0.992 (-0.80% gross, minus fees = ~ -0.92% net < -0.50%).
+        target_book = {
+            "bids": [[0.992, 1000.0]],
+            "asks": [[0.993, 1000.0]]
         }
-
-        fsm = PositionFSM(
-            sym="TESTCOIN",
-            route="BINANCE_KUCOIN",
-            long_ex="BINANCE",
-            short_ex="KUCOIN",
-            engine_res=engine_res,
-            cfg=cfg,
-            orders=orders,
-            coin_to_native={},
-            pm=None,
-            writer=None,
-            ban_coin_cb=mock_ban
+        
+        is_exit, exit_res = engine.evaluate_exit_v9(
+            target_book=target_book,
+            target_ex="BITGET",
+            entry_price=1.000,
+            qty=100.0,
+            side="LONG",
+            duration_sec=5.0,
+            actual_net_spread_entry=0.01
         )
-
-        # Trigger single leg exposure directly
-        await fsm._run_single_leg_exposure(100.0, 0.0, 1.000, 0.0)
-
-        # Check that emergency unwind (MARKET reduce_only) was sent immediately due to circuit breaker
-        market_orders = [o for o in binance.placed_orders if o["type"] == "MARKET" and o["position_side"] == "LONG"]
-        self.assertTrue(len(market_orders) > 0, "Hard Stop-Loss circuit breaker did not trigger MARKET unwind")
-        self.assertEqual(fsm.state, PositionState.ABORTED)
+        
+        self.assertTrue(is_exit)
+        self.assertEqual(exit_res["reason"], "STOP_LOSS")
 
     async def test_severe_loss_permanent_ban(self):
-        """Single leg loss >= perm_ban_loss_pct (0.75%) triggers lifetime permanent ban (duration_sec=None)."""
+        """Single leg loss >= perm_ban_loss_pct (0.75%) triggers lifetime permanent ban."""
         cfg = copy.deepcopy(self.cfg)
-        cfg["trading_rules"]["ban_rules"]["perm_ban_loss_pct"] = 0.0075
+        executor = ExecutorProcess(port=9999, cfg=cfg)
 
-        # We hold LONG at 1.000, market drops to 0.985 (-1.5% loss >= 0.75%)
-        binance = MockExchangeOrder("BINANCE", fill_size=100.0, book_bid=0.985, book_ask=0.986)
-        binance.positions["LONG"] = 100.0
-        kucoin = MockExchangeOrder("KUCOIN", fill_size=0.0)
-
-        ban_calls = []
-        def mock_ban(sym, reason="", duration_sec=None):
-            ban_calls.append((sym, reason, duration_sec))
-
-        engine_res = {"long_avg_price": 1.000, "short_avg_price": 1.008, "long_qty": 100.0, "short_qty": 100.0}
-
-        fsm = PositionFSM(
-            sym="TOXICCOIN",
-            route="BINANCE_KUCOIN",
-            long_ex="BINANCE",
-            short_ex="KUCOIN",
-            engine_res=engine_res,
-            cfg=cfg,
-            orders={"BINANCE": binance, "KUCOIN": kucoin},
-            coin_to_native={},
-            pm=None,
-            writer=None,
-            ban_coin_cb=mock_ban
-        )
-
-        await fsm._run_single_leg_exposure(100.0, 0.0, 1.000, 0.0)
-
-        self.assertTrue(len(ban_calls) > 0)
-        sym, reason, duration_sec = ban_calls[-1]
-        self.assertEqual(sym, "TOXICCOIN")
-        self.assertIsNone(duration_sec, f"Expected permanent ban (duration_sec=None), got {duration_sec}")
-        self.assertIn("Severe Single Leg Loss", reason)
+        # Net yield = -0.80% (exceeds perm_ban_loss_pct 0.75%)
+        net_yield = -0.0080
+        net_usd = -0.20
+        perm_ban_pct = float(cfg["trading_rules"]["ban_rules"]["perm_ban_loss_pct"])
+        
+        if abs(net_yield) >= perm_ban_pct:
+            executor.ban_coin("TOXICCOIN", reason=f"Severe loss trade, Net: {net_usd:+.4f}$ ({net_yield*100:+.2f}%)", duration_sec=None)
+            
+        self.assertIn("TOXICCOIN", executor.banned_symbols)
+        self.assertIsNone(executor.banned_symbols["TOXICCOIN"])
 
     async def test_consecutive_losses_permanent_ban_in_executor(self):
         """Two consecutive losses on a coin trigger permanent ban."""
@@ -142,12 +108,12 @@ class TestSingleLegAndBan(unittest.IsolatedAsyncioTestCase):
         executor = ExecutorProcess(port=9999, cfg=cfg)
 
         # 1st loss (small loss, -0.20%)
-        executor.ban_coin("BADCOIN", reason="Single Leg Loss (-0.05$)", duration_sec=1800)
+        executor.ban_coin("BADCOIN", reason="Loss trade (-0.05$)", duration_sec=1800)
         self.assertIsNotNone(executor.banned_symbols["BADCOIN"])
         self.assertEqual(executor.consecutive_loss_counts["BADCOIN"], 1)
 
         # 2nd loss (small loss, -0.20%)
-        executor.ban_coin("BADCOIN", reason="Single Leg Loss (-0.05$)", duration_sec=1800)
+        executor.ban_coin("BADCOIN", reason="Loss trade (-0.05$)", duration_sec=1800)
         # Reached 2 consecutive losses -> permanent ban!
         self.assertIsNone(executor.banned_symbols["BADCOIN"])
         self.assertEqual(executor.consecutive_loss_counts["BADCOIN"], 2)

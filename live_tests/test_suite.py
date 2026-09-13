@@ -194,7 +194,7 @@ def test_position_manager_full_lifecycle():
     routes = ["BINANCE_KUCOIN"]
     active_symbols = ["DOGE", "XRP"]
     
-    pm = PositionManager(cfg, exchanges, routes, active_symbols)
+    pm = PositionManager(cfg, exchanges, routes, active_symbols, state_file=None)
     
     # 1. Свободное открытие
     assert pm.can_enter("BINANCE", "KUCOIN", "DOGE") is True
@@ -230,16 +230,15 @@ def test_position_manager_full_lifecycle():
     assert pm.can_enter("BINANCE", "KUCOIN", "DOGE") is True, "После выхода связка снова свободна"
 
 # ==========================================
-# 5. ТЕСТ АВАРИЙНОГО ЗАКРЫТИЯ (EXECUTE_CLOSE) [OBSOLETE V8]
 # ==========================================
-async def test_emergency_execute_close_price_fallback():
-    print("      [SKIPPED] Test obsolete in v9 single-leg architecture.")
-    return
+# 5. ТЕСТ ИСПОЛНЕНИЯ ЗАКРЫТИЯ ПОЗИЦИИ (EXECUTE_CLOSE V9)
+# ==========================================
+async def test_v9_execute_close_single_leg():
     cfg = load_config()
     executor = ExecutorProcess(port=9999, cfg=cfg)
     
     # Мокируем PositionManager
-    executor.pm = PositionManager(cfg, ["BINANCE", "KUCOIN"], ["BINANCE_KUCOIN"], ["DOGE"])
+    executor.pm = PositionManager(cfg, ["BINANCE", "KUCOIN"], ["BINANCE_KUCOIN"], ["DOGE"], state_file=None)
     
     # Настраиваем позицию с данными входа
     exec_res = {
@@ -254,26 +253,20 @@ async def test_emergency_execute_close_price_fallback():
     executor.pm.confirm_entry("BINANCE", "KUCOIN", "DOGE", exec_res, time.time())
     executor.pm.lock_for_exit("BINANCE_KUCOIN", "DOGE")
     
-    # Мокируем ордера
-    mock_b_order = MagicMock()
-    mock_b_order.get_executed_position = MagicMock(side_effect=[{"size": 250.0, "price": 0.20}, {"size": 0.0, "price": 0.0}])
-    mock_b_order.get_exact_position = AsyncMock(return_value={"size": 250.0, "price": 0.20})
-    mock_b_order.get_exact_position_guarded = AsyncMock(return_value={"size": 250.0, "price": 0.20})
-    mock_b_order.place_order = AsyncMock(return_value={"orderId": 999})
-    mock_b_order.cancel_all_orders = AsyncMock()
-    mock_b_order.subscribe_position_update = MagicMock(return_value=asyncio.Event())
-    mock_b_order.unsubscribe_position_update = MagicMock()
-    mock_b_order.get_last_close_price = MagicMock(return_value=0.20)
-    
+    ev_k = asyncio.Event()
+    ev_k.set()
     mock_k_order = MagicMock()
-    mock_k_order.get_executed_position = MagicMock(return_value={"size": 0.0, "price": 0.0})
+    mock_k_order.get_executed_position = MagicMock(side_effect=[{"size": 250.0, "price": 0.20}, {"size": 0.0, "price": 0.0}, {"size": 0.0, "price": 0.0}])
     mock_k_order.get_exact_position = AsyncMock(return_value={"size": 0.0, "price": 0.0})
     mock_k_order.get_exact_position_guarded = AsyncMock(return_value={"size": 0.0, "price": 0.0})
     mock_k_order.place_order = AsyncMock(return_value={"orderId": 888})
     mock_k_order.cancel_all_orders = AsyncMock()
-    mock_k_order.subscribe_position_update = MagicMock(return_value=asyncio.Event())
+    mock_k_order.subscribe_position_update = MagicMock(return_value=ev_k)
     mock_k_order.unsubscribe_position_update = MagicMock()
     mock_k_order.get_last_close_price = MagicMock(return_value=0.205)
+    mock_k_order.get_book_ticker = AsyncMock(return_value={"bid": 0.205, "ask": 0.206})
+    
+    mock_b_order = MagicMock()
     
     executor.orders = {
         "BINANCE": mock_b_order,
@@ -281,26 +274,24 @@ async def test_emergency_execute_close_price_fallback():
     }
     executor.coin_to_native = {"DOGE": {"BINANCE": "DOGEUSDT", "KUCOIN": "DOGEUSDTM"}}
     
-    # Вызываем аварийный execute_close БЕЗ exit_res (как при LOW_FILL_RATE)
     close_payload = {
         "route": "BINANCE_KUCOIN",
         "sym": "DOGE",
-        "reason": "LOW_FILL_RATE",
-        "data": exec_res
+        "reason": "TTL_EXPIRED",
+        "exit_res": {"reason": "TTL_EXPIRED"}
     }
     
     await executor.execute_close(close_payload)
     
-    # Проверяем, что place_order был вызван с валидной ценой (> 0) и не упал!
-    assert mock_b_order.place_order.called, "place_order должен быть вызван для закрытия открытой ноги!"
-    call_args = mock_b_order.place_order.call_args
-    sym, side, size_usd, price_limit = call_args[0]
-    
-    assert sym == "DOGEUSDT"
-    assert side == "SELL"
+    assert mock_k_order.place_order.called, "place_order должен быть вызван для закрытия target_ex позиции!"
+    call_args = mock_k_order.place_order.call_args[0]
+    sym, side, size_usd, price_limit = call_args
+    assert sym == "DOGEUSDTM"
+    assert side == "SELL", "Для закрытия Long позиции должен выставляться SELL"
     assert size_usd > 0
     assert price_limit > 0, f"price_limit ({price_limit}) обязан быть > 0!"
-    print(f"      [Детали аварийного закрытия]: {side} {sym}, объем {size_usd:.2f}$, цена лимита {price_limit:.5f}")
+    assert executor.pm.positions["BINANCE_KUCOIN"]["DOGE"]["current_position"] is False
+    assert not mock_b_order.place_order.called, "Oracle не должен совершать ордеров закрытия"
 
 # ==========================================
 # 6. ТЕСТ ОБРАТНОГО НАПРАВЛЕНИЯ (LONG KUCOIN / SHORT BINANCE)
@@ -353,45 +344,29 @@ def test_check_order_size_validation():
     bo.check_order_size("DOGEUSDT", 50.0, 0.20)
 
 # ==========================================
-# 8. ТЕСТ ПОЛНОГО СЦЕНАРИЯ EXECUTE_OPEN С НИЗКИМ FILL_RATE (РАССИНХРОН) [OBSOLETE V8]
+# 8. ТЕСТ ИСПОЛНЕНИЯ ВХОДА (EXECUTE_OPEN V9)
 # ==========================================
-async def test_execute_open_low_fill_rate_recovery():
-    print("      [SKIPPED] Test obsolete in v9 single-leg architecture. Desync between 2 legs is impossible.")
-    return
+async def test_v9_execute_open_single_leg():
+    cfg = load_config()
     executor = ExecutorProcess(port=9999, cfg=cfg)
-    executor.pm = PositionManager(cfg, ["BINANCE", "KUCOIN"], ["BINANCE_KUCOIN"], ["DOGE"])
+    executor.pm = PositionManager(cfg, ["BINANCE", "KUCOIN"], ["BINANCE_KUCOIN"], ["DOGE"], state_file=None)
     
-    # Мокируем ордера: Binance налился 100%, Kucoin 0%
-    ev_b = asyncio.Event()
-    ev_b.set()
     ev_k = asyncio.Event()
     ev_k.set()
-
-    mock_b = MagicMock()
-    mock_b.check_order_size = MagicMock()
-    mock_b.place_order = AsyncMock(return_value={"orderId": 111})
-    mock_b.get_executed_position = MagicMock(return_value={"size": 250.0, "price": 0.20})
-    mock_b.get_exact_position = AsyncMock(return_value={"size": 250.0, "price": 0.20})
-    mock_b.get_exact_position_guarded = AsyncMock(return_value={"size": 0.0, "price": 0.0})
-    mock_b.get_position_rest = AsyncMock(return_value={"size": 0.0, "price": 0.0})
-    mock_b.get_book_ticker = AsyncMock(return_value={"bid": 0.20, "ask": 0.20})
-    mock_b.get_last_close_price = MagicMock(return_value=0.20)
-    mock_b.cancel_all_orders = AsyncMock()
-    mock_b.subscribe_position_update = MagicMock(return_value=ev_b)
-    mock_b.unsubscribe_position_update = MagicMock()
     
     mock_k = MagicMock()
     mock_k.check_order_size = MagicMock()
     mock_k.place_order = AsyncMock(return_value={"orderId": 222})
-    mock_k.get_executed_position = MagicMock(return_value={"size": 0.0, "price": 0.0})
-    mock_k.get_exact_position = AsyncMock(return_value={"size": 0.0, "price": 0.0})
-    mock_k.get_exact_position_guarded = AsyncMock(return_value={"size": 0.0, "price": 0.0})
-    mock_k.get_position_rest = AsyncMock(return_value={"size": 0.0, "price": 0.0})
+    mock_k.get_executed_position = MagicMock(return_value={"size": 250.0, "price": 0.20})
+    mock_k.get_exact_position = AsyncMock(return_value={"size": 250.0, "price": 0.20})
+    mock_k.get_exact_position_guarded = AsyncMock(return_value={"size": 250.0, "price": 0.20})
+    mock_k.get_position_rest = AsyncMock(return_value={"size": 250.0, "price": 0.20})
     mock_k.get_book_ticker = AsyncMock(return_value={"bid": 0.205, "ask": 0.205})
-    mock_k.get_last_close_price = MagicMock(return_value=0.205)
     mock_k.cancel_all_orders = AsyncMock()
     mock_k.subscribe_position_update = MagicMock(return_value=ev_k)
     mock_k.unsubscribe_position_update = MagicMock()
+    
+    mock_b = MagicMock()
     
     executor.orders = {"BINANCE": mock_b, "KUCOIN": mock_k}
     executor.coin_to_native = {"DOGE": {"BINANCE": "DOGEUSDT", "KUCOIN": "DOGEUSDTM"}}
@@ -411,14 +386,12 @@ async def test_execute_open_low_fill_rate_recovery():
         }
     }
     
-    # Запускаем execute_open: Kucoin 0% -> должен сработать экстренный выход
     await executor.execute_open(open_payload)
     
-    # Проверяем, что был вызван place_order на закрытие зависшей ноги Binance!
-    assert mock_b.place_order.call_count >= 2, "Должен быть вызван и ордер входа, и ордер закрытия!"
-    close_call = mock_b.place_order.call_args_list[-1]
-    assert close_call[0][1] == "SELL", "Должен быть SELL ордер для закрытия лонга"
-    print("      [Экстренный выход при S=0%]: Успешно сброшена нога Binance без ошибок!")
+    # Target ордер выставлен, Oracle не тронут
+    assert mock_k.place_order.called, "Target биржа должна выставить ордер на вход"
+    assert not mock_b.place_order.called, "Oracle биржа не должна выставлять ордеров"
+    assert executor.pm.positions["BINANCE_KUCOIN"]["DOGE"]["current_position"] is True
 
 # ==========================================
 # ЗАПУСК ВСЕХ ТЕСТОВ
@@ -446,11 +419,11 @@ if __name__ == "__main__":
     print("\n[6/8] Тестирование PositionManager...")
     run_test("Полный цикл PositionManager (вход, lock_for_exit, выход)", test_position_manager_full_lifecycle)
     
-    print("\n[7/8] Тестирование аварийного сброса execute_close...")
-    run_test("Фоллбэк цены в execute_close при аварийном выходе", test_emergency_execute_close_price_fallback)
+    print("\n[7/8] Тестирование исполнения закрытия execute_close (v9)...")
+    run_test("Закрытие одноногой позиции на target_ex в execute_close", test_v9_execute_close_single_leg)
     
-    print("\n[8/8] Тестирование полного сценария execute_open при рассинхроне...")
-    run_test("Автоматический сброс ноги при 0% на второй бирже", test_execute_open_low_fill_rate_recovery)
+    print("\n[8/8] Тестирование исполнения входа execute_open (v9)...")
+    run_test("Исполнение только на target_ex без затрагивания oracle_ex", test_v9_execute_open_single_leg)
     
     print("\n==================================================")
     print(f"ИТОГИ: Пройдено: {passed_count} | Ошибок: {failed_count}")

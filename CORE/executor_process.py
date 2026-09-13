@@ -254,9 +254,17 @@ class ExecutorProcess:
             # Restore FSM for positions loaded from state after bot restart
             state = self.pm.positions.get(route, {}).get(sym, {})
             details = state.get("details", {})
-            target_ex = details.get("target_ex")
-            oracle_ex = details.get("oracle_ex")
-            side = details.get("side", "LONG")
+            target_ex = details.get("target_ex") or details.get("short_ex")
+            oracle_ex = details.get("oracle_ex") or details.get("long_ex")
+            side = details.get("side") or ("LONG" if details.get("entry_long_price") else "SHORT")
+            entry_price = float(details.get("entry_price") or details.get("entry_long_price") or details.get("entry_short_price", 0.0))
+            qty = float(details.get("qty") or details.get("long_qty") or details.get("short_qty", 0.0))
+            
+            if not target_ex or not oracle_ex:
+                parts = route.split('_')
+                oracle_ex = parts[0]
+                target_ex = parts[1] if len(parts) > 1 else parts[0]
+                
             fsm = PositionFSM(
                 sym=sym,
                 route=route,
@@ -274,9 +282,9 @@ class ExecutorProcess:
             )
             fsm.open_time = details.get("open_time", time.time())
             fsm.open_time_ms = details.get("open_time_ms", int(fsm.open_time * 1000))
-            fsm.target_pos = {"size": details.get("qty", 0.0), "price": details.get("entry_price", 0.0)}
+            fsm.target_pos = {"size": qty, "price": entry_price}
             fsm.exec_res = {
-                "entry_price": details.get("entry_price", 0.0),
+                "entry_price": entry_price,
                 "executed_volume_rate": details.get("executed_volume_rate", 1.0),
             }
 
@@ -289,6 +297,10 @@ class ExecutorProcess:
                                      actual_usd: float, exit_res: dict = None, reason: str = ""):
         """Instant local PnL calculation in 0ms using actual execution prices."""
         try:
+            if exit_price <= 0.0 or actual_usd <= 0.0 or entry_price <= 0.0:
+                log(f"[{sym}] Skipping PnL settlement (zero price or usd: entry={entry_price}, exit={exit_price}, usd={actual_usd})", level="WARNING")
+                return
+
             if sym not in self.analytics_map:
                 self.analytics_map[sym] = TradeAnalytics(sym, self.cfg["trading_risks"])
 

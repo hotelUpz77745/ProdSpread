@@ -8,10 +8,12 @@ import os
 
 class PositionManager:
     STATE_FILE = "active_positions.json"
-    def __init__(self, cfg: dict, exchanges: list, route_names: list, active_symbols: list):
+    def __init__(self, cfg: dict, exchanges: list, route_names: list, active_symbols: list, state_file: str = "active_positions.json"):
         self.cfg = cfg
         self.exchanges = exchanges
         self.route_names = route_names
+        self.state_file = state_file
+        self.STATE_FILE = state_file
         
         # Limits from config (default 1 if unspecified)
         self.max_pos = {}
@@ -34,11 +36,11 @@ class PositionManager:
         self._load_state()
 
     def _load_state(self):
-        if not os.path.exists(self.STATE_FILE):
+        if not self.state_file or not os.path.exists(self.state_file):
             return
             
         try:
-            with open(self.STATE_FILE, "r", encoding="utf-8") as f:
+            with open(self.state_file, "r", encoding="utf-8") as f:
                 saved_positions = json.load(f)
                 
             for route, sym_map in saved_positions.items():
@@ -59,24 +61,33 @@ class PositionManager:
                         ex2 = short_ex or target_ex
                         
                         if ex1 and ex2:
-                            self.exchange_state[ex1]["current"] += 1
-                            self.exchange_state[ex2]["current"] += 1
+                            if not self._is_oracle_on_route(route, ex1):
+                                self.exchange_state[ex1]["current"] += 1
+                            if not self._is_oracle_on_route(route, ex2):
+                                self.exchange_state[ex2]["current"] += 1
                             
             self._update_locks()
         except Exception as e:
             print(f"Error loading positions state: {e}")
 
     def _save_state(self):
+        if not self.state_file:
+            return
         try:
-            with open(self.STATE_FILE, "w", encoding="utf-8") as f:
+            with open(self.state_file, "w", encoding="utf-8") as f:
                 json.dump(self.positions, f, indent=4)
         except Exception as e:
             print(f"Error saving positions state: {e}")
 
+    def _is_oracle_on_route(self, route: str, exchange: str) -> bool:
+        roles = self.cfg.get("exchange_roles", {}).get(route, {})
+        return roles.get("oracle", "").upper() == exchange.upper()
+
     def _update_locks(self):
         """
         Recalculates lock states for all routes based on exchange utilization.
-        A route is locked if either exchange reached max_positions limit (current + pending >= max).
+        A route is locked if a traded exchange reached max_positions limit (current + pending >= max).
+        Oracle exchanges are excluded from lock calculations.
         """
         for route in self.route_names:
             ex1, ex2 = route.split('_')
@@ -84,10 +95,10 @@ class PositionManager:
             ex1_used = self.exchange_state[ex1]["current"] + self.exchange_state[ex1]["pending"]
             ex2_used = self.exchange_state[ex2]["current"] + self.exchange_state[ex2]["pending"]
             
-            if ex1_used >= self.max_pos[ex1] or ex2_used >= self.max_pos[ex2]:
-                self.route_state[route]["is_locked"] = True
-            else:
-                self.route_state[route]["is_locked"] = False
+            ex1_locked = (not self._is_oracle_on_route(route, ex1)) and (ex1_used >= self.max_pos[ex1])
+            ex2_locked = (not self._is_oracle_on_route(route, ex2)) and (ex2_used >= self.max_pos[ex2])
+            
+            self.route_state[route]["is_locked"] = ex1_locked or ex2_locked
                 
     def _normalize_route(self, long_ex: str, short_ex: str) -> str:
         """Returns the canonical route name from route_state, checking both directions."""
@@ -109,10 +120,16 @@ class PositionManager:
             return False
             
         # Strict exchange limit check: current + pending must not exceed max_positions
-        ex1_used = self.exchange_state[long_ex]["current"] + self.exchange_state[long_ex]["pending"]
-        ex2_used = self.exchange_state[short_ex]["current"] + self.exchange_state[short_ex]["pending"]
-        if ex1_used >= self.max_pos[long_ex] or ex2_used >= self.max_pos[short_ex]:
-            return False
+        # Oracle exchanges are read-only and excluded from position limits.
+        if not self._is_oracle_on_route(route, long_ex):
+            ex1_used = self.exchange_state[long_ex]["current"] + self.exchange_state[long_ex]["pending"]
+            if ex1_used >= self.max_pos[long_ex]:
+                return False
+                
+        if not self._is_oracle_on_route(route, short_ex):
+            ex2_used = self.exchange_state[short_ex]["current"] + self.exchange_state[short_ex]["pending"]
+            if ex2_used >= self.max_pos[short_ex]:
+                return False
 
         # Global symbol check across ALL routes:
         # coin must not be open on any route, and have no pending actions
@@ -128,8 +145,10 @@ class PositionManager:
         self.positions[route][sym]["pending_action"] = "OPEN"
         self.positions[route][sym]["details"] = {"engine_res": engine_res}
         
-        self.exchange_state[long_ex]["pending"] += 1
-        self.exchange_state[short_ex]["pending"] += 1
+        if not self._is_oracle_on_route(route, long_ex):
+            self.exchange_state[long_ex]["pending"] += 1
+        if not self._is_oracle_on_route(route, short_ex):
+            self.exchange_state[short_ex]["pending"] += 1
         
         self._update_locks()
         
@@ -149,15 +168,16 @@ class PositionManager:
             "entry_price": exec_res.get("entry_price", 0.0),
             "qty": exec_res.get("qty", 0.0),
             "executed_volume_rate": exec_res.get("executed_volume_rate", 1.0),
-            "net_spread": exec_res.get("net_spread"),
+            "net_spread": exec_res.get("net_spread", 0.0),
             "open_time": open_time
         })
         
-        self.exchange_state[oracle_ex]["pending"] -= 1
-        self.exchange_state[target_ex]["pending"] -= 1
-        
-        self.exchange_state[oracle_ex]["current"] += 1
-        self.exchange_state[target_ex]["current"] += 1
+        if not self._is_oracle_on_route(route, oracle_ex):
+            self.exchange_state[oracle_ex]["pending"] = max(0, self.exchange_state[oracle_ex]["pending"] - 1)
+            self.exchange_state[oracle_ex]["current"] += 1
+        if not self._is_oracle_on_route(route, target_ex):
+            self.exchange_state[target_ex]["pending"] = max(0, self.exchange_state[target_ex]["pending"] - 1)
+            self.exchange_state[target_ex]["current"] += 1
         
         self._update_locks()
         self._save_state()
@@ -170,8 +190,10 @@ class PositionManager:
             state["pending_action"] = None
             state["details"] = {}
             
-            self.exchange_state[long_ex]["pending"] = max(0, self.exchange_state[long_ex]["pending"] - 1)
-            self.exchange_state[short_ex]["pending"] = max(0, self.exchange_state[short_ex]["pending"] - 1)
+            if not self._is_oracle_on_route(route, long_ex):
+                self.exchange_state[long_ex]["pending"] = max(0, self.exchange_state[long_ex]["pending"] - 1)
+            if not self._is_oracle_on_route(route, short_ex):
+                self.exchange_state[short_ex]["pending"] = max(0, self.exchange_state[short_ex]["pending"] - 1)
             
             self._update_locks()
             self._save_state()
@@ -202,8 +224,10 @@ class PositionManager:
         state["pending_action"] = None
         state["details"] = {}
         
-        self.exchange_state[long_ex]["current"] = max(0, self.exchange_state[long_ex]["current"] - 1)
-        self.exchange_state[short_ex]["current"] = max(0, self.exchange_state[short_ex]["current"] - 1)
+        if not self._is_oracle_on_route(route, long_ex):
+            self.exchange_state[long_ex]["current"] = max(0, self.exchange_state[long_ex]["current"] - 1)
+        if not self._is_oracle_on_route(route, short_ex):
+            self.exchange_state[short_ex]["current"] = max(0, self.exchange_state[short_ex]["current"] - 1)
         
         self._update_locks()
         self._save_state()

@@ -150,29 +150,34 @@ class Main:
         try:
             while True:
                 msg_type, payload = await async_read_msg(reader)
-                if msg_type == "POS_OPENED":
-                    route = payload["route"]
-                    sym = payload["sym"]
-                    exec_res = payload["exec_res"]
-                    open_time = payload["open_time"]
-                    self.pm.confirm_entry(exec_res["long_ex"], exec_res["short_ex"], sym, exec_res, open_time)
-                elif msg_type == "POS_FAILED":
-                    long_ex = payload["long_ex"]
-                    short_ex = payload["short_ex"]
-                    sym = payload["sym"]
-                    self.pm.rollback_entry(long_ex, short_ex, sym)
-                elif msg_type == "POS_CLOSED":
-                    route = payload["route"]
-                    sym = payload["sym"]
-                    self.pm.confirm_exit(route, sym)
-                elif msg_type == "POS_EXIT_FAILED":
-                    route = payload["route"]
-                    sym = payload["sym"]
-                    self.pm.rollback_exit(route, sym)
-                elif msg_type == "BAN_UPDATE":
-                    sym = payload["symbol"]
-                    exp = payload["expire_time"]
-                    self.banned_symbols[sym] = exp
+                try:
+                    if msg_type == "POS_OPENED":
+                        route = payload["route"]
+                        sym = payload["sym"]
+                        exec_res = payload["exec_res"]
+                        open_time = payload["open_time"]
+                        oracle_ex = exec_res.get("oracle_ex") or exec_res.get("long_ex")
+                        target_ex = exec_res.get("target_ex") or exec_res.get("short_ex")
+                        self.pm.confirm_entry(oracle_ex, target_ex, sym, exec_res, open_time)
+                    elif msg_type == "POS_FAILED":
+                        oracle_ex = payload.get("oracle_ex") or payload.get("long_ex")
+                        target_ex = payload.get("target_ex") or payload.get("short_ex")
+                        sym = payload["sym"]
+                        self.pm.rollback_entry(oracle_ex, target_ex, sym)
+                    elif msg_type == "POS_CLOSED":
+                        route = payload["route"]
+                        sym = payload["sym"]
+                        self.pm.confirm_exit(route, sym)
+                    elif msg_type == "POS_EXIT_FAILED":
+                        route = payload["route"]
+                        sym = payload["sym"]
+                        self.pm.rollback_exit(route, sym)
+                    elif msg_type == "BAN_UPDATE":
+                        sym = payload["symbol"]
+                        exp = payload["expire_time"]
+                        self.banned_symbols[sym] = exp
+                except Exception as msg_err:
+                    log(f"[MarketProcess] Error handling IPC event {msg_type}: {msg_err}", level="ERROR")
         except EOFError:
             log("[MarketProcess] Connection to Executor closed.", level="WARNING")
         except asyncio.CancelledError:
@@ -258,30 +263,38 @@ class Main:
                         open_time = state["details"].get("open_time", time.time())
                         duration_sec = time.time() - open_time
                         
-                        target_ex = state["details"]["target_ex"]
-                        oracle_ex = state["details"]["oracle_ex"]
-                        side = state["details"]["side"]
+                        details = state.get("details", {})
+                        target_ex = details.get("target_ex") or details.get("short_ex")
+                        oracle_ex = details.get("oracle_ex") or details.get("long_ex")
+                        side = details.get("side") or ("LONG" if details.get("entry_long_price") else "SHORT")
                         
-                        target_book = self.books[target_ex].get(sym, {})
+                        entry_price = float(details.get("entry_price") or details.get("entry_long_price") or details.get("entry_short_price", 0.0))
+                        qty = float(details.get("qty") or details.get("long_qty") or details.get("short_qty", 0.0))
+                        net_spread = float(details.get("net_spread") or details.get("actual_net_spread") or 0.0)
                         
-                        active_decay_map = self.engine.decay_map
-
+                        if not target_ex or not oracle_ex or entry_price <= 0.0 or qty <= 0.0:
+                            continue
+                            
+                        target_book = self.books.get(target_ex, {}).get(sym, {})
+                        
                         is_exit, exit_res = self.engine.evaluate_exit_v9(
                             target_book=target_book,
                             target_ex=target_ex,
-                            entry_price=state["details"]["entry_price"],
-                            qty=state["details"]["qty"],
+                            entry_price=entry_price,
+                            qty=qty,
                             side=side,
                             duration_sec=duration_sec,
-                            actual_net_spread_entry=state["details"]["net_spread"]
+                            actual_net_spread_entry=net_spread
                         )
                         
-                        if is_exit and exit_res.get("reason") in ("TAKE_PROFIT", "STOP_LOSS"):
+                        # Protection against phantom spikes on exit ONLY for TAKE_PROFIT.
+                        # Emergency exits (STOP_LOSS, TTL) must NEVER be blocked!
+                        if is_exit and exit_res.get("reason") == "TAKE_PROFIT":
                             oracle_ts = self.ts[oracle_ex].get(sym, 0.0)
                             target_ts = self.ts[target_ex].get(sym, 0.0)
                             if oracle_ts > 0 and target_ts > 0:
                                 diff_ms = abs(oracle_ts - target_ts) * 1000.0
-                                limit = self._get_desync_limit(self.exit_desync_limit, target_ex, oracle_ex)
+                                limit = self._get_desync_limit(self.exit_desync_limit, oracle_ex, target_ex)
                                 if limit is not None and diff_ms > limit:
                                     is_exit = False
                                     exit_res["reason"] = f"EXIT_DESYNC_SKIP ({diff_ms:.0f}ms > {limit:.0f}ms)"

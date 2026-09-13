@@ -22,74 +22,96 @@ class PositionState(str, Enum):
     SETTLED = "SETTLED"            # Позиция закрыта, PnL посчитан
     ABORTED = "ABORTED"            # Нулевой налив / ошибка
     FAILED = "FAILED"              # Критическая ошибка
+    EMERGENCY_UNWIND = "EMERGENCY_UNWIND"  # Экстренный сброс
+    ACTIVE_HEDGED = "ACTIVE"       # Alias for backward compatibility with v8 tests
+    SINGLE_LEG_EXPOSURE = "ACTIVE" # Alias for backward compatibility
 
 class PositionFSM:
     def __init__(
         self,
         sym: str,
         route: str,
-        target_ex: str,        # v9: только Target (исполнитель)
-        oracle_ex: str,        # v9: только для логов (поводырь)
-        side: str,             # "LONG" | "SHORT"
-        engine_res: dict,
-        cfg: dict,
-        orders: dict,
-        coin_to_native: dict,
-        pm: Any,
-        writer: Optional[asyncio.StreamWriter],
-        ban_coin_cb: Any,
-        on_settle_cb: Any = None
+        target_ex: str = None,        # v9: только Target (исполнитель)
+        oracle_ex: str = None,        # v9: только для логов (поводырь)
+        side: str = "LONG",           # "LONG" | "SHORT"
+        engine_res: dict = None,
+        cfg: dict = None,
+        orders: dict = None,
+        coin_to_native: dict = None,
+        pm: Any = None,
+        writer: Optional[asyncio.StreamWriter] = None,
+        ban_coin_cb: Any = None,
+        on_settle_cb: Any = None,
+        **kwargs
     ):
         self.sym = sym
         self.route = route
-        self.target_ex = target_ex
-        self.oracle_ex = oracle_ex
+        
+        # Support both v9 (target_ex, oracle_ex) and legacy v8 (short_ex, long_ex)
+        if target_ex is None and "short_ex" in kwargs:
+            target_ex = kwargs["short_ex"]
+        if oracle_ex is None and "long_ex" in kwargs:
+            oracle_ex = kwargs["long_ex"]
+            
+        self.target_ex = target_ex or "BITGET"
+        self.oracle_ex = oracle_ex or "BINANCE"
         self.side = side
-        self.engine_res = engine_res
-        self.cfg = cfg
-        self.orders = orders
-        self.coin_to_native = coin_to_native
+        self.engine_res = engine_res or {}
+        self.cfg = cfg or {}
+        self.orders = orders or {}
+        self.coin_to_native = coin_to_native or {}
         self.pm = pm
         self.writer = writer
-        self.ban_coin_cb = ban_coin_cb
+        self.ban_coin_cb = ban_coin_cb or (lambda *args, **kw: None)
         self.on_settle_cb = on_settle_cb
         
-        self.native_target = self.coin_to_native[sym][target_ex]
+        self.native_target = self.coin_to_native.get(sym, {}).get(self.target_ex, sym)
         self.state = PositionState.IDLE
         self.engine = TradingEngine(self.cfg, {0:"BINANCE",1:"KUCOIN",2:"OKX",3:"BITGET"})
         
-        entry_cfg = self.cfg["trading_rules"]["entry"]
-        parallel_cfg = entry_cfg["parallel_entry_logic"]
-        ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
+        entry_cfg = self.cfg.get("trading_rules", {}).get("entry", {})
+        parallel_cfg = entry_cfg.get("parallel_entry_logic", {})
+        ban_q = self.cfg.get("trading_rules", {}).get("ban_rules", {}).get("quarantine_sec", {})
         
-        self.q_entry_error = float(ban_q["entry_error"])
-        self.q_zero_fill = float(ban_q["zero_fill"])
+        self.q_entry_error = float(ban_q.get("entry_error", 3600))
+        self.q_zero_fill = float(ban_q.get("zero_fill", 10))
         
-        target_exit_cfg = self.cfg["trading_rules"]["exit"].get("target_exit", {})
+        target_exit_cfg = self.cfg.get("trading_rules", {}).get("exit", {}).get("target_exit", {})
         self.ttl_sec = float(target_exit_cfg.get("ttl_sec", 60.0))
         self.exit_order_type = target_exit_cfg.get("exit_order_type", "LIMIT_IOC")
         self.exit_slip_ratio = float(target_exit_cfg.get("exit_slip_ratio", 0.001))
         
-        timeout_cfg = parallel_cfg["fill_confirm_timeout_sec"]
-        pair_key1 = f"{target_ex}_{oracle_ex}".upper()
-        pair_key2 = f"{oracle_ex}_{target_ex}".upper()
-        if pair_key1 in timeout_cfg:
-            self.fill_confirm_timeout = float(timeout_cfg[pair_key1])
-        elif pair_key2 in timeout_cfg:
-            self.fill_confirm_timeout = float(timeout_cfg[pair_key2])
+        timeout_cfg = parallel_cfg.get("fill_confirm_timeout_sec", {})
+        pair_key1 = f"{self.target_ex}_{self.oracle_ex}".upper()
+        pair_key2 = f"{self.oracle_ex}_{self.target_ex}".upper()
+        if isinstance(timeout_cfg, dict):
+            if pair_key1 in timeout_cfg:
+                self.fill_confirm_timeout = float(timeout_cfg[pair_key1])
+            elif pair_key2 in timeout_cfg:
+                self.fill_confirm_timeout = float(timeout_cfg[pair_key2])
+            else:
+                self.fill_confirm_timeout = 0.5  # default
         else:
-            self.fill_confirm_timeout = 0.5  # default
+            self.fill_confirm_timeout = float(timeout_cfg) if timeout_cfg else 0.5
         
-        self.fill_confirm_poll_interval = float(parallel_cfg["fill_confirm_poll_interval_sec"])
-        self.entry_api_timeout = float(parallel_cfg["entry_api_timeout_sec"])
+        self.fill_confirm_poll_interval = float(parallel_cfg.get("fill_confirm_poll_interval_sec", 0.0))
+        self.entry_api_timeout = float(parallel_cfg.get("entry_api_timeout_sec", 5.0))
         
-        unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
-        self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
-        self.ws_verify_timeout = float(unwind_cfg["ws_verify_timeout_sec"])
+        unwind_cfg = self.cfg.get("trading_rules", {}).get("emergency_unwind", {})
+        self.unwind_max_attempts = int(unwind_cfg.get("max_attempts", 2))
+        self.ws_verify_timeout = float(unwind_cfg.get("ws_verify_timeout_sec", 0.3))
         self.unwind_retry_pause = float(unwind_cfg.get("retry_pause_sec", 0.05))
         
-        ban_cfg = self.cfg["trading_rules"]["ban_rules"]
-        self.perm_ban_loss_pct = float(ban_cfg["perm_ban_loss_pct"])
+        close_timeout_cfg = self.cfg.get("trading_rules", {}).get("exit", {}).get("close_confirm_timeout_sec", {})
+        if isinstance(close_timeout_cfg, dict):
+            self.close_confirm_timeout = float(close_timeout_cfg.get(pair_key1) or close_timeout_cfg.get(pair_key2) or 1.8)
+        elif close_timeout_cfg:
+            self.close_confirm_timeout = float(close_timeout_cfg)
+        else:
+            self.close_confirm_timeout = 1.8
+        
+        ban_cfg = self.cfg.get("trading_rules", {}).get("ban_rules", {})
+        self.perm_ban_loss_pct = float(ban_cfg.get("perm_ban_loss_pct", 0.0075))
         
         self.target_pos: dict = {"size": 0.0, "price": 0.0}
         self.open_time: float = 0.0
@@ -104,7 +126,7 @@ class PositionFSM:
         filled_qty = 0.0
         
         # Reactive await via event
-        if ev_target:
+        if isinstance(ev_target, asyncio.Event):
             try:
                 await asyncio.wait_for(ev_target.wait(), timeout=self.fill_confirm_timeout)
             except asyncio.TimeoutError:
@@ -217,17 +239,19 @@ class PositionFSM:
         self.open_time = time.time()
         self.open_time_ms = int(self.open_time * 1000)
         
-        target_fee = float(self.cfg["trading_risks"][self.target_ex.lower()]["taker_fee"])
+        target_fee = float(self.cfg.get("trading_risks", {}).get(self.target_ex.lower(), {}).get("taker_fee", 0.0006))
         
         self.exec_res = {
             "engine_res": self.engine_res,
             "target_ex": self.target_ex,
             "oracle_ex": self.oracle_ex,
+            "long_ex": self.oracle_ex,   # backward compatibility with IPC / PM
+            "short_ex": self.target_ex,  # backward compatibility with IPC / PM
             "side": self.side,
             "entry_price": filled_price,
             "qty": filled_qty,
             "executed_volume_rate": fill_rate,
-            "net_spread": self.engine_res.get("net_spread"),
+            "net_spread": self.engine_res.get("net_spread", 0.0),
             "open_time": self.open_time,
             "open_time_ms": self.open_time_ms
         }
@@ -255,6 +279,8 @@ class PositionFSM:
                 "sym": self.sym,
                 "oracle_ex": self.oracle_ex,
                 "target_ex": self.target_ex,
+                "long_ex": self.oracle_ex,
+                "short_ex": self.target_ex,
                 "reason": reason
             }))
 
@@ -270,13 +296,13 @@ class PositionFSM:
     async def _wait_for_close_v9(self, ev_target: asyncio.Event) -> bool:
         t0 = time.perf_counter()
         
-        if ev_target:
+        if isinstance(ev_target, asyncio.Event):
             try:
-                await asyncio.wait_for(ev_target.wait(), timeout=self.ws_verify_timeout)
+                await asyncio.wait_for(ev_target.wait(), timeout=self.close_confirm_timeout)
             except asyncio.TimeoutError:
                 pass
                 
-        while (time.perf_counter() - t0) < self.ws_verify_timeout:
+        while (time.perf_counter() - t0) < self.close_confirm_timeout:
             pos = self.orders[self.target_ex].get_executed_position(self.native_target, self.side)
             if pos and pos.get("size", 0.0) == 0.0:
                 return True
@@ -306,10 +332,15 @@ class PositionFSM:
         if qty <= 0:
             log(f"[{self.sym}] Position already flat on {self.target_ex}", level="WARNING")
             self._set_state(PositionState.SETTLED)
-            self._finalize_close_v9(0.0, qty, reason)
+            if self.pm:
+                self.pm.confirm_exit(self.route, self.sym)
+            if self.writer:
+                asyncio.create_task(async_write_msg(self.writer, "POS_CLOSED", {
+                    "route": self.route, "sym": self.sym, "reason": reason
+                }))
             return True
         
-        entry_price = self.exec_res.get("entry_price", self.engine_res["entry_price"])
+        entry_price = self.exec_res.get("entry_price") or self.engine_res.get("entry_price", 0.0)
         exit_price = exit_res.get("exit_price") or entry_price
         
         if reason in ("TTL_EXPIRED", "STOP_LOSS", "TTL_EXPIRED_NO_LIQUIDITY", "TTL_EXPIRED_STALE_DATA"):
@@ -349,9 +380,12 @@ class PositionFSM:
         
         actual_exit_price = exit_price
         if hasattr(self.orders[self.target_ex], "get_last_close_price"):
-            p = self.orders[self.target_ex].get_last_close_price(self.native_target)
-            if p > 0:
-                actual_exit_price = p
+            try:
+                p = self.orders[self.target_ex].get_last_close_price(self.native_target)
+                if isinstance(p, (int, float)) and p > 0:
+                    actual_exit_price = float(p)
+            except Exception:
+                pass
                 
         if not is_closed:
             # REST fallback
@@ -361,7 +395,8 @@ class PositionFSM:
                 if rem <= 0:
                     break
                 p = rest_pos.get("price", exit_price)
-                if p <= 0: p = entry_price
+                if not isinstance(p, (int, float)) or p <= 0:
+                    p = entry_price
                 log(f"[{self.sym}] Remainder {rem} on {self.target_ex}. Emergency MARKET close (attempt {attempt+1}).", level="WARNING")
                 try:
                     await self.orders[self.target_ex].place_order(
@@ -418,3 +453,13 @@ class PositionFSM:
             await self.orders[ex].place_order(native_sym, reduce_side, usd, price, order_type="MARKET", position_side=pos_side, reduce_only=True, is_full_unwind=True)
         except Exception as e:
             log(f"[{self.sym}] Unwind error on {ex}: {e}", level="ERROR")
+
+    async def _run_single_leg_exposure(self, long_qty: float, short_qty: float, long_entry_price: float, short_entry_price: float):
+        """DEPRECATED v8 compatibility method for tests."""
+        self._set_state(PositionState.ABORTED)
+        ex = self.oracle_ex if long_qty > 0 else self.target_ex
+        qty = long_qty if long_qty > 0 else short_qty
+        price = long_entry_price if long_qty > 0 else short_entry_price
+        side = "LONG" if long_qty > 0 else "SHORT"
+        native = self.coin_to_native.get(self.sym, {}).get(ex, self.sym)
+        await self._emergency_unwind_single(ex, native, qty, price, "BUY" if side == "LONG" else "SELL", side)

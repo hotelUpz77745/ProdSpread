@@ -15,16 +15,17 @@ class TradingEngine:
         self.cfg = cfg
         self.exchanges = exchanges
         
-        signal_cfg = self.cfg["trading_rules"]["entry"]["signal_filters"]
-        self.spread_entry = float(signal_cfg["spread_entry"])
-        self.spread_entry_max = float(signal_cfg["spread_entry_max"])
-        self.min_top_depth_usd = float(signal_cfg["min_top_depth_usd"])
+        entry_rules = self.cfg.get("trading_rules", {}).get("entry", {})
+        signal_cfg = entry_rules.get("signal_filters", {})
+        self.spread_entry = float(signal_cfg.get("spread_entry", 0.008))
+        self.spread_entry_max = float(signal_cfg.get("spread_entry_max", 0.025))
+        self.min_top_depth_usd = float(signal_cfg.get("min_top_depth_usd", 50.0))
         
         # v9: exchange roles
         self.exchange_roles = self.cfg.get("exchange_roles", {})
         
         # v9: target exit params
-        target_exit_cfg = self.cfg["trading_rules"]["exit"].get("target_exit", {})
+        target_exit_cfg = self.cfg.get("trading_rules", {}).get("exit", {}).get("target_exit", {})
         
         # v9: stop loss can be null
         stop_loss_val = target_exit_cfg.get("stop_loss_pct")
@@ -34,18 +35,18 @@ class TradingEngine:
         self.decay_map = target_exit_cfg.get("decay_map", [])
         
         # Backward compatibility for old configs
-        synth_cfg = signal_cfg["synthetic_exit"]
-        self.check_synthetic_exit = bool(synth_cfg["enabled"])
-        self.check_synthetic_slippage = bool(synth_cfg["check_slippage"])
-        self.max_slippage_ratio = float(synth_cfg["max_slippage_ratio"])
-        self.hard_max_slippage = float(synth_cfg["hard_max_slippage"])
+        synth_cfg = signal_cfg.get("synthetic_exit", {})
+        self.check_synthetic_exit = bool(synth_cfg.get("enabled", False))
+        self.check_synthetic_slippage = bool(synth_cfg.get("check_slippage", False))
+        self.max_slippage_ratio = float(synth_cfg.get("max_slippage_ratio", 0.5))
+        self.hard_max_slippage = float(synth_cfg.get("hard_max_slippage", 0.008))
         
-        obi_cfg = signal_cfg["orderbook_imbalance"]
-        self.check_obi_filter = bool(obi_cfg["enabled"])
-        self.max_adverse_imbalance = float(obi_cfg["max_adverse_imbalance"])
-        self.obi_levels = int(obi_cfg["depth_levels"])
+        obi_cfg = signal_cfg.get("orderbook_imbalance", {})
+        self.check_obi_filter = bool(obi_cfg.get("enabled", False))
+        self.max_adverse_imbalance = float(obi_cfg.get("max_adverse_imbalance", 0.55))
+        self.obi_levels = int(obi_cfg.get("depth_levels", 5))
         
-        self.trading_risks = self.cfg["trading_risks"]
+        self.trading_risks = self.cfg.get("trading_risks", {})
 
     def _get_vol_discount_entry(self, exchange_name: str) -> float:
         return float(self.trading_risks[exchange_name.lower()]["volatility_discount_entry"])
@@ -95,14 +96,28 @@ class TradingEngine:
         target_mid = (target_vwap_bid + target_vwap_ask) / 2.0
         target_fee = self._get_fee(target_ex)
         
-        # Спред: Оракул vs Мишень
-        # Положительный = Оракул дороже Мишени (Мишень отстаёт вверх → LONG на Мишени)
-        # Отрицательный = Оракул дешевле Мишени (Мишень отстаёт вниз → SHORT на Мишени)
-        raw_spread = (oracle_mid - target_mid) / oracle_mid
-        abs_spread = abs(raw_spread)
+        # Реальнее и точнее: расчет спреда от исполнимой цены Target (с учетом локального bid/ask спреда)
+        # Если Оракул выше аска Мишени -> Мишень отстает вверх -> LONG на Мишени
+        # Если Оракул ниже бида Мишени -> Мишень отстает вниз -> SHORT на Мишени
+        long_raw_spread = (oracle_mid - target_vwap_ask) / oracle_mid
+        short_raw_spread = (target_vwap_bid - oracle_mid) / oracle_mid
         
-        # Чистый спред = абсолютный спред - комиссия за вход + выход (2x taker_fee)
-        net_spread = abs_spread - (target_fee * 2.0)
+        if long_raw_spread >= short_raw_spread and long_raw_spread > 0:
+            side = "LONG"
+            entry_price = target_vwap_ask
+            raw_spread = long_raw_spread
+        elif short_raw_spread > 0:
+            side = "SHORT"
+            entry_price = target_vwap_bid
+            raw_spread = short_raw_spread
+        else:
+            # Спред отрицательный (нет арбитражной возможности)
+            raw_spread = (oracle_mid - target_mid) / oracle_mid
+            side = "LONG" if raw_spread >= 0 else "SHORT"
+            entry_price = target_vwap_ask if side == "LONG" else target_vwap_bid
+        
+        # Чистый спред = расчетный спред - комиссия за вход + выход (2x taker_fee)
+        net_spread = raw_spread - (target_fee * 2.0)
         
         if net_spread < self.spread_entry:
             return False, {
@@ -114,16 +129,6 @@ class TradingEngine:
             return False, {
                 "reason": f"HIGH_SPREAD (Net: {net_spread*100:.3f}% > Max: {self.spread_entry_max*100:.3f}%)"
             }
-        
-        # Определяем сторону
-        if raw_spread > 0:
-            # Оракул выше → Мишень отстаёт вверх → LONG на Мишени
-            side = "LONG"
-            entry_price = target_vwap_ask   # покупаем по ask
-        else:
-            # Оракул ниже → Мишень отстаёт вниз → SHORT на Мишени
-            side = "SHORT"
-            entry_price = target_vwap_bid   # продаём по bid
         
         qty = size_usd / entry_price
         
@@ -246,6 +251,8 @@ class TradingEngine:
         m = decay_map if decay_map is not None else self.decay_map
         if not m:
             return -999.0, 0
+        if actual_net_spread_entry is None:
+            actual_net_spread_entry = 0.0
         if "target_spread" in m[0]:
             target = float(m[0]["target_spread"])
             idx = int(m[0]["step"])

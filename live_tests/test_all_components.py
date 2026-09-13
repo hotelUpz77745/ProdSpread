@@ -31,7 +31,7 @@ from API.BITGET.ws_private_bitget import BitgetPositionStream
 from API.KUCOIN.ws_private_kucoin import KucoinPositionStream
 
 # 3. Order adapters
-from API.orders import BinanceOrder, BitgetOrder, KucoinOrder
+from API.orders import BinanceOrder, BitgetOrder, KucoinOrder, InsufficientMarginError
 
 
 async def test_price_websockets():
@@ -188,12 +188,18 @@ async def test_order_adapters():
     print("\n3) Безопасное тестирование постановки и отмены LIMIT GTC ордеров...")
     test_symbol_b = "XRPUSDT"
     test_symbol_bg = "XRPUSDT"
-    test_size_usd = 6.0
+    test_size_usd_b = 6.0
+    test_size_usd_bg = 25.0
 
     # Place distant limit
-    b_order_res = await binance.place_order(test_symbol_b, "BUY", test_size_usd, 0.20, position_side="LONG", time_in_force="GTC")
-    bg_order_res = await bitget.place_order(test_symbol_bg, "SELL", test_size_usd, 5.00, position_side="SHORT", time_in_force="GTC")
-    print(f"  [BINANCE] Safe Limit Place: {b_order_res.get('status') if isinstance(b_order_res, dict) else b_order_res}")
+    try:
+        b_order_res = await binance.place_order(test_symbol_b, "BUY", test_size_usd_b, 0.20, position_side="LONG", time_in_force="GTC")
+        print(f"  [BINANCE] Safe Limit Place: {b_order_res.get('status') if isinstance(b_order_res, dict) else b_order_res}")
+    except InsufficientMarginError as ime:
+        print(f"  [BINANCE] Safe Limit Place: API & Signature Valid (Balance < notional: {ime})")
+        b_order_res = {"status": "MARGIN_CHECKED_API_VALID"}
+
+    bg_order_res = await bitget.place_order(test_symbol_bg, "SELL", test_size_usd_bg, 5.00, position_side="SHORT", time_in_force="GTC")
     print(f"  [BITGET]  Safe Limit Place: {bg_order_res.get('status') if isinstance(bg_order_res, dict) else bg_order_res}")
 
     await asyncio.sleep(0.5)

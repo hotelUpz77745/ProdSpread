@@ -35,6 +35,18 @@ class TestTradingEngine(unittest.TestCase):
                 "exit": {
                     "hedged_exit": {
                         "normal_decay": []
+                    },
+                    "target_exit": {
+                        "stop_loss_pct": 0.01,
+                        "ttl_sec": 60.0,
+                        "decay_map": [
+                            {"step": 0, "after_sec": 0, "min_profit_ratio": 0.8},
+                            {"step": 1, "after_sec": 5, "min_profit_ratio": 0.5},
+                            {"step": 2, "after_sec": 15, "min_profit_ratio": 0.25},
+                            {"step": 3, "after_sec": 30, "min_profit_ratio": 0.0},
+                            {"step": 4, "after_sec": 45, "min_profit_ratio": -0.2},
+                            {"step": 5, "after_sec": 60, "min_profit_ratio": -999.0}
+                        ]
                     }
                 }
             },
@@ -94,6 +106,96 @@ class TestTradingEngine(unittest.TestCase):
         passed, res = self.engine.evaluate_entry(book_long, book_short, [0, 1], 25.0)
         self.assertFalse(passed)
         self.assertIn("HIGH_SPREAD", res["reason"])
+
+    def test_evaluate_entry_v9_long(self):
+        # Oracle mid is 50100 (bids: 50095, asks: 50105)
+        oracle_book = {
+            "bids": [[50095.0, 5.0]],
+            "asks": [[50105.0, 5.0]]
+        }
+        # Target is lagging behind at 50000 (bids: 49995, asks: 50005)
+        target_book = {
+            "bids": [[49995.0, 5.0]],
+            "asks": [[50005.0, 5.0]]
+        }
+        passed, res = self.engine.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "BITGET", 1000.0)
+        self.assertTrue(passed)
+        self.assertEqual(res["side"], "LONG")
+        self.assertEqual(res["target_ex"], "BITGET")
+        self.assertEqual(res["oracle_ex"], "BINANCE")
+        self.assertGreater(res["net_spread"], 0.001)
+
+    def test_evaluate_entry_v9_short(self):
+        # Oracle mid is 49900
+        oracle_book = {
+            "bids": [[49895.0, 5.0]],
+            "asks": [[49905.0, 5.0]]
+        }
+        # Target is lagging at 50050
+        target_book = {
+            "bids": [[50045.0, 5.0]],
+            "asks": [[50055.0, 5.0]]
+        }
+        passed, res = self.engine.evaluate_entry_v9(oracle_book, target_book, "BINANCE", "BITGET", 1000.0)
+        self.assertTrue(passed)
+        self.assertEqual(res["side"], "SHORT")
+        self.assertEqual(res["target_ex"], "BITGET")
+        self.assertGreater(res["net_spread"], 0.001)
+
+    def test_evaluate_exit_v9_take_profit(self):
+        # Long entered at 50000. Now target bid has risen to 50100 (+0.2%)
+        target_book = {
+            "bids": [[50100.0, 5.0]],
+            "asks": [[50105.0, 5.0]]
+        }
+        should_exit, res = self.engine.evaluate_exit_v9(
+            target_book=target_book,
+            target_ex="BITGET",
+            entry_price=50000.0,
+            qty=0.02,
+            side="LONG",
+            duration_sec=1.0,
+            actual_net_spread_entry=0.001
+        )
+        self.assertTrue(should_exit)
+        self.assertEqual(res["reason"], "TAKE_PROFIT")
+        self.assertGreater(res["net_pnl_pct"], 0.001)
+
+    def test_evaluate_exit_v9_stop_loss(self):
+        # Long entered at 50000. Now target bid has crashed to 49000 (-2%)
+        target_book = {
+            "bids": [[49000.0, 5.0]],
+            "asks": [[49010.0, 5.0]]
+        }
+        should_exit, res = self.engine.evaluate_exit_v9(
+            target_book=target_book,
+            target_ex="BITGET",
+            entry_price=50000.0,
+            qty=0.02,
+            side="LONG",
+            duration_sec=1.0,
+            actual_net_spread_entry=0.001
+        )
+        self.assertTrue(should_exit)
+        self.assertEqual(res["reason"], "STOP_LOSS")
+        self.assertLess(res["net_pnl_pct"], -0.01)
+
+    def test_evaluate_exit_v9_ttl(self):
+        target_book = {
+            "bids": [[50000.0, 5.0]],
+            "asks": [[50005.0, 5.0]]
+        }
+        should_exit, res = self.engine.evaluate_exit_v9(
+            target_book=target_book,
+            target_ex="BITGET",
+            entry_price=50000.0,
+            qty=0.02,
+            side="LONG",
+            duration_sec=65.0,  # ttl is 60.0 in cfg
+            actual_net_spread_entry=0.001
+        )
+        self.assertTrue(should_exit)
+        self.assertEqual(res["reason"], "TTL_EXPIRED")
 
 if __name__ == '__main__':
     unittest.main()

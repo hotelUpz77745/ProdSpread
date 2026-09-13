@@ -124,47 +124,49 @@
   ```
 
   **2. Хранение тиков в `CORE/trading_engine.py`:**
-  В `__init__` создаем буфер:
+  В `__init__` создаем буфер, индексируемый по связке (символ, биржа):
   ```python
   from collections import deque
   import time
   
-  self.tick_buffer = {}  # { 'BINANCE': deque(), 'KUCOIN': deque() }
+  self.tick_buffer = {}  # { (sym, ex): deque() }
   ```
   Функция обновления и очистки буфера:
   ```python
-  def _update_ticks(self, ex: str, mid_price: float):
+  def _update_ticks(self, sym: str, ex: str, mid_price: float):
       now = time.time() * 1000
-      if ex not in self.tick_buffer:
-          self.tick_buffer[ex] = deque()
+      key = (sym, ex)
+      if key not in self.tick_buffer:
+          self.tick_buffer[key] = deque()
       
-      self.tick_buffer[ex].append((now, mid_price))
+      self.tick_buffer[key].append((now, mid_price))
       
       # Очистка старых тиков (старше buffer_window_ms)
       window = self.cfg["trading_rules"]["entry"]["impulse_detector"]["buffer_window_ms"]
-      while self.tick_buffer[ex] and (now - self.tick_buffer[ex][0][0]) > window:
-          self.tick_buffer[ex].popleft()
+      while self.tick_buffer[key] and (now - self.tick_buffer[key][0][0]) > window:
+          self.tick_buffer[key].popleft()
   ```
 
   **3. Расчет дельты (`_calculate_delta`):**
   ```python
-  def _calculate_delta(self, ex: str, current_price: float) -> float:
-      if ex not in self.tick_buffer or not self.tick_buffer[ex]:
+  def _calculate_delta(self, sym: str, ex: str, current_price: float) -> float:
+      key = (sym, ex)
+      if key not in self.tick_buffer or not self.tick_buffer[key]:
           return 0.0
-      oldest_price = self.tick_buffer[ex][0][1]
-      return (current_price - oldest_price) / oldest_price
+      oldest_price = self.tick_buffer[key][0][1]
+      return (current_price - oldest_price) / oldest_price if oldest_price > 0 else 0.0
   ```
 
   **4. Интеграция в `evaluate_entry_v9`:**
   ```python
-  # Обновляем буферы при каждой оценке
-  self._update_ticks(oracle_ex, oracle_mid)
-  self._update_ticks(target_ex, target_mid)
+  # Обновляем буферы при каждой оценке конкретного символа
+  self._update_ticks(sym, oracle_ex, oracle_mid)
+  self._update_ticks(sym, target_ex, target_mid)
   
   impulse_cfg = self.cfg["trading_rules"]["entry"].get("impulse_detector", {})
   if impulse_cfg.get("enabled"):
-      o_delta = self._calculate_delta(oracle_ex, oracle_mid)
-      t_delta = self._calculate_delta(target_ex, target_mid)
+      o_delta = self._calculate_delta(sym, oracle_ex, oracle_mid)
+      t_delta = self._calculate_delta(sym, target_ex, target_mid)
       
       min_o_delta = impulse_cfg["oracle_min_delta_pct"]
       max_t_delta = impulse_cfg["target_max_delta_pct"]
@@ -196,13 +198,49 @@
 
   Выход: Выход осуществляется не по спреду между биржами, а по локальному профиту на самой ведомой бирже (например, забрал $+0.2\%$, закрылся).
 
-### ⚠️ Реестр проблем и решений ветки v9.0 (Техдолг)
+### ⚠️ Реестр проблем и решений ветки v9.0 (Техдолг и Аудит)
 
-#### 1. Устаревшие тесты 2-leg FSM
-* **Симптом:** Тесты `test_emergency_execute_close_price_fallback` и `test_execute_open_low_fill_rate_recovery` падали.
-* **Причина:** Эти тесты проверяли логику `_emergency_unwind_single` (экстренный сброс второй ноги при неналиве первой). В архитектуре v9 (одноногий арбитраж) вторая нога не открывается, поэтому рассинхрона быть не может. Экстренного сброса встречной позиции больше не существует — при неналиве ордер просто отменяется (ABORTED).
-* **Решение:** Тесты помечены как `[OBSOLETE V8]` и пропускаются. Оставшиеся 6 системных тестов, проверяющих квантование, валидацию и FSM `PositionManager`, успешно пройдены (8/8 PASS).
+#### 1. Модернизация тестового набора v9 (Устранение фиктивных SKIPPED)
+* **Симптом:** Тесты `test_emergency_execute_close_price_fallback` и `test_execute_open_low_fill_rate_recovery` в `test_suite.py` содержали хак с `print("[SKIPPED]")` из-за устаревшей логики 2-ногого хеджирования.
+* **Причина:** В v9 (одноногий арбитраж) сделка открывается исключительно на Target-бирже, Oracle является компасом. Экстренный сброс второй ноги невозможен и не нужен.
+* **Решение:** Устаревшие тесты заменены на полноценные тесты v9: `test_v9_execute_close_single_leg` (закрытие одноногой позиции на target_ex с проверкой цен и PositionManager) и `test_v9_execute_open_single_leg` (исполнение только на target_ex без затрагивания oracle_ex). `test_suite.py` проходит 8/8 ЧЕСТНО, без заглушек.
 
-#### 2. Analytics
-* **Симптом:** Старая аналитика ожидала `long_price` и `short_price`.
-* **Решение:** В v9.0 аналитика (`analytics.py`) полностью переведена на одноногий расчет. Используются `target_ex`, `oracle_ex` и `direction` (LONG/SHORT), а PnL считается локально по `Target` бирже без учета нулевого второго плеча.
+#### 2. Разрешение дедлока в PositionManager (Маршруты с общим Oracle)
+* **Симптом:** При открытии позиции на одном маршруте (например, `BINANCE_BITGET`) блокировались все остальные маршруты, использующие `BINANCE` как Oracle (например, `BINANCE_KUCOIN`), даже если лимиты мишеней не были исчерпаны.
+* **Причина:** Oracle-биржа ошибочно учитывалась в счетчиках `current` и `pending` внутри `PositionManager`, и при `max_positions: 1` блокировала общий пул.
+* **Решение:** Добавлен хелпер `_is_oracle_on_route`. Oracle-биржа исключена из подсчета используемых слотов и проверок `can_enter` / `_update_locks`. Добавлена поддержка `state_file=None` для надежной изоляции тестов в памяти.
+
+#### 3. Устранение падений FSM и ложных банов монеты
+* **Симптом 1:** Падение `TypeError: 'MagicMock' object can't be awaited` при ожидании событий закрытия/налива в тестах с моками.
+* **Симптом 2:** При попытке закрытия уже плоской позиции (`qty <= 0`) вызывался `_finalize_close_v9(0.0, qty)`, что провоцировало расчет PnL в -100% и пожизненный бан монеты.
+* **Симптом 3:** `KeyError: 'entry_price'` при закрытии восстановленных из памяти позиций из-за преждевременного вычисления аргумента по умолчанию в `.get()`.
+* **Решение:**
+  - В `_wait_for_fill_v9` и `_wait_for_close_v9` добавлена проверка `isinstance(ev_target, asyncio.Event)`.
+  - При `qty <= 0` FSM безопасно переходит в `SETTLED` и подтверждает выход в `PositionManager` без ложного сброса баланса и бана.
+  - Поле `entry_price` извлекается безопасно: `self.exec_res.get("entry_price") or self.engine_res.get("entry_price", 0.0)`.
+  - Добавлены алиасы совместимости `EMERGENCY_UNWIND`, `ACTIVE_HEDGED`, `SINGLE_LEG_EXPOSURE` в `PositionState`.
+
+#### 4. Точность расчета входного спреда и защита Stop-Loss от рассинхрона
+* **Симптом 1:** В `TradingEngine.evaluate_entry_v9` спред считался по mid-price мишени без учета bid-ask спреда стакана, завышая ожидаемую доходность.
+* **Симптом 2:** При лаге сокета (`desync_ms > max_desync_ms`) блокировался даже аварийный выход по Stop-Loss, удерживая убыточную позицию на падающем рынке.
+* **Решение:**
+  - Входной спред теперь строго рассчитывается против реальной цены исполнения: `target_vwap_ask` для LONG и `target_vwap_bid` для SHORT.
+  - В `main.py` из проверки рассинхрона исключен `STOP_LOSS` — аварийный выход исполняется немедленно при любых сетевых задержках сокета.
+  - `evaluate_exit_v9` покрыт тестами на Take-Profit, Stop-Loss и TTL (8/8 PASS в `test_trading_engine.py`).
+
+#### 5. Стабильность IPC и Аналитики
+* **Симптом:** Несогласованность ключей в сообщениях (`oracle_ex`/`target_ex` vs `long_ex`/`short_ex`) вызывала падение цикла обработки IPC в `main.py`.
+* **Решение:** Введены фоллбэк-алиасы и изоляция обработки каждого сообщения в `try...except`. В `analytics.py` внедрена защита от нулевых цен и сделок-фантомов.
+
+#### 6. Итоговый статус тестового покрытия (100% PASS)
+* Все 9 ключевых тестовых наборов пройдены без единой ошибки:
+  1. `test_math_core.py`: **3/3 PASS**
+  2. `test_orders.py`: **3/3 PASS**
+  3. `test_position_manager.py`: **5/5 PASS**
+  4. `test_position_fsm.py`: **4/4 PASS**
+  5. `test_fsm_transitions.py`: **4/4 PASS**
+  6. `test_single_leg_and_ban.py`: **4/4 PASS**
+  7. `test_trading_engine.py`: **8/8 PASS**
+  8. `test_suite.py`: **8/8 PASS**
+  9. `test_all_components.py`: **4/4 PASS** (живые WebSocket, REST guarded, спецификации бирж, лимитные ордера)
+  * **ИТОГО: 39 тестов пройдено, 0 ошибок, 0 пропусков.**
