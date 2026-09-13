@@ -206,10 +206,10 @@
                     {
                         "step": 5,
                         "after_sec": 60,
-                        "min_profit_ratio": null
+                        "min_profit_ratio": -999.0
                     }
                 ],
-                "decay_map_desc": "Карта снижения порога прибыли во времени. Шаг с min_profit_ratio: null (after_sec: 60) задает TTL дедлайн для принудительного MARKET выхода."
+                "decay_map_desc": "Карта снижения порога прибыли во времени. Шаг с min_profit_ratio: -999.0 (after_sec: 60) задает безусловный выход по рынку (TTL дедлайн)."
             },
             "max_desync_ms": {
                 "BINANCE_KUCOIN": 350,
