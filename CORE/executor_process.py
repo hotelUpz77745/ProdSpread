@@ -97,8 +97,8 @@ class ExecutorProcess:
             bitget_passphrase=os.environ.get("BITGET_API_PASSPHRASE", "")
         )
         
-        entry_cfg = self.cfg.get("trading_rules", {}).get("entry", {})
-        self.order_execution_type = entry_cfg.get("order_execution_type", "TARGET_LIMIT_IOC").upper()
+        entry_cfg = self.cfg["trading_rules"]["entry"]
+        self.order_execution_type = entry_cfg["order_execution_type"].upper()
         
         self.pm = None
         self.analytics_map = {}
@@ -143,7 +143,7 @@ class ExecutorProcess:
             
         if "Loss" in reason or "loss" in reason:
             if duration_sec is not None:
-                raw_max = ban_cfg.get("max_consecutive_losses")
+                raw_max = ban_cfg["max_consecutive_losses"] if "max_consecutive_losses" in ban_cfg else None
                 if raw_max is not None and int(raw_max) > 0:
                     max_consec = int(raw_max)
                     l_count = self.consecutive_loss_counts.get(sym, 0) + 1
@@ -319,15 +319,15 @@ class ExecutorProcess:
             update_total_balance(self.cfg, extra_pnl=net_usd)
 
             if net_usd < 0:
-                ban_rules = self.cfg.get("trading_rules", {}).get("ban_rules", {})
-                raw_perm_pct = ban_rules.get("perm_ban_loss_pct")
+                ban_rules = self.cfg["trading_rules"]["ban_rules"]
+                raw_perm_pct = ban_rules["perm_ban_loss_pct"] if "perm_ban_loss_pct" in ban_rules else None
                 perm_ban_pct = float(raw_perm_pct) if raw_perm_pct is not None and float(raw_perm_pct) > 0 else None
                 if perm_ban_pct is not None and abs(net_yield) >= perm_ban_pct:
                     log(f"[{sym}] Severe loss trade ({net_yield*100:+.2f}% <= -{perm_ban_pct*100:.2f}%). PERMANENT BAN!", level="ERROR")
                     self.ban_coin(sym, reason=f"Severe loss trade ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.2f}%)", duration_sec=None)
                 else:
-                    ban_q = ban_rules.get("quarantine_sec", {})
-                    q_loss = float(ban_q.get("loss_trade", 300))
+                    ban_q = ban_rules["quarantine_sec"]
+                    q_loss = float(ban_q["loss_trade"])
                     self.ban_coin(sym, reason=f"Loss trade ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.3f}%)", duration_sec=q_loss)
             else:
                 self.consecutive_loss_counts.pop(sym, None)

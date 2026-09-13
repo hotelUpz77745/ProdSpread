@@ -1,3 +1,7 @@
+# ============================================================
+# FILE: live_tests/test_live_xrp_3ex.py
+# ROLE: Live verification test for XRP across Binance, KuCoin, and Bitget.
+# ============================================================
 import asyncio
 import json
 import os

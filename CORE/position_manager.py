@@ -80,8 +80,10 @@ class PositionManager:
             print(f"Error saving positions state: {e}")
 
     def _is_oracle_on_route(self, route: str, exchange: str) -> bool:
-        roles = self.cfg.get("exchange_roles", {}).get(route, {})
-        return roles.get("oracle", "").upper() == exchange.upper()
+        if "exchange_roles" in self.cfg and route in self.cfg["exchange_roles"]:
+            roles = self.cfg["exchange_roles"][route]
+            return roles["oracle"].upper() == exchange.upper()
+        return False
 
     def _update_locks(self):
         """

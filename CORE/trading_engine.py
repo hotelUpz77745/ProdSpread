@@ -15,30 +15,30 @@ class TradingEngine:
         self.cfg = cfg
         self.exchanges = exchanges
         
-        entry_rules = self.cfg.get("trading_rules", {}).get("entry", {})
-        signal_cfg = entry_rules.get("signal_filters", {})
+        entry_rules = self.cfg["trading_rules"]["entry"]
+        signal_cfg = entry_rules["signal_filters"]
         
         # Support [min, max] list format, separate spread_entry / spread_entry_max, and null values
-        spread_val = signal_cfg.get("spread_entry")
+        spread_val = signal_cfg["spread_entry"]
         if isinstance(spread_val, (list, tuple)):
             self.spread_entry_min = float(spread_val[0]) if len(spread_val) > 0 and spread_val[0] is not None else None
             self.spread_entry_max = float(spread_val[1]) if len(spread_val) > 1 and spread_val[1] is not None else None
         else:
-            self.spread_entry_min = float(spread_val) if spread_val is not None else 0.008
-            max_val = signal_cfg.get("spread_entry_max")
+            self.spread_entry_min = float(spread_val) if spread_val is not None else None
+            max_val = signal_cfg["spread_entry_max"] if "spread_entry_max" in signal_cfg else None
             self.spread_entry_max = float(max_val) if max_val is not None else None
             
         self.spread_entry = self.spread_entry_min if self.spread_entry_min is not None else 0.0
-        self.min_top_depth_usd = float(signal_cfg.get("min_top_depth_usd", 50.0))
+        self.min_top_depth_usd = float(signal_cfg["min_top_depth_usd"])
         
         # v9: exchange roles
-        self.exchange_roles = self.cfg.get("exchange_roles", {})
+        self.exchange_roles = self.cfg["exchange_roles"] if "exchange_roles" in self.cfg else {}
         
         # v9: target exit params (TTL is derived directly from decay_map)
-        target_exit_cfg = self.cfg.get("trading_rules", {}).get("exit", {}).get("target_exit", {})
+        target_exit_cfg = self.cfg["trading_rules"]["exit"]["target_exit"]
         
         # v9: stop loss can be null / <= 0 (disabled)
-        stop_loss_val = target_exit_cfg.get("stop_loss_pct")
+        stop_loss_val = target_exit_cfg["stop_loss_pct"] if "stop_loss_pct" in target_exit_cfg else None
         if stop_loss_val is not None and not isinstance(stop_loss_val, bool):
             try:
                 val = float(stop_loss_val)
@@ -48,36 +48,47 @@ class TradingEngine:
         else:
             self.stop_loss_pct = None
         
-        self.decay_map = target_exit_cfg.get("decay_map", [])
+        self.decay_map = target_exit_cfg["decay_map"]
         derived_ttl = None
         for rule in self.decay_map:
-            ratio = rule.get("min_profit_ratio")
-            spread = rule.get("target_spread")
+            ratio = rule["min_profit_ratio"] if "min_profit_ratio" in rule else None
+            spread = rule["target_spread"] if "target_spread" in rule else None
             if (ratio is None and spread is None) or (isinstance(ratio, (int, float)) and ratio <= -900.0):
-                derived_ttl = float(rule.get("after_sec", 60.0))
+                derived_ttl = float(rule["after_sec"])
                 break
         if derived_ttl is not None:
             self.ttl_sec = derived_ttl
         elif "ttl_sec" in target_exit_cfg and target_exit_cfg["ttl_sec"] is not None:
             self.ttl_sec = float(target_exit_cfg["ttl_sec"])
         elif self.decay_map:
-            self.ttl_sec = float(self.decay_map[-1].get("after_sec", 60.0))
+            self.ttl_sec = float(self.decay_map[-1]["after_sec"])
         else:
             self.ttl_sec = 60.0
         
         # Backward compatibility for old configs
-        synth_cfg = signal_cfg.get("synthetic_exit", {})
-        self.check_synthetic_exit = bool(synth_cfg.get("enabled", False))
-        self.check_synthetic_slippage = bool(synth_cfg.get("check_slippage", False))
-        self.max_slippage_ratio = float(synth_cfg.get("max_slippage_ratio", 0.5))
-        self.hard_max_slippage = float(synth_cfg.get("hard_max_slippage", 0.008))
+        if "synthetic_exit" in signal_cfg:
+            synth_cfg = signal_cfg["synthetic_exit"]
+            self.check_synthetic_exit = bool(synth_cfg["enabled"])
+            self.check_synthetic_slippage = bool(synth_cfg["check_slippage"])
+            self.max_slippage_ratio = float(synth_cfg["max_slippage_ratio"])
+            self.hard_max_slippage = float(synth_cfg["hard_max_slippage"])
+        else:
+            self.check_synthetic_exit = False
+            self.check_synthetic_slippage = False
+            self.max_slippage_ratio = 0.5
+            self.hard_max_slippage = 0.008
+            
+        if "orderbook_imbalance" in signal_cfg:
+            obi_cfg = signal_cfg["orderbook_imbalance"]
+            self.check_obi_filter = bool(obi_cfg["enabled"])
+            self.max_adverse_imbalance = float(obi_cfg["max_adverse_imbalance"])
+            self.obi_levels = int(obi_cfg["depth_levels"])
+        else:
+            self.check_obi_filter = False
+            self.max_adverse_imbalance = 0.55
+            self.obi_levels = 5
         
-        obi_cfg = signal_cfg.get("orderbook_imbalance", {})
-        self.check_obi_filter = bool(obi_cfg.get("enabled", False))
-        self.max_adverse_imbalance = float(obi_cfg.get("max_adverse_imbalance", 0.55))
-        self.obi_levels = int(obi_cfg.get("depth_levels", 5))
-        
-        self.trading_risks = self.cfg.get("trading_risks", {})
+        self.trading_risks = self.cfg["trading_risks"]
 
     def _get_vol_discount_entry(self, exchange_name: str) -> float:
         return float(self.trading_risks[exchange_name.lower()]["volatility_discount_entry"])
@@ -285,32 +296,32 @@ class TradingEngine:
         if actual_net_spread_entry is None:
             actual_net_spread_entry = 0.0
         if "target_spread" in m[0]:
-            first_ts = m[0].get("target_spread")
+            first_ts = m[0]["target_spread"] if "target_spread" in m[0] else None
             target = float(first_ts) if first_ts is not None else -999.0
-            idx = int(m[0].get("step", 0))
+            idx = int(m[0]["step"]) if "step" in m[0] else 0
             for rule in m:
                 if duration_sec >= float(rule["after_sec"]):
-                    val = rule.get("target_spread")
+                    val = rule["target_spread"] if "target_spread" in rule else None
                     target = float(val) if val is not None else -999.0
-                    idx = int(rule.get("step", idx))
+                    idx = int(rule["step"]) if "step" in rule else idx
         elif "price_slip" in m[0]:
-            first_ps = m[0].get("price_slip")
+            first_ps = m[0]["price_slip"] if "price_slip" in m[0] else None
             target = float(first_ps) if first_ps is not None else -999.0
-            idx = int(m[0].get("step", 0))
+            idx = int(m[0]["step"]) if "step" in m[0] else 0
             for rule in m:
                 if duration_sec >= float(rule["after_sec"]):
-                    val = rule.get("price_slip")
+                    val = rule["price_slip"] if "price_slip" in rule else None
                     target = float(val) if val is not None else -999.0
-                    idx = int(rule.get("step", idx))
+                    idx = int(rule["step"]) if "step" in rule else idx
         else:
-            first_r = m[0].get("min_profit_ratio")
+            first_r = m[0]["min_profit_ratio"] if "min_profit_ratio" in m[0] else None
             ratio = float(first_r) if first_r is not None else None
-            idx = int(m[0].get("step", 0))
+            idx = int(m[0]["step"]) if "step" in m[0] else 0
             for rule in m:
                 if duration_sec >= float(rule["after_sec"]):
-                    r_val = rule.get("min_profit_ratio")
+                    r_val = rule["min_profit_ratio"] if "min_profit_ratio" in rule else None
                     ratio = float(r_val) if r_val is not None else None
-                    idx = int(rule.get("step", idx))
+                    idx = int(rule["step"]) if "step" in rule else idx
             if ratio is None or (isinstance(ratio, (int, float)) and ratio <= -900.0):
                 target = -999.0
             else:

@@ -21,6 +21,10 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
                         "fill_confirm_timeout_sec": {"BINANCE_BITGET": 0.05},
                         "fill_confirm_poll_interval_sec": 0.0,
                         "entry_api_timeout_sec": 1.0
+                    },
+                    "signal_filters": {
+                        "spread_entry": [0.008, 0.05],
+                        "min_top_depth_usd": 50.0
                     }
                 },
                 "exit": {
@@ -29,7 +33,11 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
                         "ttl_sec": 60.0,
                         "exit_order_type": "LIMIT_IOC",
                         "exit_slip_ratio": 0.001,
-                        "ioc_chase_timeout_sec": 0.2
+                        "ioc_chase_timeout_sec": 0.2,
+                        "decay_map": [
+                            {"step": 0, "after_sec": 0, "min_profit_ratio": 0.8},
+                            {"step": 1, "after_sec": 60, "min_profit_ratio": -999.0}
+                        ]
                     }
                 },
                 "ban_rules": {

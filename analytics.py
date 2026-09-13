@@ -105,9 +105,9 @@ class TradeAnalytics:
         else:
             target_pnl = (target_price_in - target_price_close) / target_price_in
             
-        target_cfg = self.risks_cfg.get(target_ex.lower(), {})
-        default_trade_size = float(target_cfg.get("trade_size_usd", 25.0))
-        taker_fee_rate = float(target_cfg.get("taker_fee", 0.0006))
+        target_cfg = self.risks_cfg[target_ex.lower()]
+        default_trade_size = float(target_cfg["trade_size_usd"])
+        taker_fee_rate = float(target_cfg["taker_fee"])
         
         actual_target_usd = target_executed_usd if target_executed_usd is not None and target_executed_usd > 0 else default_trade_size
         

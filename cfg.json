@@ -180,6 +180,8 @@
                 "ioc_chase_timeout_sec_desc": "Время ожидания WS-подтверждения исполнения LIMIT_IOC (стейт VERIFYING_FILL). При превышении (остаток сброшен биржей) - моментальный фоллбек в MARKET.",
                 "exit_slip_ratio": 0.001,
                 "exit_slip_ratio_desc": "Проскальзывание для выходного LIMIT_IOC ордера (0.001 = 0.1%).",
+                "close_poll_interval_sec": 0.005,
+                "close_poll_interval_sec_desc": "Интервал опроса WS-кэша позиции при закрытии (сек).",
                 "decay_map": [
                     {
                         "step": 0,

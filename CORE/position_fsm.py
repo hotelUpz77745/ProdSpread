@@ -69,35 +69,36 @@ class PositionFSM:
         self.state = PositionState.IDLE
         self.engine = TradingEngine(self.cfg, {0:"BINANCE",1:"KUCOIN",2:"OKX",3:"BITGET"})
         
-        entry_cfg = self.cfg.get("trading_rules", {}).get("entry", {})
-        target_entry_cfg = entry_cfg.get("target_entry_logic") or entry_cfg.get("parallel_entry_logic", {})
-        ban_q = self.cfg.get("trading_rules", {}).get("ban_rules", {}).get("quarantine_sec", {})
+        entry_cfg = self.cfg["trading_rules"]["entry"]
+        target_entry_cfg = entry_cfg["target_entry_logic"] if "target_entry_logic" in entry_cfg else entry_cfg["parallel_entry_logic"]
+        ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
         
-        self.q_entry_error = float(ban_q.get("entry_error", 3600))
-        self.q_zero_fill = float(ban_q.get("zero_fill", 10))
+        self.q_entry_error = float(ban_q["entry_error"])
+        self.q_zero_fill = float(ban_q["zero_fill"])
         
-        target_exit_cfg = self.cfg.get("trading_rules", {}).get("exit", {}).get("target_exit", {})
-        decay_map = target_exit_cfg.get("decay_map", [])
+        target_exit_cfg = self.cfg["trading_rules"]["exit"]["target_exit"]
+        decay_map = target_exit_cfg["decay_map"]
         derived_ttl = None
         for rule in decay_map:
-            ratio = rule.get("min_profit_ratio")
-            spread = rule.get("target_spread")
+            ratio = rule["min_profit_ratio"] if "min_profit_ratio" in rule else None
+            spread = rule["target_spread"] if "target_spread" in rule else None
             if (ratio is None and spread is None) or (isinstance(ratio, (int, float)) and ratio <= -900.0):
-                derived_ttl = float(rule.get("after_sec", 60.0))
+                derived_ttl = float(rule["after_sec"])
                 break
         if derived_ttl is not None:
             self.ttl_sec = derived_ttl
         elif "ttl_sec" in target_exit_cfg and target_exit_cfg["ttl_sec"] is not None:
             self.ttl_sec = float(target_exit_cfg["ttl_sec"])
         elif decay_map:
-            self.ttl_sec = float(decay_map[-1].get("after_sec", 60.0))
+            self.ttl_sec = float(decay_map[-1]["after_sec"])
         else:
             self.ttl_sec = 60.0
         self.exit_order_type = target_exit_cfg["exit_order_type"]
         self.exit_slip_ratio = float(target_exit_cfg["exit_slip_ratio"])
         self.ioc_chase_timeout_sec = float(target_exit_cfg["ioc_chase_timeout_sec"])
+        self.close_poll_interval = float(target_exit_cfg["close_poll_interval_sec"]) if "close_poll_interval_sec" in target_exit_cfg else 0.005
         
-        timeout_cfg = target_entry_cfg.get("fill_confirm_timeout_sec", {})
+        timeout_cfg = target_entry_cfg["fill_confirm_timeout_sec"]
         pair_key1 = f"{self.target_ex}_{self.oracle_ex}".upper()
         pair_key2 = f"{self.oracle_ex}_{self.target_ex}".upper()
         if isinstance(timeout_cfg, dict):
@@ -106,32 +107,36 @@ class PositionFSM:
             elif pair_key2 in timeout_cfg:
                 self.fill_confirm_timeout = float(timeout_cfg[pair_key2])
             else:
-                self.fill_confirm_timeout = 0.5  # default
+                self.fill_confirm_timeout = 0.5
         else:
-            self.fill_confirm_timeout = float(timeout_cfg) if timeout_cfg else 0.5
+            self.fill_confirm_timeout = float(timeout_cfg)
         
-        self.fill_confirm_poll_interval = float(target_entry_cfg.get("fill_confirm_poll_interval_sec", 0.0))
-        self.entry_api_timeout = float(target_entry_cfg.get("entry_api_timeout_sec", 5.0))
+        self.fill_confirm_poll_interval = float(target_entry_cfg["fill_confirm_poll_interval_sec"])
+        self.entry_api_timeout = float(target_entry_cfg["entry_api_timeout_sec"])
         
-        unwind_cfg = self.cfg.get("trading_rules", {}).get("emergency_unwind", {})
-        self.unwind_max_attempts = int(unwind_cfg.get("max_attempts", 2))
-        self.ws_verify_timeout = float(unwind_cfg.get("ws_verify_timeout_sec", 0.3))
-        self.unwind_retry_pause = float(unwind_cfg.get("retry_pause_sec", 0.05))
+        unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
+        self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
+        self.ws_verify_timeout = float(unwind_cfg["ws_verify_timeout_sec"])
+        self.unwind_retry_pause = float(unwind_cfg["retry_pause_sec"])
         
-        exit_cfg = self.cfg.get("trading_rules", {}).get("exit", {})
+        exit_cfg = self.cfg["trading_rules"]["exit"]
         close_timeout_cfg = (
-            exit_cfg.get("market_close_confirm_timeout_sec")
-            or exit_cfg.get("close_confirm_timeout_sec", {})
+            exit_cfg["market_close_confirm_timeout_sec"]
+            if "market_close_confirm_timeout_sec" in exit_cfg
+            else exit_cfg["close_confirm_timeout_sec"]
         )
         if isinstance(close_timeout_cfg, dict):
-            self.close_confirm_timeout = float(close_timeout_cfg.get(pair_key1) or close_timeout_cfg.get(pair_key2) or 1.8)
-        elif close_timeout_cfg:
-            self.close_confirm_timeout = float(close_timeout_cfg)
+            if pair_key1 in close_timeout_cfg:
+                self.close_confirm_timeout = float(close_timeout_cfg[pair_key1])
+            elif pair_key2 in close_timeout_cfg:
+                self.close_confirm_timeout = float(close_timeout_cfg[pair_key2])
+            else:
+                self.close_confirm_timeout = 1.8
         else:
-            self.close_confirm_timeout = 1.8
+            self.close_confirm_timeout = float(close_timeout_cfg)
         
-        ban_cfg = self.cfg.get("trading_rules", {}).get("ban_rules", {})
-        self.perm_ban_loss_pct = float(ban_cfg.get("perm_ban_loss_pct", 0.0075))
+        ban_cfg = self.cfg["trading_rules"]["ban_rules"]
+        self.perm_ban_loss_pct = float(ban_cfg["perm_ban_loss_pct"])
         
         self.target_pos: dict = {"size": 0.0, "price": 0.0}
         self.open_time: float = 0.0
@@ -162,7 +167,7 @@ class PositionFSM:
             if self.fill_confirm_poll_interval > 0:
                 await asyncio.sleep(self.fill_confirm_poll_interval)
             else:
-                await asyncio.sleep(0.005)
+                await asyncio.sleep(self.close_poll_interval)
                 
         log(f"[{self.sym}] v9 Fill confirmation timeout on {self.target_ex}.", level="WARNING")
         
@@ -259,7 +264,7 @@ class PositionFSM:
         self.open_time = time.time()
         self.open_time_ms = int(self.open_time * 1000)
         
-        target_fee = float(self.cfg.get("trading_risks", {}).get(self.target_ex.lower(), {}).get("taker_fee", 0.0006))
+        target_fee = float(self.cfg["trading_risks"][self.target_ex.lower()]["taker_fee"])
         
         self.exec_res = {
             "engine_res": self.engine_res,
@@ -327,7 +332,7 @@ class PositionFSM:
             pos = self.orders[self.target_ex].get_executed_position(self.native_target, self.side)
             if pos and pos.get("size", 0.0) == 0.0:
                 return True
-            await asyncio.sleep(0.005)
+            await asyncio.sleep(self.close_poll_interval)
             
         return False
 
