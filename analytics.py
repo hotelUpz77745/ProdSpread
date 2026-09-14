@@ -105,7 +105,13 @@ class TradeAnalytics:
         else:
             target_pnl = (target_price_in - target_price_close) / target_price_in
             
-        target_cfg = self.risks_cfg[target_ex.lower()]
+        if target_ex.upper() in self.risks_cfg and "trading_risks" in self.risks_cfg[target_ex.upper()]:
+            target_cfg = self.risks_cfg[target_ex.upper()]["trading_risks"]
+        elif target_ex.lower() in self.risks_cfg:
+            target_cfg = self.risks_cfg[target_ex.lower()]
+        else:
+            target_cfg = self.risks_cfg[target_ex.upper()]
+            
         default_trade_size = float(target_cfg["trade_size_usd"])
         taker_fee_rate = float(target_cfg["taker_fee"])
         
@@ -218,9 +224,20 @@ def update_total_balance(cfg: dict, is_startup: bool = False, extra_pnl: float =
     """
     global _cached_base_total, _cached_cumulative_pnl, _balance_initialized
     try:
-        risks = cfg["trading_risks"]
-        if _cached_base_total is None or is_startup:
-            _cached_base_total = sum(float(risk["paper_start_balance"]) for risk in risks.values())
+        if "exchanges" in cfg:
+            exchanges_dict = cfg["exchanges"]
+            if _cached_base_total is None or is_startup:
+                _cached_base_total = sum(
+                    float(ex_cfg["trading_risks"]["paper_start_balance"])
+                    for ex_cfg in exchanges_dict.values()
+                    if "trading_risks" in ex_cfg and "paper_start_balance" in ex_cfg["trading_risks"]
+                )
+        elif "trading_risks" in cfg:
+            risks = cfg["trading_risks"]
+            if _cached_base_total is None or is_startup:
+                _cached_base_total = sum(float(risk["paper_start_balance"]) for risk in risks.values())
+        else:
+            _cached_base_total = 0.0
 
         if not _balance_initialized or is_startup:
             _cached_cumulative_pnl = _recalc_total_pnl_from_disk()

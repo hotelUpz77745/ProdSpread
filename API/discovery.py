@@ -73,7 +73,8 @@ class DiscoveryManager:
         
         # Only fetch exchanges that are part of at least one active route
         needed_exchanges = set()
-        for route, is_active in ACTIVE_ROUTES.items():
+        for route, r_cfg in ACTIVE_ROUTES.items():
+            is_active = r_cfg["active"] if isinstance(r_cfg, dict) else bool(r_cfg)
             if is_active:
                 parts = route.split("_")
                 if len(parts) == 2:
@@ -95,7 +96,7 @@ class DiscoveryManager:
                 all_sets[name] = set()
                 continue
             
-            min_vol = VOLUME_FILTERS.get(name, 0.0)
+            min_vol = float(VOLUME_FILTERS[name]) if name in VOLUME_FILTERS else 0.0
             valid_coins = {c for c, v in result.items() if v >= min_vol}
             all_sets[name] = valid_coins
             logger.info(f"{name}: {len(result)} total, {len(valid_coins)} passed volume filter >= {min_vol}")
@@ -118,6 +119,12 @@ class DiscoveryManager:
         if whitelist_set:
             logger.info(f"Applying SYMBOLS_GLOBAL_WHITELIST filter: {sorted(list(whitelist_set))}")
 
+        def _is_route_active(r_name: str) -> bool:
+            if r_name in ACTIVE_ROUTES:
+                rc = ACTIVE_ROUTES[r_name]
+                return bool(rc["active"] if isinstance(rc, dict) else rc)
+            return False
+
         self.active_pairs_map = {}
         for coin, exchanges in raw_pairs_map.items():
             if banned_symbols and coin in banned_symbols:
@@ -131,7 +138,7 @@ class DiscoveryManager:
                 route1 = f"{ex1}_{ex2}"
                 route2 = f"{ex2}_{ex1}"
                 
-                if ACTIVE_ROUTES.get(route1) or ACTIVE_ROUTES.get(route2):
+                if _is_route_active(route1) or _is_route_active(route2):
                     valid_coin_exchanges.add(ex1)
                     valid_coin_exchanges.add(ex2)
                     
@@ -151,7 +158,8 @@ class DiscoveryManager:
 
         # Step 6: Count and log common symbols per active route
         self.route_symbol_counts = {}
-        for route, is_active in ACTIVE_ROUTES.items():
+        for route, r_cfg in ACTIVE_ROUTES.items():
+            is_active = r_cfg["active"] if isinstance(r_cfg, dict) else bool(r_cfg)
             if is_active:
                 parts = route.split("_")
                 if len(parts) == 2:

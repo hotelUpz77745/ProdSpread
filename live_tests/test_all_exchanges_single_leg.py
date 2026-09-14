@@ -36,7 +36,7 @@ async def test_exchange(ex_name: str, symbol: str, open_qty: float, cfg: dict, s
             api_passphrase=os.getenv("KUCOIN_API_PASSPHRASE"),
             session=session,
             position_stream=None,
-            margin_settings=cfg["margin_settings"]["KUCOIN"]
+            margin_settings=cfg["exchanges"]["KUCOIN"]["margin_settings"] if "exchanges" in cfg else cfg["margin_settings"]["KUCOIN"]
         )
         adapter.start()
         for _ in range(50):
@@ -48,7 +48,7 @@ async def test_exchange(ex_name: str, symbol: str, open_qty: float, cfg: dict, s
             api_key=os.getenv("BITGET_API_KEY"),
             api_secret=os.getenv("BITGET_API_SECRET"),
             api_passphrase=os.getenv("BITGET_API_PASSPHRASE"),
-            margin_settings=cfg["margin_settings"]["BITGET"],
+            margin_settings=cfg["exchanges"]["BITGET"]["margin_settings"] if "exchanges" in cfg else cfg["margin_settings"]["BITGET"],
             session=session
         )
         await adapter.update_symbol_info()

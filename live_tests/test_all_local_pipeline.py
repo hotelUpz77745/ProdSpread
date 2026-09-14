@@ -37,11 +37,83 @@ def get_base_cfg():
             "rest_keepalive_interval_sec": 0,
             "idle_warmup_threshold_sec": 0
         },
-        "trading_risks": {
-            "binance": {"trade_size_usd": 25.0, "taker_fee": 0.0005, "limit_slip_ratio": 0.002, "volatility_discount_entry": 0.4, "volatility_discount_exit": 0.85, "max_positions": 1},
-            "kucoin": {"trade_size_usd": 25.0, "taker_fee": 0.0006, "limit_slip_ratio": 0.002, "volatility_discount_entry": 0.4, "volatility_discount_exit": 0.85, "max_positions": 1},
-            "bitget": {"trade_size_usd": 25.0, "taker_fee": 0.0006, "limit_slip_ratio": 0.002, "volatility_discount_entry": 0.4, "volatility_discount_exit": 0.85, "max_positions": 1},
-            "okx": {"trade_size_usd": 0.0, "taker_fee": 0.0006, "limit_slip_ratio": 0.002, "volatility_discount_entry": 0.4, "volatility_discount_exit": 0.85, "max_positions": 1}
+        "exchanges": {
+            "BINANCE": {
+                "trading_risks": {"trade_size_usd": 25.0, "taker_fee": 0.0005, "limit_slip_ratio": 0.002, "volatility_discount_entry": 0.4, "volatility_discount_exit": 0.85, "max_positions": 1},
+                "target_entry_logic": {"entry_api_timeout_sec": 2.0},
+                "target_exit": {
+                    "ttl_sec": 60.0,
+                    "exit_order_type": "LIMIT_IOC",
+                    "exit_slip_ratio": 0.001,
+                    "ioc_chase_timeout_sec": 0.2,
+                    "close_poll_interval_sec": 0.0,
+                    "stop_loss_ratio": 0.015,
+                    "min_spread_entry": 0.0030,
+                    "decay_map": [
+                        {"step": 1, "after_sec": 0, "target_spread": 0.005},
+                        {"step": 2, "after_sec": 10, "target_spread": 0.002},
+                        {"step": 3, "after_sec": 30, "target_spread": 0.0005}
+                    ]
+                }
+            },
+            "KUCOIN": {
+                "trading_risks": {"trade_size_usd": 25.0, "taker_fee": 0.0006, "limit_slip_ratio": 0.002, "volatility_discount_entry": 0.4, "volatility_discount_exit": 0.85, "max_positions": 1},
+                "target_entry_logic": {"entry_api_timeout_sec": 2.0},
+                "target_exit": {
+                    "ttl_sec": 60.0,
+                    "exit_order_type": "LIMIT_IOC",
+                    "exit_slip_ratio": 0.001,
+                    "ioc_chase_timeout_sec": 0.2,
+                    "close_poll_interval_sec": 0.0,
+                    "stop_loss_ratio": 0.015,
+                    "min_spread_entry": 0.0030,
+                    "decay_map": [
+                        {"step": 1, "after_sec": 0, "target_spread": 0.005},
+                        {"step": 2, "after_sec": 10, "target_spread": 0.002},
+                        {"step": 3, "after_sec": 30, "target_spread": 0.0005}
+                    ]
+                }
+            },
+            "BITGET": {
+                "trading_risks": {"trade_size_usd": 25.0, "taker_fee": 0.0006, "limit_slip_ratio": 0.002, "volatility_discount_entry": 0.4, "volatility_discount_exit": 0.85, "max_positions": 1},
+                "target_entry_logic": {"entry_api_timeout_sec": 2.0},
+                "target_exit": {
+                    "ttl_sec": 60.0,
+                    "exit_order_type": "LIMIT_IOC",
+                    "exit_slip_ratio": 0.001,
+                    "ioc_chase_timeout_sec": 0.2,
+                    "close_poll_interval_sec": 0.0,
+                    "stop_loss_ratio": 0.015,
+                    "min_spread_entry": 0.0030,
+                    "decay_map": [
+                        {"step": 1, "after_sec": 0, "target_spread": 0.005},
+                        {"step": 2, "after_sec": 10, "target_spread": 0.002},
+                        {"step": 3, "after_sec": 30, "target_spread": 0.0005}
+                    ]
+                }
+            },
+            "OKX": {
+                "trading_risks": {"trade_size_usd": 0.0, "taker_fee": 0.0006, "limit_slip_ratio": 0.002, "volatility_discount_entry": 0.4, "volatility_discount_exit": 0.85, "max_positions": 1},
+                "target_entry_logic": {"entry_api_timeout_sec": 2.0},
+                "target_exit": {
+                    "ttl_sec": 60.0,
+                    "exit_order_type": "LIMIT_IOC",
+                    "exit_slip_ratio": 0.001,
+                    "ioc_chase_timeout_sec": 0.2,
+                    "close_poll_interval_sec": 0.0,
+                    "stop_loss_ratio": 0.015,
+                    "min_spread_entry": 0.0030,
+                    "decay_map": [
+                        {"step": 1, "after_sec": 0, "target_spread": 0.005},
+                        {"step": 2, "after_sec": 10, "target_spread": 0.002},
+                        {"step": 3, "after_sec": 30, "target_spread": 0.0005}
+                    ]
+                }
+            }
+        },
+        "routes": {
+            "BINANCE_KUCOIN": {"active": True, "fill_confirm_timeout_sec": 0.5, "market_close_confirm_timeout_sec": 1.8},
+            "BINANCE_BITGET": {"active": True, "fill_confirm_timeout_sec": 0.5, "market_close_confirm_timeout_sec": 1.8}
         },
         "trading_rules": {
             "entry": {
@@ -67,21 +139,7 @@ def get_base_cfg():
             },
             "exit": {
                 "max_desync_ms": 150,
-                "close_confirm_timeout_sec": 1.0,
-                "target_exit": {
-                    "ttl_sec": 60.0,
-                    "exit_order_type": "LIMIT_IOC",
-                    "exit_slip_ratio": 0.001,
-                    "ioc_chase_timeout_sec": 0.2,
-                    "close_poll_interval_sec": 0.0,
-                    "stop_loss_ratio": 0.015,
-                    "min_spread_entry": 0.0030,
-                    "decay_map": [
-                        {"step": 1, "after_sec": 0, "target_spread": 0.005},
-                        {"step": 2, "after_sec": 10, "target_spread": 0.002},
-                        {"step": 3, "after_sec": 30, "target_spread": 0.0005}
-                    ]
-                }
+                "close_confirm_timeout_sec": 1.0
             },
             "emergency_unwind": {
                 "max_attempts": 2,
@@ -100,7 +158,6 @@ def get_base_cfg():
             }
         }
     }
-
 
 class TestPipelineTradingEngine(unittest.TestCase):
     def setUp(self):

@@ -34,20 +34,22 @@ class LimitGtcTester:
             session=self.session
         )
         
+        kucoin_margin = self.cfg["exchanges"]["KUCOIN"]["margin_settings"] if "exchanges" in self.cfg else self.cfg["margin_settings"]["KUCOIN"]
         self.kucoin_order = KucoinOrder(
             api_key=os.environ["KUCOIN_API_KEY"],
             api_secret=os.environ["KUCOIN_API_SECRET"],
             api_passphrase=os.environ["KUCOIN_API_PASSPHRASE"],
-            margin_settings=self.cfg["margin_settings"]["KUCOIN"],
+            margin_settings=kucoin_margin,
             session=self.session,
             position_stream=None
         )
         
+        bitget_margin = self.cfg["exchanges"]["BITGET"]["margin_settings"] if "exchanges" in self.cfg else self.cfg["margin_settings"]["BITGET"]
         self.bitget_order = BitgetOrder(
             api_key=os.environ["BITGET_API_KEY"],
             api_secret=os.environ["BITGET_API_SECRET"],
             api_passphrase=os.environ["BITGET_API_PASSPHRASE"],
-            margin_settings=self.cfg["margin_settings"]["BITGET"],
+            margin_settings=bitget_margin,
             session=self.session
         )
         

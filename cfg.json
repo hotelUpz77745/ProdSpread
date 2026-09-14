@@ -20,69 +20,12 @@
         "log_to_file": true,
         "TIME_ZONE": "UTC"
     },
-    "trading_risks": {
-        "binance": {
-            "paper_start_balance": 0.0,
-            "trade_size_usd": 0.0,
-            "taker_fee": 0.0005,
-            "limit_slip_ratio": 0.0015,
-            "volatility_discount_entry": 0.30,
-            "volatility_discount_exit": 0.85,
-            "max_positions": 1
-        },
-        "kucoin": {
-            "paper_start_balance": 5.95,
-            "trade_size_usd": 25.0,
-            "taker_fee": 0.0006,
-            "limit_slip_ratio": 0.0030,
-            "volatility_discount_entry": 0.30,
-            "volatility_discount_exit": 0.85,
-            "max_positions": 1
-        },
-        "okx": {
-            "paper_start_balance": 0.0,
-            "trade_size_usd": 0.0,
-            "taker_fee": 0.0006,
-            "limit_slip_ratio": 0.0015,
-            "volatility_discount_entry": 0.30,
-            "volatility_discount_exit": 0.85,
-            "max_positions": 1
-        },
-        "bitget": {
-            "paper_start_balance": 9.71,
-            "trade_size_usd": 25.0,
-            "taker_fee": 0.0006,
-            "limit_slip_ratio": 0.0030,
-            "volatility_discount_entry": 0.25,
-            "volatility_discount_exit": 0.85,
-            "max_positions": 1
-        }
-    },
     "volume_filters": {
         "BINANCE": 5000000.0,
         "KUCOIN": 1000000.0,
         "OKX": 2000000.0,
         "BITGET": 2000000.0
     },
-    "active_routes": {
-        "BINANCE_KUCOIN": true,
-        "BINANCE_BITGET": true,
-        "BINANCE_OKX": false,
-        "KUCOIN_OKX": false,
-        "KUCOIN_BITGET": false,
-        "OKX_BITGET": false
-    },
-    "exchange_roles": {
-        "BINANCE_BITGET": {
-            "oracle": "BINANCE",
-            "target": "BITGET"
-        },
-        "BINANCE_KUCOIN": {
-            "oracle": "BINANCE",
-            "target": "KUCOIN"
-        }
-    },
-    "exchange_roles_desc": "Карта ролей: oracle — биржа-поводырь (только чтение стакана), target — биржа-мишень (исполнение ордеров).",
     "setup_margin_leverage": true,
     "margin_settings": {
         "BINANCE": {
@@ -106,147 +49,507 @@
             "desc": "margin_type allowed values: isolated | crossed"
         }
     },
-    "trading_rules": {
-        "entry": {
-            "order_execution_type": "TARGET_LIMIT_IOC",
-            "static_detector": {
-                "enabled": true,
-                "enabled_desc": "Включение детектора стоячей ноги. Блокирует вход, если стоячая нога отклоняется от скользящего среднего ряда цен.",
-                "static_leg": "TARGET",
-                "static_leg_desc": "Стоячая нога: 'TARGET' для Кейса Б (Оракул летит, Мишень стоит); 'ORACLE' для Кейса В (Мишень летит, Оракул стоит).",
-                "max_static_leg_ratio": 0.0020,
-                "max_static_leg_ratio_desc": "Максимально допустимое отклонение текущей цены от среднего буфера в долях от 1 (например, 0.0015 = 0.15%).",
-                "buffer_window_sec": 0.35,
-                "buffer_window_sec_desc": "Окно накопления цен и замера среднего (сек). 0.35 с = 350 мс (~5-8 тиков)."
+    "network_settings": {
+        "rest_keepalive_interval_sec": 10,
+        "rest_keepalive_interval_sec_desc": "Интервал (сек) фонового опроса/прогрева постоянных TCP/TLS сессий к REST API бирж (0 для отключения).",
+        "idle_warmup_threshold_sec": 8,
+        "idle_warmup_threshold_sec_desc": "Минимальное время бездействия (сек) после последнего реального ордера, перед тем как слать фейковый прогревочный ордер."
+    },
+    "routes": {
+        "BINANCE_BITGET": {
+            "active": true,
+            "oracle": "BINANCE",
+            "target": "BITGET",
+            "max_desync_ms_entry": 200,
+            "max_desync_ms_exit": 450,
+            "fill_confirm_timeout_sec": 0.3,
+            "market_close_confirm_timeout_sec": 1.8
+        },
+        "BINANCE_KUCOIN": {
+            "active": true,
+            "oracle": "BINANCE",
+            "target": "KUCOIN",
+            "max_desync_ms_entry": 350,
+            "max_desync_ms_exit": 500,
+            "fill_confirm_timeout_sec": 0.3,
+            "market_close_confirm_timeout_sec": 1.8
+        },
+        "BINANCE_OKX": {
+            "active": false,
+            "oracle": "",
+            "target": "",
+            "max_desync_ms_entry": 150,
+            "max_desync_ms_exit": 400,
+            "fill_confirm_timeout_sec": 0.3,
+            "market_close_confirm_timeout_sec": 1.8
+        },
+        "KUCOIN_OKX": {
+            "active": false,
+            "oracle": "",
+            "target": "",
+            "max_desync_ms_entry": 200,
+            "max_desync_ms_exit": 400,
+            "fill_confirm_timeout_sec": 0.3,
+            "market_close_confirm_timeout_sec": 1.8
+        },
+        "KUCOIN_BITGET": {
+            "active": false,
+            "oracle": "",
+            "target": "",
+            "max_desync_ms_entry": 250,
+            "max_desync_ms_exit": 450,
+            "fill_confirm_timeout_sec": 0.3,
+            "market_close_confirm_timeout_sec": 1.8
+        },
+        "OKX_BITGET": {
+            "active": false,
+            "oracle": "",
+            "target": "",
+            "max_desync_ms_entry": 200,
+            "max_desync_ms_exit": 450,
+            "fill_confirm_timeout_sec": 0.3,
+            "market_close_confirm_timeout_sec": 1.8
+        }
+    },
+    "exchanges": {
+        "BINANCE": {
+            "trading_risks": {
+                "paper_start_balance": 0.0,
+                "trade_size_usd": 0.0,
+                "taker_fee": 0.0005,
+                "limit_slip_ratio": 0.0015,
+                "volatility_discount_entry": 0.50,
+                "volatility_discount_exit": 0.85,
+                "max_positions": 1
             },
-            "signal_filters": {
-                "spread_entry_pre": [
-                    0.013,
-                    0.05
-                ],
-                "spread_entry_base": 0.008,
-                "spread_entry_desc": "spread_entry_pre: Диапазон [min, max] грубого префильтра (триггер запуска таймера задержки dwell_ms). spread_entry_base: Финальный порог входа в эвалюаторе. Позволяет спреду слегка откатиться во время удержания сигнала, но не ниже base.",
-                "min_top_depth_usd": 50.0,
-                "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
-                "min_signal_dwell_ms": 0,
-                "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
-                "top_n_candidates": 4,
-                "max_desync_ms": {
-                    "BINANCE_KUCOIN": 250,
-                    "BINANCE_BITGET": 200,
-                    "KUCOIN_BITGET": 200,
-                    "BINANCE_OKX": 150,
-                    "KUCOIN_OKX": 150,
-                    "OKX_BITGET": 200
-                },
-                "max_desync_ms_desc": "Пороги рассинхрона стаканов (мс) для каждой связки. Настроены индивидуально под скорость стримов бирж.",
-                "orderbook_imbalance": {
-                    "enabled": false,
-                    "max_adverse_imbalance": 0.55,
-                    "depth_levels": 5,
-                    "desc": "Отсекает вход, если на одной из ног стакан перекошен против направления удара (на Long-бирже тяжелые аски, на Short-бирже тяжелые биды)."
-                },
-                "synthetic_exit": {
+            "entry": {
+                "order_execution_type": "TARGET_LIMIT_IOC",
+                "entry_api_timeout_sec": 5.0,
+                "entry_api_timeout_sec_desc": "Таймаут (сек) запроса отправки ордера LIMIT_IOC в asyncio.wait_for.",
+                "static_detector": {
                     "enabled": true,
-                    "check_slippage": true,
-                    "max_slippage_ratio": 0.50,
-                    "hard_max_slippage": 0.012,
-                    "desc": "Симуляция немедленного закрытия. Защита от входа в спреды, где обратный bid/ask спред съест большую часть расчетной прибыли."
+                    "enabled_desc": "Включение детектора стоячей ноги. Блокирует вход, если стоячая нога отклоняется от скользящего среднего ряда цен.",
+                    "static_leg": "ORACLE",
+                    "static_leg_desc": "Стоячая нога: 'TARGET' для Кейса Б (Оракул летит, Мишень стоит); 'ORACLE' для Кейса В (Мишень летит, Оракул стоит).",
+                    "max_static_leg_ratio": 0.0020,
+                    "max_static_leg_ratio_desc": "Максимально допустимое отклонение текущей цены от среднего буфера в долях от 1 (например, 0.0020 = 0.20%).",
+                    "buffer_window_sec": 0.35,
+                    "buffer_window_sec_desc": "Окно накопления цен и замера среднего (сек). 0.35 с = 350 мс (~5-8 тиков)."
+                },
+                "signal_filters": {
+                    "spread_entry_pre": [
+                        0.008,
+                        0.05
+                    ],
+                    "spread_entry_base": 0.006,
+                    "spread_entry_desc": "spread_entry_pre: Диапазон [min, max] грубого префильтра (триггер запуска таймера задержки dwell_ms). spread_entry_base: Финальный порог входа в эвалюаторе.",
+                    "min_top_depth_usd": 50.0,
+                    "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу.",
+                    "min_signal_dwell_ms": 0,
+                    "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
+                    "top_n_candidates": 4,
+                    "orderbook_imbalance": {
+                        "enabled": false,
+                        "max_adverse_imbalance": 0.55,
+                        "depth_levels": 5,
+                        "desc": "Отсекает вход, если на одной из ног стакан перекошен против направления удара."
+                    },
+                    "synthetic_exit": {
+                        "enabled": true,
+                        "check_slippage": true,
+                        "max_slippage_ratio": 0.50,
+                        "hard_max_slippage": 0.012,
+                        "desc": "Симуляция немедленного закрытия."
+                    }
                 }
             },
-            "target_entry_logic": {
-                "fill_confirm_timeout_sec": {
-                    "BINANCE_KUCOIN": 0.3,
-                    "BINANCE_BITGET": 0.3,
-                    "KUCOIN_BITGET": 0.3,
-                    "BINANCE_OKX": 0.3,
-                    "KUCOIN_OKX": 0.3,
-                    "OKX_BITGET": 0.3
-                },
-                "fill_confirm_timeout_sec_desc": "Макс. время ожидания подтверждения налива по WS после IOC на Target бирже.",
-
+            "exit": {
+                "target_exit": {
+                    "desc": "Управление выходом из одноногой позиции по локальному профиту на Мишени (v9).",
+                    "stop_loss_ratio": 0.0050,
+                    "stop_loss_ratio_desc": "Макс. допустимый убыток в долях от 1 (например, 0.0050 = 0.50%).",
+                    "exit_order_type": "MARKET",
+                    "exit_order_type_desc": "Тип ордера на выход: MARKET или LIMIT_IOC.",
+                    "exit_slip_ratio": 0.0010,
+                    "exit_slip_ratio_desc": "(Только для LIMIT_IOC) Допустимое проскальзывание цены ордера выхода.",
+                    "ioc_close_confirm_timeout_sec": 0.2,
+                    "ioc_close_confirm_timeout_sec_desc": "(Только для LIMIT_IOC) Время ожидания (сек) подтверждения налива по WS.",
+                    "min_spread_entry": 0.0030,
+                    "min_spread_entry_desc": "Минимальный чистый спред относительно Oracle после входа в долях от 1.",
+                    "decay_map": [
+                        {
+                            "step": 0,
+                            "after_sec": 0,
+                            "min_profit_ratio": 0.50
+                        },
+                        {
+                            "step": 1,
+                            "after_sec": 3,
+                            "min_profit_ratio": 0.25
+                        },
+                        {
+                            "step": 2,
+                            "after_sec": 7,
+                            "min_profit_ratio": 0.00
+                        },
+                        {
+                            "step": 3,
+                            "after_sec": 12,
+                            "min_profit_ratio": -0.20
+                        },
+                        {
+                            "step": 4,
+                            "after_sec": 15,
+                            "min_profit_ratio": -999.0
+                        }
+                    ],
+                    "decay_map_desc": "Карта снижения порога прибыли во времени.",
+                    "emergency_decay_map": [
+                        {
+                            "step": 0,
+                            "after_sec": 0,
+                            "min_profit_ratio": 0.00
+                        },
+                        {
+                            "step": 1,
+                            "after_sec": 3,
+                            "min_profit_ratio": -999.0
+                        }
+                    ],
+                    "emergency_decay_map_desc": "Аварийная ускоренная карта деградации при сдувшемся спреде (< min_spread_entry)."
+                }
+            }
+        },
+        "KUCOIN": {
+            "trading_risks": {
+                "paper_start_balance": 5.95,
+                "trade_size_usd": 25.0,
+                "taker_fee": 0.0006,
+                "limit_slip_ratio": 0.0020,
+                "volatility_discount_entry": 0.50,
+                "volatility_discount_exit": 0.85,
+                "max_positions": 1
+            },
+            "entry": {
+                "order_execution_type": "TARGET_LIMIT_IOC",
                 "entry_api_timeout_sec": 5.0,
-                "entry_api_timeout_sec_desc": "Таймаут (сек) запроса отправки ордера LIMIT_IOC в asyncio.wait_for."
+                "entry_api_timeout_sec_desc": "Таймаут (сек) запроса отправки ордера LIMIT_IOC в asyncio.wait_for.",
+                "static_detector": {
+                    "enabled": true,
+                    "enabled_desc": "Включение детектора стоячей ноги. Блокирует вход, если стоячая нога отклоняется от скользящего среднего ряда цен.",
+                    "static_leg": "TARGET",
+                    "static_leg_desc": "Стоячая нога: 'TARGET' для Кейса Б (Оракул летит, Мишень стоит); 'ORACLE' для Кейса В (Мишень летит, Оракул стоит).",
+                    "max_static_leg_ratio": 0.0020,
+                    "max_static_leg_ratio_desc": "Максимально допустимое отклонение текущей цены от среднего буфера в долях от 1 (например, 0.0020 = 0.20%).",
+                    "buffer_window_sec": 0.35,
+                    "buffer_window_sec_desc": "Окно накопления цен и замера среднего (сек). 0.35 с = 350 мс (~5-8 тиков)."
+                },
+                "signal_filters": {
+                    "spread_entry_pre": [
+                        0.010,
+                        0.05
+                    ],
+                    "spread_entry_base": 0.006,
+                    "spread_entry_desc": "spread_entry_pre: Диапазон [min, max] грубого префильтра KuCoin. spread_entry_base: Финальный порог входа в эвалюаторе KuCoin.",
+                    "min_top_depth_usd": 30.0,
+                    "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана KuCoin.",
+                    "min_signal_dwell_ms": 0,
+                    "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
+                    "top_n_candidates": 4,
+                    "orderbook_imbalance": {
+                        "enabled": false,
+                        "max_adverse_imbalance": 0.55,
+                        "depth_levels": 5,
+                        "desc": "Отсекает вход, если на одной из ног стакан перекошен против направления удара."
+                    },
+                    "synthetic_exit": {
+                        "enabled": true,
+                        "check_slippage": true,
+                        "max_slippage_ratio": 0.50,
+                        "hard_max_slippage": 0.012,
+                        "desc": "Симуляция немедленного закрытия."
+                    }
+                }
+            },
+            "exit": {
+                "target_exit": {
+                    "desc": "Управление выходом из одноногой позиции по локальному профиту на Мишени (v9).",
+                    "stop_loss_ratio": 0.0050,
+                    "stop_loss_ratio_desc": "Макс. допустимый убыток в долях от 1 (например, 0.0050 = 0.50%).",
+                    "exit_order_type": "MARKET",
+                    "exit_order_type_desc": "Тип ордера на выход: MARKET или LIMIT_IOC.",
+                    "exit_slip_ratio": 0.0010,
+                    "exit_slip_ratio_desc": "(Только для LIMIT_IOC) Допустимое проскальзывание цены ордера выхода.",
+                    "ioc_close_confirm_timeout_sec": 0.2,
+                    "ioc_close_confirm_timeout_sec_desc": "(Только для LIMIT_IOC) Время ожидания (сек) подтверждения налива по WS.",
+                    "min_spread_entry": 0.0025,
+                    "min_spread_entry_desc": "Минимальный чистый спред относительно Oracle после входа в долях от 1.",
+                    "decay_map": [
+                        {
+                            "step": 0,
+                            "after_sec": 0,
+                            "min_profit_ratio": 0.50
+                        },
+                        {
+                            "step": 1,
+                            "after_sec": 3,
+                            "min_profit_ratio": 0.25
+                        },
+                        {
+                            "step": 2,
+                            "after_sec": 7,
+                            "min_profit_ratio": 0.00
+                        },
+                        {
+                            "step": 3,
+                            "after_sec": 12,
+                            "min_profit_ratio": -0.20
+                        },
+                        {
+                            "step": 4,
+                            "after_sec": 15,
+                            "min_profit_ratio": -999.0
+                        }
+                    ],
+                    "decay_map_desc": "Карта снижения порога прибыли во времени.",
+                    "emergency_decay_map": [
+                        {
+                            "step": 0,
+                            "after_sec": 0,
+                            "min_profit_ratio": 0.00
+                        },
+                        {
+                            "step": 1,
+                            "after_sec": 3,
+                            "min_profit_ratio": -999.0
+                        }
+                    ],
+                    "emergency_decay_map_desc": "Аварийная ускоренная карта деградации при сдувшемся спреде (< min_spread_entry)."
+                }
             }
         },
-        "exit": {
-            "market_close_confirm_timeout_sec": {
-                "BINANCE_KUCOIN": 1.8,
-                "BINANCE_BITGET": 1.8,
-                "KUCOIN_BITGET": 1.8,
-                "BINANCE_OKX": 1.8,
-                "KUCOIN_OKX": 1.8,
-                "OKX_BITGET": 1.8
+        "BITGET": {
+            "trading_risks": {
+                "paper_start_balance": 9.71,
+                "trade_size_usd": 25.0,
+                "taker_fee": 0.0006,
+                "limit_slip_ratio": 0.0025,
+                "volatility_discount_entry": 0.50,
+                "volatility_discount_exit": 0.85,
+                "max_positions": 1
             },
-            "market_close_confirm_timeout_sec_desc": "Макс. время ожидания (сек) подтверждения закрытия позиции по WS при выходе ордером MARKET.",
-            "target_exit": {
-                "desc": "Управление выходом из одноногой позиции по локальному профиту на Мишени (v9).",
-                "stop_loss_ratio": 0.0050,
-                "stop_loss_ratio_desc": "Макс. допустимый убыток в долях от 1 (например, 0.0050 = 0.50%). При достижении — немедленный MARKET выход. Установить null для отключения. (Если задается stop_loss_pct, значение строго в процентах от 100: например, 0.50 = 0.50%).",
-                "exit_order_type": "MARKET",
-                "exit_order_type_desc": "Тип ордера на выход: MARKET (рекомендуется для сайзов до 300$, исполнение в 1 RTT без проскальзывания и зависаний) или LIMIT_IOC (для сайзов от 300$ до 3000$ как Cap-Market с 200мс фоллбеком в маркет). Свыше 3000$ требуется алгоритмический слайсинг/чейзинг.",
-                "exit_slip_ratio": 0.001,
-                "exit_slip_ratio_desc": "(Только для LIMIT_IOC) Допустимое проскальзывание цены ордера выхода в долях от 1 (например, 0.0010 = 0.10%).",
-                "ioc_close_confirm_timeout_sec": 0.2,
-                "ioc_close_confirm_timeout_sec_desc": "(Только для LIMIT_IOC) Время ожидания (сек) подтверждения налива по WS. Если за 200мс ордер не налился 100%, остаток мгновенно дожимается через MARKET.",
-
-                "min_spread_entry": 0.0030,
-                "min_spread_entry_desc": "Минимальный чистый спред относительно Oracle после входа в долях от 1 (например, 0.0030 = 0.30%). Если текущий спред сдулся ниже порога, активируется emergency_decay_map.",
-                "decay_map": [
-                    {
-                        "step": 0,
-                        "after_sec": 0,
-                        "min_profit_ratio": 0.5
+            "entry": {
+                "order_execution_type": "TARGET_LIMIT_IOC",
+                "entry_api_timeout_sec": 5.0,
+                "entry_api_timeout_sec_desc": "Таймаут (сек) запроса отправки ордера LIMIT_IOC в asyncio.wait_for.",
+                "static_detector": {
+                    "enabled": true,
+                    "enabled_desc": "Включение детектора стоячей ноги. Блокирует вход, если стоячая нога отклоняется от скользящего среднего ряда цен.",
+                    "static_leg": "TARGET",
+                    "static_leg_desc": "Стоячая нога: 'TARGET' для Кейса Б (Оракул летит, Мишень стоит); 'ORACLE' для Кейса В (Мишень летит, Оракул стоит).",
+                    "max_static_leg_ratio": 0.0020,
+                    "max_static_leg_ratio_desc": "Максимально допустимое отклонение текущей цены от среднего буфера в долях от 1 (например, 0.0020 = 0.20%).",
+                    "buffer_window_sec": 0.35,
+                    "buffer_window_sec_desc": "Окно накопления цен и замера среднего (сек). 0.35 с = 350 мс (~5-8 тиков)."
+                },
+                "signal_filters": {
+                    "spread_entry_pre": [
+                        0.012,
+                        0.05
+                    ],
+                    "spread_entry_base": 0.008,
+                    "spread_entry_desc": "spread_entry_pre: Диапазон [min, max] грубого префильтра Bitget. spread_entry_base: Финальный порог входа в эвалюаторе Bitget.",
+                    "min_top_depth_usd": 40.0,
+                    "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана Bitget.",
+                    "min_signal_dwell_ms": 0,
+                    "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
+                    "top_n_candidates": 4,
+                    "orderbook_imbalance": {
+                        "enabled": false,
+                        "max_adverse_imbalance": 0.55,
+                        "depth_levels": 5,
+                        "desc": "Отсекает вход, если на одной из ног стакан перекошен против направления удара."
                     },
-                    {
-                        "step": 1,
-                        "after_sec": 3,
-                        "min_profit_ratio": 0.25
-                    },
-                    {
-                        "step": 2,
-                        "after_sec": 7,
-                        "min_profit_ratio": 0.0
-                    },
-                    {
-                        "step": 3,
-                        "after_sec": 12,
-                        "min_profit_ratio": -0.2
-                    },
-                    {
-                        "step": 4,
-                        "after_sec": 15,
-                        "min_profit_ratio": -999.0
+                    "synthetic_exit": {
+                        "enabled": true,
+                        "check_slippage": true,
+                        "max_slippage_ratio": 0.50,
+                        "hard_max_slippage": 0.012,
+                        "desc": "Симуляция немедленного закрытия."
                     }
-                ],
-                "decay_map_desc": "Карта снижения порога прибыли во времени. Шаг с min_profit_ratio: -999.0 (after_sec: 15) задает безусловный выход по рынку (TTL дедлайн).",
-                "emergency_decay_map": [
-                    {
-                        "step": 0,
-                        "after_sec": 0,
-                        "min_profit_ratio": 0.0
-                    },
-                    {
-                        "step": 1,
-                        "after_sec": 3,
-                        "min_profit_ratio": -999.0
-                    }
-                ],
-                "emergency_decay_map_desc": "Аварийная ускоренная карта деградации при сдувшемся спреде (< min_spread_entry). Шаг 0 (0-3с): попытка выйти в безубыток (0.0). Шаг 1 (3с): принудительный сброс по рынку (TTL дедлайн)."
+                }
             },
-            "max_desync_ms": {
-                "BINANCE_KUCOIN": 350,
-                "BINANCE_BITGET": 450,
-                "KUCOIN_BITGET": 450,
-                "BINANCE_OKX": 400,
-                "KUCOIN_OKX": 400,
-                "OKX_BITGET": 450
+            "exit": {
+                "target_exit": {
+                    "desc": "Управление выходом из одноногой позиции по локальному профиту на Мишени (v9).",
+                    "stop_loss_ratio": 0.0050,
+                    "stop_loss_ratio_desc": "Макс. допустимый убыток в долях от 1 (например, 0.0050 = 0.50%).",
+                    "exit_order_type": "MARKET",
+                    "exit_order_type_desc": "Тип ордера на выход: MARKET или LIMIT_IOC.",
+                    "exit_slip_ratio": 0.0010,
+                    "exit_slip_ratio_desc": "(Только для LIMIT_IOC) Допустимое проскальзывание цены ордера выхода.",
+                    "ioc_close_confirm_timeout_sec": 0.2,
+                    "ioc_close_confirm_timeout_sec_desc": "(Только для LIMIT_IOC) Время ожидания (сек) подтверждения налива по WS.",
+                    "min_spread_entry": 0.0030,
+                    "min_spread_entry_desc": "Минимальный чистый спред относительно Oracle после входа в долях от 1.",
+                    "decay_map": [
+                        {
+                            "step": 0,
+                            "after_sec": 0,
+                            "min_profit_ratio": 0.50
+                        },
+                        {
+                            "step": 1,
+                            "after_sec": 3,
+                            "min_profit_ratio": 0.25
+                        },
+                        {
+                            "step": 2,
+                            "after_sec": 7,
+                            "min_profit_ratio": 0.00
+                        },
+                        {
+                            "step": 3,
+                            "after_sec": 12,
+                            "min_profit_ratio": -0.20
+                        },
+                        {
+                            "step": 4,
+                            "after_sec": 15,
+                            "min_profit_ratio": -999.0
+                        }
+                    ],
+                    "decay_map_desc": "Карта снижения порога прибыли во времени.",
+                    "emergency_decay_map": [
+                        {
+                            "step": 0,
+                            "after_sec": 0,
+                            "min_profit_ratio": 0.00
+                        },
+                        {
+                            "step": 1,
+                            "after_sec": 3,
+                            "min_profit_ratio": -999.0
+                        }
+                    ],
+                    "emergency_decay_map_desc": "Аварийная ускоренная карта деградации при сдувшемся спреде (< min_spread_entry)."
+                }
             }
         },
+        "OKX": {
+            "trading_risks": {
+                "paper_start_balance": 0.0,
+                "trade_size_usd": 0.0,
+                "taker_fee": 0.0006,
+                "limit_slip_ratio": 0.0015,
+                "volatility_discount_entry": 0.50,
+                "volatility_discount_exit": 0.85,
+                "max_positions": 1
+            },
+            "entry": {
+                "order_execution_type": "TARGET_LIMIT_IOC",
+                "entry_api_timeout_sec": 5.0,
+                "entry_api_timeout_sec_desc": "Таймаут (сек) запроса отправки ордера LIMIT_IOC в asyncio.wait_for.",
+                "static_detector": {
+                    "enabled": true,
+                    "enabled_desc": "Включение детектора стоячей ноги. Блокирует вход, если стоячая нога отклоняется от скользящего среднего ряда цен.",
+                    "static_leg": "TARGET",
+                    "static_leg_desc": "Стоячая нога: 'TARGET' для Кейса Б (Оракул летит, Мишень стоит); 'ORACLE' для Кейса В (Мишень летит, Оракул стоит).",
+                    "max_static_leg_ratio": 0.0020,
+                    "max_static_leg_ratio_desc": "Максимально допустимое отклонение текущей цены от среднего буфера в долях от 1 (например, 0.0020 = 0.20%).",
+                    "buffer_window_sec": 0.35,
+                    "buffer_window_sec_desc": "Окно накопления цен и замера среднего (сек). 0.35 с = 350 мс (~5-8 тиков)."
+                },
+                "signal_filters": {
+                    "spread_entry_pre": [
+                        0.008,
+                        0.05
+                    ],
+                    "spread_entry_base": 0.006,
+                    "spread_entry_desc": "spread_entry_pre: Диапазон [min, max] грубого префильтра OKX. spread_entry_base: Финальный порог входа в эвалюаторе OKX.",
+                    "min_top_depth_usd": 40.0,
+                    "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана OKX.",
+                    "min_signal_dwell_ms": 0,
+                    "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
+                    "top_n_candidates": 4,
+                    "orderbook_imbalance": {
+                        "enabled": false,
+                        "max_adverse_imbalance": 0.55,
+                        "depth_levels": 5,
+                        "desc": "Отсекает вход, если на одной из ног стакан перекошен против направления удара."
+                    },
+                    "synthetic_exit": {
+                        "enabled": true,
+                        "check_slippage": true,
+                        "max_slippage_ratio": 0.50,
+                        "hard_max_slippage": 0.012,
+                        "desc": "Симуляция немедленного закрытия."
+                    }
+                }
+            },
+            "exit": {
+                "target_exit": {
+                    "desc": "Управление выходом из одноногой позиции по локальному профиту на Мишени (v9).",
+                    "stop_loss_ratio": 0.0050,
+                    "stop_loss_ratio_desc": "Макс. допустимый убыток в долях от 1 (например, 0.0050 = 0.50%).",
+                    "exit_order_type": "MARKET",
+                    "exit_order_type_desc": "Тип ордера на выход: MARKET или LIMIT_IOC.",
+                    "exit_slip_ratio": 0.0010,
+                    "exit_slip_ratio_desc": "(Только для LIMIT_IOC) Допустимое проскальзывание цены ордера выхода.",
+                    "ioc_close_confirm_timeout_sec": 0.2,
+                    "ioc_close_confirm_timeout_sec_desc": "(Только для LIMIT_IOC) Время ожидания (сек) подтверждения налива по WS.",
+                    "min_spread_entry": 0.0030,
+                    "min_spread_entry_desc": "Минимальный чистый спред относительно Oracle после входа в долях от 1.",
+                    "decay_map": [
+                        {
+                            "step": 0,
+                            "after_sec": 0,
+                            "min_profit_ratio": 0.50
+                        },
+                        {
+                            "step": 1,
+                            "after_sec": 3,
+                            "min_profit_ratio": 0.25
+                        },
+                        {
+                            "step": 2,
+                            "after_sec": 7,
+                            "min_profit_ratio": 0.00
+                        },
+                        {
+                            "step": 3,
+                            "after_sec": 12,
+                            "min_profit_ratio": -0.20
+                        },
+                        {
+                            "step": 4,
+                            "after_sec": 15,
+                            "min_profit_ratio": -999.0
+                        }
+                    ],
+                    "decay_map_desc": "Карта снижения порога прибыли во времени.",
+                    "emergency_decay_map": [
+                        {
+                            "step": 0,
+                            "after_sec": 0,
+                            "min_profit_ratio": 0.00
+                        },
+                        {
+                            "step": 1,
+                            "after_sec": 3,
+                            "min_profit_ratio": -999.0
+                        }
+                    ],
+                    "emergency_decay_map_desc": "Аварийная ускоренная карта деградации при сдувшемся спреде (< min_spread_entry)."
+                }
+            }
+        }
+    },
+    "trading_rules": {
         "ban_rules": {
             "is_active": true,
             "perm_ban_loss_ratio": 0.0075,
-            "perm_ban_loss_ratio_desc": "Порог убытка по сделке в долях от 1 (например, 0.0075 = 0.75%), при котором монета уходит в пожизненный перманентный бан. (Если задается perm_ban_loss_pct, значение строго в процентах от 100: например, 0.75 = 0.75%).",
+            "perm_ban_loss_ratio_desc": "Порог убытка по сделке в долях от 1 (например, 0.0075 = 0.75%), при котором монета уходит в пожизненный перманентный бан.",
             "max_consecutive_losses": 2,
             "max_consecutive_losses_desc": "Количество убыточных сделок подряд по монете до пожизненного бана.",
             "quarantine_sec": {
@@ -272,11 +575,5 @@
             "ws_verify_timeout_sec": 0.3,
             "ws_verify_timeout_sec_desc": "Таймаут ожидания обновления WS-кэша позиции после аварийного сброса."
         }
-    },
-    "network_settings": {
-        "rest_keepalive_interval_sec": 10,
-        "rest_keepalive_interval_sec_desc": "Интервал (сек) фонового опроса/прогрева постоянных TCP/TLS сессий к REST API бирж (0 для отключения).",
-        "idle_warmup_threshold_sec": 8,
-        "idle_warmup_threshold_sec_desc": "Минимальное время бездействия (сек) после последнего реального ордера, перед тем как слать фейковый прогревочный ордер."
     }
 }

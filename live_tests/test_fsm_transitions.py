@@ -83,15 +83,11 @@ class MockPM:
 
 def get_test_cfg():
     cfg = copy.deepcopy(BASE_CFG)
-    cfg["EXECUTION_PAUSE"] = 0.005
-    entry_cfg = cfg["trading_rules"]["entry"]
-    t_cfg = entry_cfg.get("target_entry_logic") or entry_cfg.get("parallel_entry_logic", {})
-    for k in t_cfg.get("fill_confirm_timeout_sec", {}):
-        t_cfg["fill_confirm_timeout_sec"][k] = 0.05
-    exit_cfg = cfg["trading_rules"]["exit"]
-    c_cfg = exit_cfg.get("market_close_confirm_timeout_sec") or exit_cfg.get("close_confirm_timeout_sec", {})
-    for k in c_cfg:
-        c_cfg[k] = 0.05
+    if "routes" in cfg:
+        for r_cfg in cfg["routes"].values():
+            if isinstance(r_cfg, dict):
+                r_cfg["fill_confirm_timeout_sec"] = 0.05
+                r_cfg["market_close_confirm_timeout_sec"] = 0.05
     cfg["trading_rules"]["emergency_unwind"]["retry_pause_sec"] = 0.01
     cfg["trading_rules"]["emergency_unwind"]["ws_verify_timeout_sec"] = 0.01
     return cfg

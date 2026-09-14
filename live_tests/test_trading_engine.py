@@ -54,9 +54,43 @@ class TestTradingEngine(unittest.TestCase):
                     }
                 }
             },
-            "trading_risks": {
-                "binance": {"taker_fee": 0.0004, "volatility_discount_entry": 0.8, "volatility_discount_exit": 1.0},
-                "bitget": {"taker_fee": 0.0004, "volatility_discount_entry": 0.8, "volatility_discount_exit": 1.0}
+            "exchanges": {
+                "BINANCE": {
+                    "trading_risks": {"taker_fee": 0.0004, "volatility_discount_entry": 0.8, "volatility_discount_exit": 1.0},
+                    "target_exit": {
+                        "stop_loss_ratio": 0.01,
+                        "ttl_sec": 60.0,
+                        "exit_order_type": "LIMIT_IOC",
+                        "exit_slip_ratio": 0.001,
+                        "ioc_chase_timeout_sec": 0.2,
+                        "decay_map": [
+                            {"step": 0, "after_sec": 0, "min_profit_ratio": 0.8},
+                            {"step": 1, "after_sec": 5, "min_profit_ratio": 0.5},
+                            {"step": 2, "after_sec": 15, "min_profit_ratio": 0.25},
+                            {"step": 3, "after_sec": 30, "min_profit_ratio": 0.0},
+                            {"step": 4, "after_sec": 45, "min_profit_ratio": -0.2},
+                            {"step": 5, "after_sec": 60, "min_profit_ratio": -999.0}
+                        ]
+                    }
+                },
+                "BITGET": {
+                    "trading_risks": {"taker_fee": 0.0004, "volatility_discount_entry": 0.8, "volatility_discount_exit": 1.0},
+                    "target_exit": {
+                        "stop_loss_ratio": 0.01,
+                        "ttl_sec": 60.0,
+                        "exit_order_type": "LIMIT_IOC",
+                        "exit_slip_ratio": 0.001,
+                        "ioc_chase_timeout_sec": 0.2,
+                        "decay_map": [
+                            {"step": 0, "after_sec": 0, "min_profit_ratio": 0.8},
+                            {"step": 1, "after_sec": 5, "min_profit_ratio": 0.5},
+                            {"step": 2, "after_sec": 15, "min_profit_ratio": 0.25},
+                            {"step": 3, "after_sec": 30, "min_profit_ratio": 0.0},
+                            {"step": 4, "after_sec": 45, "min_profit_ratio": -0.2},
+                            {"step": 5, "after_sec": 60, "min_profit_ratio": -999.0}
+                        ]
+                    }
+                }
             }
         }
         self.engine = TradingEngine(self.cfg, {0: "BINANCE", 1: "BITGET"})
@@ -239,10 +273,10 @@ class TestTradingEngine(unittest.TestCase):
     def test_evaluate_exit_v9_stop_loss_disabled_null(self):
         # When stop_loss_ratio is None/null, drawdown does not trigger STOP_LOSS
         cfg_copy = copy.deepcopy(self.cfg)
-        cfg_copy["trading_rules"]["exit"]["target_exit"]["stop_loss_ratio"] = None
-        cfg_copy["trading_rules"]["exit"]["target_exit"].pop("stop_loss_pct", None)
+        cfg_copy["exchanges"]["BITGET"]["target_exit"]["stop_loss_ratio"] = None
+        cfg_copy["exchanges"]["BITGET"]["target_exit"].pop("stop_loss_pct", None)
         engine = TradingEngine(cfg_copy, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
-        self.assertIsNone(engine.stop_loss_ratio)
+        self.assertIsNone(engine.exchange_exit_params["BITGET"]["stop_loss_ratio"])
 
         target_book = {
             "bids": [[49000.0, 5.0]],
@@ -291,7 +325,7 @@ class TestTradingEngine(unittest.TestCase):
         self.assertEqual(res["reason"], "EMERGENCY_BREAKEVEN")
         self.assertTrue(res["use_emergency_decay"])
         self.assertIsNotNone(res["oracle_net_spread"])
-        self.assertLess(res["oracle_net_spread"], self.engine.min_spread_entry)
+        self.assertLess(res["oracle_net_spread"], self.engine.exchange_exit_params["BITGET"]["min_spread_entry"])
 
     def test_evaluate_exit_v9_emergency_ttl(self):
         # When emergency mode is active and duration exceeds emergency_ttl_sec (3.0s)
@@ -346,25 +380,24 @@ class TestTradingEngine(unittest.TestCase):
             oracle_ex="BINANCE"
         )
         self.assertTrue(res["use_emergency_decay"])
-        self.assertLess(res["oracle_net_spread"], self.engine.min_spread_entry)
+        self.assertLess(res["oracle_net_spread"], self.engine.exchange_exit_params["BITGET"]["min_spread_entry"])
 
     def test_stop_loss_ratio_and_pct_interpretations(self):
         """Verify that stop_loss_ratio (fraction of 1) and stop_loss_pct (percent of 100) yield exact same threshold."""
         # Case A: configured with ratio 0.0050 (0.50%)
         cfg_ratio = copy.deepcopy(self.cfg)
-        cfg_ratio["trading_rules"]["exit"]["target_exit"]["stop_loss_ratio"] = 0.0050
-        cfg_ratio["trading_rules"]["exit"]["target_exit"].pop("stop_loss_pct", None)
+        cfg_ratio["exchanges"]["BINANCE"]["target_exit"]["stop_loss_ratio"] = 0.0050
+        cfg_ratio["exchanges"]["BINANCE"]["target_exit"].pop("stop_loss_pct", None)
         engine_ratio = TradingEngine(cfg_ratio, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
-        self.assertAlmostEqual(engine_ratio.stop_loss_ratio, 0.0050)
-        self.assertAlmostEqual(engine_ratio.stop_loss_pct, 0.0050)
+        self.assertAlmostEqual(engine_ratio.exchange_exit_params["BINANCE"]["stop_loss_ratio"], 0.0050)
+        
 
         # Case B: configured with pct 0.5 (0.5%)
         cfg_pct = copy.deepcopy(self.cfg)
-        cfg_pct["trading_rules"]["exit"]["target_exit"].pop("stop_loss_ratio", None)
-        cfg_pct["trading_rules"]["exit"]["target_exit"]["stop_loss_pct"] = 0.50
+        cfg_pct["exchanges"]["BINANCE"]["target_exit"].pop("stop_loss_ratio", None)
+        cfg_pct["exchanges"]["BINANCE"]["target_exit"]["stop_loss_pct"] = 0.50
         engine_pct = TradingEngine(cfg_pct, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
-        self.assertAlmostEqual(engine_pct.stop_loss_ratio, 0.0050)
-        self.assertAlmostEqual(engine_pct.stop_loss_pct, 0.0050)
+        self.assertAlmostEqual(engine_pct.exchange_exit_params["BINANCE"]["stop_loss_ratio"], 0.0050)
 
         # Drawdown: entry 50000, bids 49600 -> -0.80% gross -> net ~ -0.88% < -0.50%
         target_book = {
@@ -374,7 +407,7 @@ class TestTradingEngine(unittest.TestCase):
         for eng in [engine_ratio, engine_pct]:
             should_exit, res = eng.evaluate_exit_v9(
                 target_book=target_book,
-                target_ex="BITGET",
+                target_ex="BINANCE",
                 entry_price=50000.0,
                 qty=0.02,
                 side="LONG",

@@ -70,7 +70,7 @@ class ExecutorProcess:
                 api_passphrase=os.environ.get("KUCOIN_API_PASSPHRASE", ""),
                 session=None,
                 position_stream=self.kucoin_pos_stream,
-                margin_settings=self.cfg["margin_settings"]["KUCOIN"],
+                margin_settings=self.cfg["margin_settings"]["KUCOIN"] if "margin_settings" in self.cfg else self.cfg["exchanges"]["KUCOIN"]["margin_settings"],
                 network_settings=net_cfg
             ),
             "OKX": OkxOrder(),
@@ -78,7 +78,7 @@ class ExecutorProcess:
                 api_key=os.environ.get("BITGET_API_KEY", ""),
                 api_secret=os.environ.get("BITGET_API_SECRET", ""),
                 api_passphrase=os.environ.get("BITGET_API_PASSPHRASE", ""),
-                margin_settings=self.cfg["margin_settings"]["BITGET"],
+                margin_settings=self.cfg["margin_settings"]["BITGET"] if "margin_settings" in self.cfg else self.cfg["exchanges"]["BITGET"]["margin_settings"],
                 session=None,
                 position_stream=self.bitget_pos_stream,
                 network_settings=net_cfg
@@ -97,8 +97,13 @@ class ExecutorProcess:
             bitget_passphrase=os.environ.get("BITGET_API_PASSPHRASE", "")
         )
         
-        entry_cfg = self.cfg["trading_rules"]["entry"]
-        self.order_execution_type = entry_cfg["order_execution_type"].upper()
+        entry_cfg = self.cfg.get("trading_rules", {}).get("entry", {})
+        if not entry_cfg and "exchanges" in self.cfg:
+            for ex in self.cfg["exchanges"].values():
+                if isinstance(ex, dict) and "entry" in ex:
+                    entry_cfg = ex["entry"]
+                    break
+        self.order_execution_type = entry_cfg.get("order_execution_type", "TARGET_LIMIT_IOC").upper()
         
         self.pm = None
         self.analytics_map = {}
@@ -129,8 +134,8 @@ class ExecutorProcess:
             pass
 
     def ban_coin(self, sym: str, reason: str = "", duration_sec: float = None):
-        ban_cfg = self.cfg["trading_rules"]["ban_rules"]
-        if not ban_cfg["is_active"]:
+        ban_cfg = self.cfg.get("ban_rules") or self.cfg.get("trading_rules", {}).get("ban_rules", {})
+        if not ban_cfg.get("is_active", True):
             return
             
         if duration_sec is not None and duration_sec <= 0:
@@ -220,7 +225,8 @@ class ExecutorProcess:
         if success:
             spread_val = engine_res.get("net_spread", 0.0)
             if sym not in self.analytics_map:
-                self.analytics_map[sym] = TradeAnalytics(sym, self.cfg["trading_risks"])
+                risks_source = self.cfg["exchanges"] if "exchanges" in self.cfg else self.cfg["trading_risks"]
+                self.analytics_map[sym] = TradeAnalytics(sym, risks_source)
             self.analytics_map[sym].record_open(
                 route=route,
                 direction=side,
@@ -292,7 +298,8 @@ class ExecutorProcess:
                 return
 
             if sym not in self.analytics_map:
-                self.analytics_map[sym] = TradeAnalytics(sym, self.cfg["trading_risks"])
+                risks_source = self.cfg["exchanges"] if "exchanges" in self.cfg else self.cfg["trading_risks"]
+                self.analytics_map[sym] = TradeAnalytics(sym, risks_source)
 
             if not self.analytics_map[sym].active_trade:
                 self.analytics_map[sym].record_open(

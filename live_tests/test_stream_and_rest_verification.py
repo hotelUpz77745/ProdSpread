@@ -81,7 +81,7 @@ async def main():
         api_passphrase=os.environ["BITGET_API_PASSPHRASE"],
         session=session,
         position_stream=bitget_stream,
-        margin_settings=cfg["margin_settings"]["BITGET"]
+        margin_settings=cfg["exchanges"]["BITGET"]["margin_settings"] if "exchanges" in cfg else cfg["margin_settings"]["BITGET"]
     )
     kucoin_order = KucoinOrder(
         api_key=os.environ["KUCOIN_API_KEY"],
@@ -89,7 +89,7 @@ async def main():
         api_passphrase=os.environ["KUCOIN_API_PASSPHRASE"],
         session=session,
         position_stream=kucoin_stream,
-        margin_settings=cfg["margin_settings"]["KUCOIN"]
+        margin_settings=cfg["exchanges"]["KUCOIN"]["margin_settings"] if "exchanges" in cfg else cfg["margin_settings"]["KUCOIN"]
     )
 
     async with session.get("https://fapi.binance.com/fapi/v1/exchangeInfo") as resp:

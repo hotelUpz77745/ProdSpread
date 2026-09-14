@@ -19,6 +19,20 @@ class DummyBot:
     def __init__(self, session):
         self.cfg = {
             "setup_margin_leverage": True,
+            "exchanges": {
+                "BINANCE": {
+                    "margin_settings": {
+                        "leverage": 11,
+                        "margin_type": "ISOLATED"
+                    }
+                },
+                "KUCOIN": {
+                    "margin_settings": {
+                        "leverage": 11,
+                        "margin_type": "ISOLATED"
+                    }
+                }
+            },
             "margin_settings": {
                 "BINANCE": {
                     "leverage": 11,

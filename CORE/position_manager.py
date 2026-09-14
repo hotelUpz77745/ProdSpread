@@ -15,11 +15,15 @@ class PositionManager:
         self.state_file = state_file
         self.STATE_FILE = state_file
         
-        # Limits from config (default 1 if unspecified)
+        # Limits from config
         self.max_pos = {}
         for ex in self.exchanges:
-            risk_cfg = self.cfg["trading_risks"][ex.lower()]
-            self.max_pos[ex] = risk_cfg["max_positions"]
+            if "exchanges" in self.cfg and ex.upper() in self.cfg["exchanges"]:
+                self.max_pos[ex] = int(self.cfg["exchanges"][ex.upper()]["trading_risks"]["max_positions"])
+            elif "trading_risks" in self.cfg and ex.lower() in self.cfg["trading_risks"]:
+                self.max_pos[ex] = int(self.cfg["trading_risks"][ex.lower()]["max_positions"])
+            else:
+                self.max_pos[ex] = int(self.cfg["exchanges"][ex.upper()]["trading_risks"]["max_positions"])
             
         # State per exchange: active and pending counts
         self.exchange_state = {ex: {"current": 0, "pending": 0} for ex in self.exchanges}
@@ -80,6 +84,10 @@ class PositionManager:
             print(f"Error saving positions state: {e}")
 
     def _is_oracle_on_route(self, route: str, exchange: str) -> bool:
+        if "routes" in self.cfg and route in self.cfg["routes"]:
+            roles = self.cfg["routes"][route]
+            if "oracle" in roles and roles["oracle"]:
+                return roles["oracle"].upper() == exchange.upper()
         if "exchange_roles" in self.cfg and route in self.cfg["exchange_roles"]:
             roles = self.cfg["exchange_roles"][route]
             return roles["oracle"].upper() == exchange.upper()

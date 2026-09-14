@@ -65,10 +65,10 @@ async def main():
     t_b_stream = asyncio.create_task(b_stream.start())
     t_k_stream = asyncio.create_task(k_stream.start())
 
-    # 2. Адаптеры ордеров
-    net_cfg = cfg.get("network_settings", {})
+    net_cfg = cfg["network_settings"] if "network_settings" in cfg else {}
+    margin_cfg = cfg["exchanges"]["KUCOIN"]["margin_settings"] if "exchanges" in cfg else cfg["margin_settings"]["KUCOIN"]
     b_order = BinanceOrder(os.environ["BINANCE_API_KEY"], os.environ["BINANCE_API_SECRET"], session, b_stream, network_settings=net_cfg)
-    k_order = KucoinOrder(os.environ["KUCOIN_API_KEY"], os.environ["KUCOIN_API_SECRET"], os.environ["KUCOIN_API_PASSPHRASE"], session, k_stream, cfg["margin_settings"]["KUCOIN"], network_settings=net_cfg)
+    k_order = KucoinOrder(os.environ["KUCOIN_API_KEY"], os.environ["KUCOIN_API_SECRET"], os.environ["KUCOIN_API_PASSPHRASE"], session, k_stream, margin_cfg, network_settings=net_cfg)
 
     # Загружаем спецификации
     async with session.get("https://fapi.binance.com/fapi/v1/exchangeInfo") as r:

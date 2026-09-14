@@ -60,16 +60,17 @@ async def main():
     with open(cfg_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
-    active_routes_cfg = cfg.get("active_routes", {})
-    configured_entry_desync = cfg.get("trading_rules", {}).get("entry", {}).get("max_desync_ms", 125)
-    print(f"Текущий max_desync_ms в cfg.json: {configured_entry_desync} мс")
+    routes_cfg = cfg["routes"] if "routes" in cfg else cfg.get("active_routes", {})
 
     # 1. Топология инструментов
     print("\n[1/4] Построение топологии инструментов (Discovery)...")
-    discovery = DiscoveryManager(quote=cfg.get("QUOTE", "USDT"))
+    discovery = DiscoveryManager(quote=cfg["QUOTE"])
     await discovery.build_topology()
 
-    active_routes = [r for r, is_active in active_routes_cfg.items() if is_active]
+    active_routes = [
+        r for r, r_cfg in routes_cfg.items()
+        if (r_cfg.get("active", False) if isinstance(r_cfg, dict) else bool(r_cfg))
+    ]
     print(f"Активные связки: {active_routes}")
     print(f"Общих торгуемых монет: {len(discovery.active_pairs_map)}")
 

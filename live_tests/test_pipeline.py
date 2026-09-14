@@ -5,8 +5,11 @@
 
 import asyncio
 import os
+import sys
 import time
 from dotenv import load_dotenv
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from c_log import log
 
 load_dotenv()

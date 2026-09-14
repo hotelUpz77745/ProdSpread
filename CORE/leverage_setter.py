@@ -66,7 +66,10 @@ class LeverageSetter:
             if not symbols:
                 continue
                 
-            ex_settings = self.cfg["margin_settings"][ex_name]
+            if "margin_settings" in self.cfg:
+                ex_settings = self.cfg["margin_settings"][ex_name]
+            else:
+                ex_settings = self.cfg["exchanges"][ex_name]["margin_settings"]
             config_leverage = ex_settings["leverage"]
             target_margin = ex_settings["margin_type"]
             order_adapter = self.orders[ex_name]

@@ -15,10 +15,10 @@ from CORE.position_manager import PositionManager
 class TestPositionManager(unittest.TestCase):
     def setUp(self):
         self.cfg = {
-            "trading_risks": {
-                "binance": {"max_positions": 1},
-                "bitget": {"max_positions": 2},
-                "kucoin": {"max_positions": 1}
+            "exchanges": {
+                "BINANCE": {"trading_risks": {"max_positions": 1}},
+                "BITGET": {"trading_risks": {"max_positions": 2}},
+                "KUCOIN": {"trading_risks": {"max_positions": 1}}
             }
         }
         self.exchanges = ["BINANCE", "BITGET", "KUCOIN"]

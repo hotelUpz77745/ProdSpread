@@ -65,10 +65,10 @@ async def main():
     t_b_stream = asyncio.create_task(b_stream.start())
     t_bg_stream = asyncio.create_task(bg_stream.start())
 
-    # 2. Адаптеры ордеров
-    net_cfg = cfg.get("network_settings", {})
+    net_cfg = cfg["network_settings"] if "network_settings" in cfg else {}
+    margin_cfg = cfg["exchanges"]["BITGET"]["margin_settings"] if "exchanges" in cfg else cfg["margin_settings"]["BITGET"]
     b_order = BinanceOrder(os.environ["BINANCE_API_KEY"], os.environ["BINANCE_API_SECRET"], session, b_stream, network_settings=net_cfg)
-    bg_order = BitgetOrder(os.environ["BITGET_API_KEY"], os.environ["BITGET_API_SECRET"], os.environ["BITGET_API_PASSPHRASE"], cfg["margin_settings"]["BITGET"], session, bg_stream, network_settings=net_cfg)
+    bg_order = BitgetOrder(os.environ["BITGET_API_KEY"], os.environ["BITGET_API_SECRET"], os.environ["BITGET_API_PASSPHRASE"], margin_cfg, session, bg_stream, network_settings=net_cfg)
 
     # Загружаем спецификации
     async with session.get("https://fapi.binance.com/fapi/v1/exchangeInfo") as r:

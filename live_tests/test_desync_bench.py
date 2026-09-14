@@ -53,20 +53,21 @@ async def main():
     with open(cfg_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
-    active_routes_cfg = cfg.get("active_routes", {})
-    entry_desync_limit = cfg.get("trading_rules", {}).get("entry", {}).get("max_desync_ms", 125)
-    main_loop_delay = cfg.get("MAIN_LOOP_DELAY", 0.0)
+    routes_cfg = cfg["routes"] if "routes" in cfg else cfg.get("active_routes", {})
+    main_loop_delay = cfg["MAIN_LOOP_DELAY"]
 
     print("Configuration:")
-    print(f"  * Current max_desync_ms in cfg.json: {entry_desync_limit} ms")
     print(f"  * MAIN_LOOP_DELAY:                  {main_loop_delay} s")
 
     # 1. Build instrument topology (identical to main.py)
     print("\n[1/4] Building instrument topology via Discovery...")
-    discovery = DiscoveryManager(quote=cfg.get("QUOTE", "USDT"))
+    discovery = DiscoveryManager(quote=cfg["QUOTE"])
     await discovery.build_topology()
 
-    active_routes = [r for r, is_active in active_routes_cfg.items() if is_active]
+    active_routes = [
+        r for r, r_cfg in routes_cfg.items()
+        if (r_cfg.get("active", False) if isinstance(r_cfg, dict) else bool(r_cfg))
+    ]
     print(f"  Active routes: {active_routes}")
     print(f"  Common symbols in pool: {len(discovery.active_pairs_map)}")
 

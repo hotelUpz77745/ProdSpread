@@ -47,12 +47,16 @@ class Main:
         self.engine = TradingEngine(self.cfg, IDX_TO_EX)
         
         # Configs
-        signal_cfg = self.cfg["trading_rules"]["entry"]["signal_filters"]
-        self.entry_desync_limit = signal_cfg["max_desync_ms"]
-        self.exit_desync_limit  = self.cfg["trading_rules"]["exit"]["max_desync_ms"]
-        self.top_n_candidates   = signal_cfg["top_n_candidates"]
-        self.min_signal_dwell_ms = float(signal_cfg["min_signal_dwell_ms"])
-        self.min_top_depth_usd = float(signal_cfg["min_top_depth_usd"])
+        signal_cfg = self.cfg.get("trading_rules", {}).get("entry", {}).get("signal_filters", {})
+        if not signal_cfg and "exchanges" in self.cfg:
+            for ex_c in self.cfg["exchanges"].values():
+                if isinstance(ex_c, dict) and "entry" in ex_c and "signal_filters" in ex_c["entry"]:
+                    signal_cfg = ex_c["entry"]["signal_filters"]
+                    break
+        self.routes_cfg = self.cfg["routes"]
+        self.top_n_candidates   = signal_cfg.get("top_n_candidates", 4)
+        self.min_signal_dwell_ms = float(signal_cfg.get("min_signal_dwell_ms", 0))
+        self.min_top_depth_usd = float(signal_cfg.get("min_top_depth_usd", 50.0))
         self._signal_first_seen = {}
         self.topology_rebuild_interval = self.cfg["topology_rebuild_interval_sec"]
         
@@ -134,6 +138,19 @@ class Main:
             return True
         return False
 
+    def _get_route_desync(self, oracle_ex: str, target_ex: str, is_entry: bool = True) -> Optional[float]:
+        """
+        Returns max_desync_ms threshold for a given route from cfg['routes'].
+        """
+        r1 = f"{oracle_ex}_{target_ex}"
+        r2 = f"{target_ex}_{oracle_ex}"
+        key = "max_desync_ms_entry" if is_entry else "max_desync_ms_exit"
+        if r1 in self.routes_cfg:
+            return float(self.routes_cfg[r1][key])
+        elif r2 in self.routes_cfg:
+            return float(self.routes_cfg[r2][key])
+        return None
+
     def _get_desync_limit(self, limit_cfg, long_ex: str, short_ex: str) -> Optional[float]:
         """
         Returns max_desync_ms threshold for a given route.
@@ -144,9 +161,11 @@ class Main:
             r1 = f"{long_ex}_{short_ex}"
             r2 = f"{short_ex}_{long_ex}"
             if r1 in limit_cfg:
-                return float(limit_cfg[r1])
+                val = limit_cfg[r1]
+                return float(val["max_desync_ms_entry"] if isinstance(val, dict) and "max_desync_ms_entry" in val else val)
             if r2 in limit_cfg:
-                return float(limit_cfg[r2])
+                val = limit_cfg[r2]
+                return float(val["max_desync_ms_entry"] if isinstance(val, dict) and "max_desync_ms_entry" in val else val)
             raise KeyError(f"Neither '{r1}' nor '{r2}' found in max_desync_ms config")
         elif limit_cfg is not None:
             return float(limit_cfg)
@@ -218,12 +237,12 @@ class Main:
         for r_name, r_count in getattr(self.discovery, "route_symbol_counts", {}).items():
             log(f"[Topology] Route {r_name}: {r_count} common symbols", level="INFO")
             
-        active_routes_cfg = self.cfg["active_routes"]
-        self.route_names = list(active_routes_cfg.keys())
+        routes_cfg = self.cfg["routes"]
+        self.route_names = list(routes_cfg.keys())
         self.active_routes_array = np.array([
             [EX_TO_IDX[r.split("_")[0]], EX_TO_IDX[r.split("_")[1]]]
             for r in self.route_names
-            if active_routes_cfg[r]
+            if routes_cfg[r]["active"]
         ], dtype=np.int64)
 
         active_symbols = list(self.discovery.active_pairs_map.keys())
@@ -320,7 +339,7 @@ class Main:
                             target_ts = self.ts[target_ex].get(sym, 0.0)
                             if oracle_ts > 0 and target_ts > 0:
                                 diff_ms = abs(oracle_ts - target_ts) * 1000.0
-                                limit = self._get_desync_limit(self.exit_desync_limit, oracle_ex, target_ex)
+                                limit = self._get_route_desync(oracle_ex, target_ex, is_entry=False)
                                 if limit is not None and diff_ms > limit:
                                     is_exit = False
                                     exit_res["reason"] = f"EXIT_DESYNC_SKIP ({diff_ms:.0f}ms > {limit:.0f}ms)"
@@ -405,12 +424,18 @@ class Main:
                                     continue
                                     
                                 diff_ms = abs(oracle_ts - target_ts) * 1000.0
-                                limit = self._get_desync_limit(self.entry_desync_limit, oracle_ex, target_ex)
+                                limit = self._get_route_desync(oracle_ex, target_ex, is_entry=True)
                                 if limit is not None and diff_ms > limit:
                                     continue
 
                                 if self.pm.can_enter(oracle_ex, target_ex, sym):
-                                    size_usd = float(self.cfg["trading_risks"][target_ex.lower()]["trade_size_usd"])
+                                    target_cfg = self.engine.get_exchange_config(target_ex)
+                                    if "trading_risks" in target_cfg:
+                                        size_usd = float(target_cfg["trading_risks"]["trade_size_usd"])
+                                    elif "trading_risks" in self.cfg and target_ex.lower() in self.cfg["trading_risks"]:
+                                        size_usd = float(self.cfg["trading_risks"][target_ex.lower()]["trade_size_usd"])
+                                    else:
+                                        size_usd = float(self.cfg["exchanges"][target_ex.upper()]["trading_risks"]["trade_size_usd"])
                                     
                                     is_valid_entry, engine_res = self.engine.evaluate_entry_v9(
                                         sym, oracle_book, target_book, oracle_ex, target_ex, size_usd
@@ -419,8 +444,11 @@ class Main:
                                     sig_key = (route_key, sym)
                                     
                                     if is_valid_entry:
-                                        pre_min = self.engine.spread_entry_pre_min if self.engine.spread_entry_pre_min is not None else self.engine.spread_entry_base
-                                        if self.min_signal_dwell_ms > 0:
+                                        pre_min = self.engine.get_spread_entry_pre_min(target_ex)
+                                        if pre_min is None:
+                                            pre_min = self.engine.get_spread_entry_base(target_ex)
+                                        min_dwell = self.engine.get_min_signal_dwell_ms(target_ex)
+                                        if min_dwell > 0:
                                             first_seen = self._signal_first_seen.get(sig_key)
                                             if first_seen is None:
                                                 # Pre-filter: MUST meet spread_entry_pre_min to start dwelling
@@ -428,7 +456,7 @@ class Main:
                                                     self._signal_first_seen[sig_key] = now_mono
                                                 continue
                                             dwell_ms = (now_mono - first_seen) * 1000.0
-                                            if dwell_ms < self.min_signal_dwell_ms:
+                                            if dwell_ms < min_dwell:
                                                 continue
                                             self._signal_first_seen.pop(sig_key, None)
                                         else:

@@ -32,7 +32,7 @@ async def main():
             api_key=os.getenv("BITGET_API_KEY"),
             api_secret=os.getenv("BITGET_API_SECRET"),
             api_passphrase=os.getenv("BITGET_API_PASSPHRASE"),
-            margin_settings=cfg["margin_settings"]["BITGET"],
+            margin_settings=cfg["exchanges"]["BITGET"]["margin_settings"] if "exchanges" in cfg else cfg["margin_settings"]["BITGET"],
             session=session,
             position_stream=None
         )

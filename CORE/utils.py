@@ -1,6 +1,6 @@
 # ============================================================
-# FILE: utils.py
-# ROLE: Helper utilities, async timers.
+# FILE: CORE/utils.py
+# ROLE: Helper utilities, async timers and timestamp validation.
 # ============================================================
 from datetime import datetime
 import pytz

@@ -71,15 +71,28 @@ class PositionFSM:
         self.state = PositionState.IDLE
         self.engine = TradingEngine(self.cfg, {0:"BINANCE",1:"KUCOIN",2:"OKX",3:"BITGET"})
         
-        entry_cfg = self.cfg["trading_rules"]["entry"]
-        target_entry_cfg = entry_cfg["target_entry_logic"] if "target_entry_logic" in entry_cfg else entry_cfg["parallel_entry_logic"]
         ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
         
         self.q_entry_error = float(ban_q["entry_error"])
         self.q_zero_fill = float(ban_q["zero_fill"])
         
-        target_exit_cfg = self.cfg["trading_rules"]["exit"]["target_exit"]
-        decay_map = target_exit_cfg["decay_map"]
+        target_ex_upper = self.target_ex.upper()
+        if "exchanges" in self.cfg and target_ex_upper in self.cfg["exchanges"]:
+            ex_sec = self.cfg["exchanges"][target_ex_upper]
+            if "exit" in ex_sec and "target_exit" in ex_sec["exit"]:
+                target_exit_cfg = ex_sec["exit"]["target_exit"]
+            elif "target_exit" in ex_sec:
+                target_exit_cfg = ex_sec["target_exit"]
+            else:
+                target_exit_cfg = {}
+        elif "exit" in self.cfg.get("trading_rules", {}) and "target_exit" in self.cfg["trading_rules"]["exit"]:
+            target_exit_cfg = self.cfg["trading_rules"]["exit"]["target_exit"]
+        elif "target_exit" in self.cfg.get("trading_rules", {}):
+            target_exit_cfg = self.cfg["trading_rules"]["target_exit"]
+        else:
+            target_exit_cfg = self.cfg.get("target_exit", {})
+            
+        decay_map = target_exit_cfg.get("decay_map", [])
         derived_ttl = None
         for rule in decay_map:
             ratio = rule["min_profit_ratio"] if "min_profit_ratio" in rule else None
@@ -95,50 +108,60 @@ class PositionFSM:
             self.ttl_sec = float(decay_map[-1]["after_sec"])
         else:
             self.ttl_sec = 60.0
-        self.exit_order_type = target_exit_cfg["exit_order_type"]
-        self.exit_slip_ratio = float(target_exit_cfg["exit_slip_ratio"])
-        ioc_timeout = target_exit_cfg.get("ioc_close_confirm_timeout_sec", target_exit_cfg.get("ioc_chase_timeout_sec", 0.2))
-        self.ioc_close_confirm_timeout_sec = float(ioc_timeout)
+        self.exit_order_type = target_exit_cfg.get("exit_order_type", "MARKET")
+        self.exit_slip_ratio = float(target_exit_cfg.get("exit_slip_ratio", 0.0010))
+        if "ioc_close_confirm_timeout_sec" in target_exit_cfg:
+            self.ioc_close_confirm_timeout_sec = float(target_exit_cfg["ioc_close_confirm_timeout_sec"])
+        elif "ioc_chase_timeout_sec" in target_exit_cfg:
+            self.ioc_close_confirm_timeout_sec = float(target_exit_cfg["ioc_chase_timeout_sec"])
+        else:
+            self.ioc_close_confirm_timeout_sec = 0.2
         self.ioc_chase_timeout_sec = self.ioc_close_confirm_timeout_sec
 
-        
-        timeout_cfg = target_entry_cfg["fill_confirm_timeout_sec"]
-        pair_key1 = f"{self.target_ex}_{self.oracle_ex}".upper()
-        pair_key2 = f"{self.oracle_ex}_{self.target_ex}".upper()
-        if isinstance(timeout_cfg, dict):
-            if pair_key1 in timeout_cfg:
-                self.fill_confirm_timeout = float(timeout_cfg[pair_key1])
-            elif pair_key2 in timeout_cfg:
-                self.fill_confirm_timeout = float(timeout_cfg[pair_key2])
-            else:
-                self.fill_confirm_timeout = 0.5
+        route_info = None
+        if "routes" in self.cfg:
+            for rk in [self.route, f"{self.target_ex}_{self.oracle_ex}", f"{self.oracle_ex}_{self.target_ex}"]:
+                if rk in self.cfg["routes"]:
+                    route_info = self.cfg["routes"][rk]
+                    break
+        if route_info and isinstance(route_info, dict):
+            self.close_confirm_timeout = float(route_info.get("market_close_confirm_timeout_sec", 1.8))
+            self.fill_confirm_timeout = float(route_info.get("fill_confirm_timeout_sec", 0.3))
         else:
-            self.fill_confirm_timeout = float(timeout_cfg)
+            self.close_confirm_timeout = 1.8
+            self.fill_confirm_timeout = 0.3
         
-        self.entry_api_timeout = float(target_entry_cfg["entry_api_timeout_sec"])
+        if "exchanges" in self.cfg and target_ex_upper in self.cfg["exchanges"] and "entry" in self.cfg["exchanges"][target_ex_upper]:
+            entry_cfg = self.cfg["exchanges"][target_ex_upper]["entry"]
+        elif "entry" in self.cfg.get("trading_rules", {}):
+            entry_cfg = self.cfg["trading_rules"]["entry"]
+        else:
+            entry_cfg = {}
+            
+        if "entry_api_timeout_sec" in entry_cfg:
+            self.entry_api_timeout = float(entry_cfg["entry_api_timeout_sec"])
+        elif "target_entry_logic" in self.cfg.get("exchanges", {}).get(target_ex_upper, {}):
+            self.entry_api_timeout = float(self.cfg["exchanges"][target_ex_upper]["target_entry_logic"]["entry_api_timeout_sec"])
+        elif "target_entry_logic" in entry_cfg:
+            self.entry_api_timeout = float(entry_cfg["target_entry_logic"]["entry_api_timeout_sec"])
+        else:
+            self.entry_api_timeout = 5.0
         
-        self.entry_slip_ratio = float(self.cfg["trading_risks"][self.target_ex.lower()]["limit_slip_ratio"])
+        if "exchanges" in self.cfg and target_ex_upper in self.cfg["exchanges"] and "trading_risks" in self.cfg["exchanges"][target_ex_upper]:
+            self.entry_slip_ratio = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"]["limit_slip_ratio"])
+        elif "trading_risks" in self.cfg:
+            ex_key = self.target_ex.lower() if self.target_ex.lower() in self.cfg["trading_risks"] else target_ex_upper
+            if ex_key in self.cfg["trading_risks"]:
+                self.entry_slip_ratio = float(self.cfg["trading_risks"][ex_key]["limit_slip_ratio"])
+            else:
+                self.entry_slip_ratio = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"]["limit_slip_ratio"])
+        else:
+            self.entry_slip_ratio = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"]["limit_slip_ratio"])
         
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
         self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
         self.ws_verify_timeout = float(unwind_cfg["ws_verify_timeout_sec"])
         self.unwind_retry_pause = float(unwind_cfg["retry_pause_sec"])
-        
-        exit_cfg = self.cfg["trading_rules"]["exit"]
-        close_timeout_cfg = (
-            exit_cfg["market_close_confirm_timeout_sec"]
-            if "market_close_confirm_timeout_sec" in exit_cfg
-            else exit_cfg["close_confirm_timeout_sec"]
-        )
-        if isinstance(close_timeout_cfg, dict):
-            if pair_key1 in close_timeout_cfg:
-                self.close_confirm_timeout = float(close_timeout_cfg[pair_key1])
-            elif pair_key2 in close_timeout_cfg:
-                self.close_confirm_timeout = float(close_timeout_cfg[pair_key2])
-            else:
-                self.close_confirm_timeout = 1.8
-        else:
-            self.close_confirm_timeout = float(close_timeout_cfg)
         
         ban_cfg = self.cfg["trading_rules"]["ban_rules"]
         if "perm_ban_loss_ratio" in ban_cfg:
@@ -226,7 +249,17 @@ class PositionFSM:
         self._set_state(PositionState.SUBMITTING)
         
         entry_price = self.engine_res["entry_price"]
-        size_usd = float(self.cfg["trading_risks"][self.target_ex.lower()]["trade_size_usd"])
+        target_ex_upper = self.target_ex.upper()
+        if "exchanges" in self.cfg and target_ex_upper in self.cfg["exchanges"] and "trading_risks" in self.cfg["exchanges"][target_ex_upper]:
+            size_usd = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"]["trade_size_usd"])
+        elif "trading_risks" in self.cfg:
+            ex_key = self.target_ex.lower() if self.target_ex.lower() in self.cfg["trading_risks"] else target_ex_upper
+            if ex_key in self.cfg["trading_risks"]:
+                size_usd = float(self.cfg["trading_risks"][ex_key]["trade_size_usd"])
+            else:
+                size_usd = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"]["trade_size_usd"])
+        else:
+            size_usd = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"]["trade_size_usd"])
         
         planned_profit = float(self.engine_res.get("net_spread", 0.0))
         slip = self.entry_slip_ratio
@@ -302,7 +335,17 @@ class PositionFSM:
         self.open_time = time.time()
         self.open_time_ms = int(self.open_time * 1000)
         
-        target_fee = float(self.cfg["trading_risks"][self.target_ex.lower()]["taker_fee"])
+        target_ex_upper = self.target_ex.upper()
+        if "exchanges" in self.cfg and target_ex_upper in self.cfg["exchanges"] and "trading_risks" in self.cfg["exchanges"][target_ex_upper]:
+            target_fee = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"]["taker_fee"])
+        elif "trading_risks" in self.cfg:
+            ex_key = self.target_ex.lower() if self.target_ex.lower() in self.cfg["trading_risks"] else target_ex_upper
+            if ex_key in self.cfg["trading_risks"]:
+                target_fee = float(self.cfg["trading_risks"][ex_key]["taker_fee"])
+            else:
+                target_fee = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"]["taker_fee"])
+        else:
+            target_fee = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"]["taker_fee"])
         
         expected_price = self.engine_res.get("entry_price", filled_price)
         slippage = 0.0
@@ -313,7 +356,20 @@ class PositionFSM:
                 slippage = (expected_price - filled_price) / expected_price
         actual_net_spread = self.engine_res.get("net_spread", 0.0) - slippage
         
-        target_exit_cfg = self.cfg["trading_rules"]["exit"]["target_exit"]
+        if "exchanges" in self.cfg and target_ex_upper in self.cfg["exchanges"]:
+            ex_sec = self.cfg["exchanges"][target_ex_upper]
+            if "exit" in ex_sec and "target_exit" in ex_sec["exit"]:
+                target_exit_cfg = ex_sec["exit"]["target_exit"]
+            elif "target_exit" in ex_sec:
+                target_exit_cfg = ex_sec["target_exit"]
+            else:
+                target_exit_cfg = {}
+        elif "exit" in self.cfg.get("trading_rules", {}) and "target_exit" in self.cfg["trading_rules"]["exit"]:
+            target_exit_cfg = self.cfg["trading_rules"]["exit"]["target_exit"]
+        elif "target_exit" in self.cfg.get("trading_rules", {}):
+            target_exit_cfg = self.cfg["trading_rules"]["target_exit"]
+        else:
+            target_exit_cfg = {}
         min_spread_entry = float(target_exit_cfg["min_spread_entry"]) if "min_spread_entry" in target_exit_cfg else 0.0030
         use_emergency = actual_net_spread < min_spread_entry
         

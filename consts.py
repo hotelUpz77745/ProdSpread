@@ -20,7 +20,8 @@ MAIN_LOOP_DELAY = cfg["MAIN_LOOP_DELAY"]
 MAX_RECONNECT_ATTEMPTS = 5
 # Strategy settings
 TRADING_RULES = cfg["trading_rules"]
-TRADING_RISKS_CFG = cfg["trading_risks"]
+TRADING_RISKS_CFG = cfg["trading_risks"] if "trading_risks" in cfg else {}
+MARGIN_SETTINGS = cfg["margin_settings"] if "margin_settings" in cfg else {}
 # Logging settings
 LOGGING_CFG = cfg["logging"]
 LOG_DEBUG = LOGGING_CFG["debug"]
@@ -33,4 +34,4 @@ LOG_TO_FILE = LOGGING_CFG["log_to_file"]
 TIME_ZONE = LOGGING_CFG["TIME_ZONE"]
 
 VOLUME_FILTERS = cfg["volume_filters"]
-ACTIVE_ROUTES = cfg["active_routes"]
+ACTIVE_ROUTES = cfg["routes"]

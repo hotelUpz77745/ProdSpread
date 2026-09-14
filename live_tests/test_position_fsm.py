@@ -17,6 +17,13 @@ from CORE.position_fsm import PositionFSM, PositionState
 class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.cfg = {
+            "routes": {
+                "BINANCE_BITGET": {
+                    "active": True,
+                    "fill_confirm_timeout_sec": 0.05,
+                    "market_close_confirm_timeout_sec": 0.05
+                }
+            },
             "trading_rules": {
                 "entry": {
                     "static_detector": {
@@ -61,20 +68,36 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
                     "ws_verify_timeout_sec": 0.02
                 }
             },
-            "trading_risks": {
-                "bitget": {
-                    "trade_size_usd": 100.0,
-                    "limit_slip_ratio": 0.0025,
-                    "taker_fee": 0.0006,
-                    "volatility_discount_entry": 0.8,
-                    "volatility_discount_exit": 0.85
+            "exchanges": {
+                "BINANCE": {
+                    "trading_risks": {
+                        "trade_size_usd": 100.0,
+                        "limit_slip_ratio": 0.0025,
+                        "taker_fee": 0.0005,
+                        "volatility_discount_entry": 0.8,
+                        "volatility_discount_exit": 0.85
+                    },
+                    "target_entry_logic": {"entry_api_timeout_sec": 5.0},
+                    "target_exit": {
+                        "exit_order_type": "LIMIT_IOC",
+                        "exit_slip_ratio": 0.001,
+                        "decay_map": [{"after_sec": 60}]
+                    }
                 },
-                "binance": {
-                    "trade_size_usd": 100.0,
-                    "limit_slip_ratio": 0.0025,
-                    "taker_fee": 0.0005,
-                    "volatility_discount_entry": 0.8,
-                    "volatility_discount_exit": 0.85
+                "BITGET": {
+                    "trading_risks": {
+                        "trade_size_usd": 100.0,
+                        "limit_slip_ratio": 0.0025,
+                        "taker_fee": 0.0006,
+                        "volatility_discount_entry": 0.8,
+                        "volatility_discount_exit": 0.85
+                    },
+                    "target_entry_logic": {"entry_api_timeout_sec": 5.0},
+                    "target_exit": {
+                        "exit_order_type": "LIMIT_IOC",
+                        "exit_slip_ratio": 0.001,
+                        "decay_map": [{"after_sec": 60}]
+                    }
                 }
             }
         }
@@ -201,7 +224,7 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
             "fill_confirm_poll_interval_sec": 0.0,
             "entry_api_timeout_sec": 1.0
         }
-        cfg_custom["trading_risks"]["bitget"]["limit_slip_ratio"] = 0.0015
+        cfg_custom["exchanges"]["BITGET"]["trading_risks"]["limit_slip_ratio"] = 0.0015
         engine_res = {
             "side": "LONG",
             "entry_price": 50000.0,
@@ -238,7 +261,7 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
             "fill_confirm_poll_interval_sec": 0.0,
             "entry_api_timeout_sec": 1.0
         }
-        cfg_static["trading_risks"]["bitget"]["limit_slip_ratio"] = 0.0020
+        cfg_static["exchanges"]["BITGET"]["trading_risks"]["limit_slip_ratio"] = 0.0020
         
         # Test 1: LONG with 0.0020 (0.20%) slip regardless of net_spread
         engine_res1 = {

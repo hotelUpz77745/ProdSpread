@@ -60,8 +60,12 @@ class TestSingleLegAndBan(unittest.IsolatedAsyncioTestCase):
 
     async def test_circuit_breaker_hard_stop_loss(self):
         cfg = copy.deepcopy(self.cfg)
-        cfg["trading_rules"]["exit"]["target_exit"]["stop_loss_ratio"] = 0.0050
-        cfg["trading_rules"]["exit"]["target_exit"].pop("stop_loss_pct", None)
+        if "exchanges" in cfg and "BITGET" in cfg["exchanges"] and "exit" in cfg["exchanges"]["BITGET"]:
+            cfg["exchanges"]["BITGET"]["exit"]["target_exit"]["stop_loss_ratio"] = 0.0050
+            cfg["exchanges"]["BITGET"]["exit"]["target_exit"].pop("stop_loss_pct", None)
+        elif "trading_rules" in cfg and "exit" in cfg["trading_rules"]:
+            cfg["trading_rules"]["exit"]["target_exit"]["stop_loss_ratio"] = 0.0050
+            cfg["trading_rules"]["exit"]["target_exit"].pop("stop_loss_pct", None)
         
         engine = TradingEngine(cfg, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
         
@@ -93,7 +97,8 @@ class TestSingleLegAndBan(unittest.IsolatedAsyncioTestCase):
         # Net yield = -0.80% (exceeds perm_ban_loss_pct 0.75%)
         net_yield = -0.0080
         net_usd = -0.20
-        perm_ban_ratio = float(cfg["trading_rules"]["ban_rules"].get("perm_ban_loss_ratio", cfg["trading_rules"]["ban_rules"].get("perm_ban_loss_pct")))
+        ban_rules = cfg.get("ban_rules") or cfg.get("trading_rules", {}).get("ban_rules", {})
+        perm_ban_ratio = float(ban_rules["perm_ban_loss_ratio"]) if "perm_ban_loss_ratio" in ban_rules else float(ban_rules["perm_ban_loss_pct"])
         
         if abs(net_yield) >= perm_ban_ratio:
             executor.ban_coin("TOXICCOIN", reason=f"Severe loss trade, Net: {net_usd:+.4f}$ ({net_yield*100:+.2f}%)", duration_sec=None)
@@ -104,7 +109,10 @@ class TestSingleLegAndBan(unittest.IsolatedAsyncioTestCase):
     async def test_consecutive_losses_permanent_ban_in_executor(self):
         """Two consecutive losses on a coin trigger permanent ban."""
         cfg = copy.deepcopy(self.cfg)
-        cfg["trading_rules"]["ban_rules"]["max_consecutive_losses"] = 2
+        if "ban_rules" in cfg:
+            cfg["ban_rules"]["max_consecutive_losses"] = 2
+        if "trading_rules" in cfg and "ban_rules" in cfg["trading_rules"]:
+            cfg["trading_rules"]["ban_rules"]["max_consecutive_losses"] = 2
         executor = ExecutorProcess(port=9999, cfg=cfg)
 
         # 1st loss (small loss, -0.20%)
