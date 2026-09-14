@@ -63,7 +63,7 @@
      * `test_fsm_transitions.py`: **5/5 PASS** (полный налив, нулевой налив, рассинхрон с автосбросом, защита от моргания REST, плановое закрытие).
      * Суммарно: **37 тестов пройдено, 0 ошибок**. -->
 
-============= v9 ===========
+<!-- ============= v9 ===========
 
 1. Переходим на одноногий статический арбитраж.
 
@@ -374,4 +374,4 @@ class ImpulseDetector:
 - Устранены все жестко зашитые константы: все параметры (включая параметры детектора стояка, тайминги, уровни глубины) вынесены в `cfg.json`.
 - Заголовок с путем файла и его ролью добавлен во все модифицированные модули (`math_core.py`, `trading_engine.py`, `position_fsm.py`, `orders.py` и сокеты).
 - Параметр `"stop_loss_pct": null` сохранен без изменений согласно прямому указанию пользователя.
-- Все 67+ юнит- и интеграционных тестов во всех наборах (`test_impulse_detector.py`, `test_trading_engine.py`, `test_position_fsm.py`, `test_all_local_pipeline.py`, `test_orders.py`, `test_suite.py`, `test_fsm_transitions.py`) проходят со 100% успехом (0 ошибок).
+- Все 67+ юнит- и интеграционных тестов во всех наборах (`test_impulse_detector.py`, `test_trading_engine.py`, `test_position_fsm.py`, `test_all_local_pipeline.py`, `test_orders.py`, `test_suite.py`, `test_fsm_transitions.py`) проходят со 100% успехом (0 ошибок). -->

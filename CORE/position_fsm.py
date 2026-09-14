@@ -331,8 +331,8 @@ class PositionFSM:
                 slippage = (expected_price - filled_price) / expected_price
         actual_net_spread = self.engine_res.get("net_spread", 0.0) - slippage
         
-        target_exit_cfg = self.cfg.get("trading_rules", {}).get("target_exit", {})
-        min_spread_entry = float(target_exit_cfg.get("min_spread_entry", 0.0030))
+        target_exit_cfg = self.cfg["trading_rules"]["exit"]["target_exit"]
+        min_spread_entry = float(target_exit_cfg["min_spread_entry"]) if "min_spread_entry" in target_exit_cfg else 0.0030
         use_emergency = actual_net_spread < min_spread_entry
         
         self.exec_res = {

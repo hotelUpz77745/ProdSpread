@@ -43,6 +43,7 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
                         "exit_order_type": "LIMIT_IOC",
                         "exit_slip_ratio": 0.001,
                         "ioc_chase_timeout_sec": 0.2,
+                        "min_spread_entry": 0.0030,
                         "decay_map": [
                             {"step": 0, "after_sec": 0, "min_profit_ratio": 0.8},
                             {"step": 1, "after_sec": 60, "min_profit_ratio": -999.0}

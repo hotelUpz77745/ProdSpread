@@ -49,7 +49,7 @@
             "max_positions": 1
         },
         "bitget": {
-            "paper_start_balance": 11.45,
+            "paper_start_balance": 9.71,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0006,
             "limit_slip_ratio": 0.0015,
@@ -66,8 +66,8 @@
     },
     "active_routes": {
         "BINANCE_KUCOIN": true,
-        "BINANCE_OKX": false,
         "BINANCE_BITGET": true,
+        "BINANCE_OKX": false,
         "KUCOIN_OKX": false,
         "KUCOIN_BITGET": false,
         "OKX_BITGET": false
@@ -114,10 +114,10 @@
                 "enabled_desc": "Включение детектора стоячей ноги. Блокирует вход, если стоячая нога отклоняется от скользящего среднего ряда цен.",
                 "static_leg": "TARGET",
                 "static_leg_desc": "Стоячая нога: 'TARGET' для Кейса Б (Оракул летит, Мишень стоит); 'ORACLE' для Кейса В (Мишень летит, Оракул стоит).",
-                "max_static_leg_ratio": 0.0020,
-                "max_static_leg_ratio_desc": "Максимально допустимое отклонение текущей цены от среднего буфера в долях от 1 (0.0020 = 0.20%).",
-                "buffer_window_sec": 0.25,
-                "buffer_window_sec_desc": "Окно накопления цен и замера среднего (сек). 0.25 с = 250 мс."
+                "max_static_leg_ratio": 0.0015,
+                "max_static_leg_ratio_desc": "Максимально допустимое отклонение текущей цены от среднего буфера в долях от 1 (например, 0.0015 = 0.15%).",
+                "buffer_window_sec": 0.35,
+                "buffer_window_sec_desc": "Окно накопления цен и замера среднего (сек). 0.35 с = 350 мс (~5-8 тиков)."
             },
             "signal_filters": {
                 "spread_entry_pre": [
@@ -184,7 +184,7 @@
             "market_close_confirm_timeout_sec_desc": "Макс. время ожидания (сек) подтверждения закрытия позиции по WS при выходе ордером MARKET.",
             "target_exit": {
                 "desc": "Управление выходом из одноногой позиции по локальному профиту на Мишени (v9).",
-                "stop_loss_ratio": null,
+                "stop_loss_ratio": 0.0050,
                 "stop_loss_ratio_desc": "Макс. допустимый убыток в долях от 1 (например, 0.0050 = 0.50%). При достижении — немедленный MARKET выход. Установить null для отключения. (Если задается stop_loss_pct, значение строго в процентах от 100: например, 0.50 = 0.50%).",
                 "exit_order_type": "MARKET",
                 "exit_order_type_desc": "Тип ордера на выход: MARKET (рекомендуется для сайзов до 300$, исполнение в 1 RTT без проскальзывания и зависаний) или LIMIT_IOC (для сайзов от 300$ до 3000$ как Cap-Market с 200мс фоллбеком в маркет). Свыше 3000$ требуется алгоритмический слайсинг/чейзинг.",
@@ -198,12 +198,12 @@
                     {
                         "step": 0,
                         "after_sec": 0,
-                        "min_profit_ratio": 0.8
+                        "min_profit_ratio": 0.5
                     },
                     {
                         "step": 1,
                         "after_sec": 3,
-                        "min_profit_ratio": 0.4
+                        "min_profit_ratio": 0.25
                     },
                     {
                         "step": 2,

@@ -74,6 +74,7 @@ def get_base_cfg():
                     "exit_slip_ratio": 0.001,
                     "ioc_chase_timeout_sec": 0.2,
                     "stop_loss_ratio": 0.015,
+                    "min_spread_entry": 0.0030,
                     "decay_map": [
                         {"step": 1, "after_sec": 0, "target_spread": 0.005},
                         {"step": 2, "after_sec": 10, "target_spread": 0.002},
