@@ -40,14 +40,30 @@ class DummyAiohttp:
         CLOSED = 2
         ERROR = 3
 
-sys.modules.setdefault('aiohttp', DummyAiohttp())
-sys.modules.setdefault('dotenv', MagicMock())
-sys.modules.setdefault('pytz', DummyPytz())
-sys.modules.setdefault('pandas', MagicMock())
-sys.modules.setdefault('matplotlib', MagicMock())
-sys.modules.setdefault('matplotlib.pyplot', MagicMock())
-sys.modules.setdefault('numpy', MagicMock())
-sys.modules.setdefault('numba', MagicMock())
+try:
+    import aiohttp
+except ImportError:
+    sys.modules.setdefault('aiohttp', DummyAiohttp())
+
+try:
+    import dotenv
+except ImportError:
+    sys.modules.setdefault('dotenv', MagicMock())
+
+try:
+    import pytz
+except ImportError:
+    sys.modules.setdefault('pytz', DummyPytz())
+
+try:
+    import numpy
+except ImportError:
+    sys.modules.setdefault('numpy', MagicMock())
+
+try:
+    import numba
+except ImportError:
+    sys.modules.setdefault('numba', MagicMock())
 
 from consts import load_config
 from API.orders import round_by_step, BinanceOrder, KucoinOrder

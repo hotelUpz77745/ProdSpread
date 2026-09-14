@@ -377,9 +377,18 @@ class StaticDetector:
             remaining = cool_deadline - ts_mono
             return False, f"LEG_COOLING_OFF (remaining {remaining:.3f}s)", 0.0
             
+        ts_buf = self._ts_buffers.get(key)
         price_buf = self._price_buffers.get(key)
-        if not price_buf or len(price_buf) < 1:
+        if not price_buf or not ts_buf:
             # Первый тик / пустой буфер — 1-е значение тоже значение
+            return True, "FIRST_TICK_BASELINE", 0.0
+
+        cutoff = ts_mono - self.buffer_window_sec
+        while ts_buf and ts_buf[0] < cutoff:
+            ts_buf.popleft()
+            price_buf.popleft()
+
+        if len(price_buf) < 1:
             return True, "FIRST_TICK_BASELINE", 0.0
             
         # 2. Среднее арифметическое накопленного ряда на Си (math.fsum)
