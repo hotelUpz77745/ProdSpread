@@ -16,7 +16,14 @@ class SessionManager:
 
     async def get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            connector = aiohttp.TCPConnector(
+                limit=100,
+                limit_per_host=20,
+                keepalive_timeout=60.0,
+                enable_cleanup_closed=True,
+                ttl_dns_cache=600
+            )
+            self._session = aiohttp.ClientSession(connector=connector)
         return self._session
 
     async def close_all(self):

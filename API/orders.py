@@ -94,6 +94,7 @@ class BinanceOrder:
                     if resp.status == 200:
                         data = await resp.json()
                         self.symbol_info = data.get("symbols", [])
+                        self.symbol_info_map = {item["symbol"]: item for item in self.symbol_info if "symbol" in item}
                         log("[BinanceOrder] Exchange specs updated.", level="INFO")
             except asyncio.CancelledError:
                 break
@@ -163,7 +164,7 @@ class BinanceOrder:
         if not self.symbol_info:
             raise ValueError(f"[{symbol}] Exchange specs not loaded yet")
             
-        symbol_data = next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
+        symbol_data = getattr(self, "symbol_info_map", {}).get(symbol) or next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
         if not symbol_data:
             raise ValueError(f"[{symbol}] Precision rules not found in specs")
             
@@ -507,6 +508,7 @@ class KucoinOrder:
                         data = await resp.json()
                         if data.get("code") == "200000":
                             self.symbol_info = data.get("data", [])
+                            self.symbol_info_map = {item["symbol"]: item for item in self.symbol_info if "symbol" in item}
                             log("[KucoinOrder] Exchange specs updated.", level="INFO")
             except asyncio.CancelledError:
                 break
@@ -572,7 +574,7 @@ class KucoinOrder:
         if not self.symbol_info:
             raise ValueError(f"[{symbol}] Exchange specs not loaded yet")
             
-        symbol_data = next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
+        symbol_data = getattr(self, "symbol_info_map", {}).get(symbol) or next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
         if not symbol_data:
             raise ValueError(f"[{symbol}] Precision rules not found in specs")
             
@@ -1080,6 +1082,7 @@ class BitgetOrder:
                 data = await resp.json()
                 if data.get("code") == "00000":
                     self.symbol_info = data.get("data", [])
+                    self.symbol_info_map = {item["symbol"]: item for item in self.symbol_info if "symbol" in item}
         except Exception as e:
             log(f"[BitgetOrder] Failed to update symbol info: {e}", level="ERROR")
 
@@ -1090,7 +1093,7 @@ class BitgetOrder:
         if not self.symbol_info:
             raise ValueError(f"[{symbol}] Exchange specs not loaded yet")
             
-        symbol_data = next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
+        symbol_data = getattr(self, "symbol_info_map", {}).get(symbol) or next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
         if not symbol_data:
             raise ValueError(f"[{symbol}] Precision rules not found in specs")
             
@@ -1109,10 +1112,7 @@ class BitgetOrder:
             raise ValueError(f"[{symbol}] Reference price is required")
         if not self.symbol_info:
             await self.update_symbol_info()
-        if not self.symbol_info:
-            raise ValueError(f"[{symbol}] Specs not loaded")
-            
-        symbol_data = next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
+        symbol_data = getattr(self, "symbol_info_map", {}).get(symbol) or next((item for item in self.symbol_info if item.get('symbol') == symbol), None)
         if not symbol_data:
             raise ValueError(f"[{symbol}] Precision rules not found")
             
