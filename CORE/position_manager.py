@@ -171,6 +171,8 @@ class PositionManager:
             "qty": exec_res.get("qty", 0.0),
             "executed_volume_rate": exec_res.get("executed_volume_rate", 1.0),
             "net_spread": exec_res.get("net_spread", 0.0),
+            "use_emergency_decay": exec_res.get("use_emergency_decay", False),
+            "emergency_since": exec_res.get("emergency_since"),
             "open_time": open_time
         })
         

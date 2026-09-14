@@ -259,5 +259,93 @@ class TestTradingEngine(unittest.TestCase):
         self.assertFalse(should_exit)
         self.assertEqual(res["reason"], "HOLD")
 
+    def test_evaluate_exit_v9_emergency_decay_breakeven(self):
+        # Long entered at 50000. Oracle was high, but now oracle bid drops to 50050.
+        # Gross spread to Oracle: (50050 - 50000) / 50050 = 0.000999 (0.10%)
+        # Net spread: 0.10% - 2 * 0.04% = 0.02% < min_spread_entry (0.30%)
+        # Spread has evaporated!
+        # Target book bid is 50050 (giving +0.02% net PnL).
+        # In emergency decay map step 0 (min_profit_ratio: 0.0), target is 0.0.
+        # Since net_pnl_pct (0.02%) >= 0.0, it should exit via EMERGENCY_BREAKEVEN!
+        oracle_book = {
+            "bids": [[50050.0, 5.0]],
+            "asks": [[50055.0, 5.0]]
+        }
+        target_book = {
+            "bids": [[50050.0, 5.0]],
+            "asks": [[50055.0, 5.0]]
+        }
+        should_exit, res = self.engine.evaluate_exit_v9(
+            target_book=target_book,
+            target_ex="BITGET",
+            entry_price=50000.0,
+            qty=0.02,
+            side="LONG",
+            duration_sec=1.0,
+            actual_net_spread_entry=0.01,
+            oracle_book=oracle_book,
+            oracle_ex="BINANCE"
+        )
+        self.assertTrue(should_exit)
+        self.assertEqual(res["reason"], "EMERGENCY_BREAKEVEN")
+        self.assertTrue(res["use_emergency_decay"])
+        self.assertIsNotNone(res["oracle_net_spread"])
+        self.assertLess(res["oracle_net_spread"], self.engine.min_spread_entry)
+
+    def test_evaluate_exit_v9_emergency_ttl(self):
+        # When emergency mode is active and duration exceeds emergency_ttl_sec (3.0s)
+        oracle_book = {
+            "bids": [[49990.0, 5.0]],
+            "asks": [[50000.0, 5.0]]
+        }
+        target_book = {
+            "bids": [[49980.0, 5.0]],
+            "asks": [[49990.0, 5.0]]
+        }
+        should_exit, res = self.engine.evaluate_exit_v9(
+            target_book=target_book,
+            target_ex="BITGET",
+            entry_price=50000.0,
+            qty=0.02,
+            side="LONG",
+            duration_sec=1.0,
+            actual_net_spread_entry=0.01,
+            oracle_book=oracle_book,
+            oracle_ex="BINANCE",
+            is_emergency=True,
+            emergency_duration_sec=3.5
+        )
+        self.assertTrue(should_exit)
+        self.assertEqual(res["reason"], "EMERGENCY_TTL")
+        self.assertTrue(res["use_emergency_decay"])
+        self.assertIsNotNone(res["net_pnl_pct"])
+        self.assertIsNotNone(res["exit_price"])
+
+    def test_evaluate_exit_v9_emergency_short(self):
+        # Short entered at 50000. Oracle ask pumps to 50020.
+        # Gross spread to Oracle: (50000 - 50020) / 50000 = -0.04% < 0.30%
+        # Spread has evaporated!
+        oracle_book = {
+            "bids": [[50015.0, 5.0]],
+            "asks": [[50020.0, 5.0]]
+        }
+        target_book = {
+            "bids": [[50000.0, 5.0]],
+            "asks": [[50010.0, 5.0]]
+        }
+        should_exit, res = self.engine.evaluate_exit_v9(
+            target_book=target_book,
+            target_ex="BITGET",
+            entry_price=50000.0,
+            qty=0.02,
+            side="SHORT",
+            duration_sec=1.0,
+            actual_net_spread_entry=0.01,
+            oracle_book=oracle_book,
+            oracle_ex="BINANCE"
+        )
+        self.assertTrue(res["use_emergency_decay"])
+        self.assertLess(res["oracle_net_spread"], self.engine.min_spread_entry)
+
 if __name__ == '__main__':
     unittest.main()

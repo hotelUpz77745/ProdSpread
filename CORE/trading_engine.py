@@ -95,6 +95,21 @@ class TradingEngine:
             self.ttl_sec = float(self.decay_map[-1]["after_sec"])
         else:
             self.ttl_sec = 60.0
+            
+        # v9: emergency decay params for deflated/evaporated spread
+        self.min_spread_entry = float(target_exit_cfg["min_spread_entry"]) if "min_spread_entry" in target_exit_cfg else 0.0030
+        self.emergency_decay_map = target_exit_cfg["emergency_decay_map"] if "emergency_decay_map" in target_exit_cfg else [
+            {"step": 0, "after_sec": 0, "min_profit_ratio": 0.0},
+            {"step": 1, "after_sec": 3, "min_profit_ratio": -999.0}
+        ]
+        derived_emergency_ttl = None
+        for rule in self.emergency_decay_map:
+            ratio = rule.get("min_profit_ratio")
+            spread = rule.get("target_spread")
+            if (ratio is None and spread is None) or (isinstance(ratio, (int, float)) and ratio <= -900.0):
+                derived_emergency_ttl = float(rule["after_sec"])
+                break
+        self.emergency_ttl_sec = derived_emergency_ttl if derived_emergency_ttl is not None else 3.0
         
         # Backward compatibility for old configs
         if "synthetic_exit" in signal_cfg:
@@ -340,59 +355,102 @@ class TradingEngine:
         qty: float,
         side: str,
         duration_sec: float,
-        actual_net_spread_entry: float
+        actual_net_spread_entry: float,
+        oracle_book: Optional[dict] = None,
+        oracle_ex: Optional[str] = None,
+        is_emergency: bool = False,
+        emergency_duration_sec: Optional[float] = None
     ) -> Tuple[bool, Dict[str, Any]]:
         """
-        v9: Выход по локальному профиту/стопу/TTL на Мишени.
+        v9: Выход по локальному профиту/стопу/TTL на Мишени с контролем остаточного спреда к Оракулу.
+        Если спред относительно Оракула сдулся ниже min_spread_entry -> переход на emergency_decay_map.
         """
+        target_fee = self._get_fee(target_ex)
+        
+        # 1. Расчет реального текущего спреда относительно живого стакана Oracle
+        current_oracle_net_spread = None
+        spread_evaporated = False
+        
+        if oracle_book:
+            o_bids = oracle_book.get("bids", [])
+            o_asks = oracle_book.get("asks", [])
+            if o_bids and o_asks:
+                if side == "LONG":
+                    oracle_p = float(o_bids[0][0])
+                    gross_spread = (oracle_p - entry_price) / oracle_p if oracle_p > 0 else 0.0
+                else:
+                    oracle_p = float(o_asks[0][0])
+                    gross_spread = (entry_price - oracle_p) / entry_price if entry_price > 0 else 0.0
+                
+                # Чистый остаточный спред с учетом taker fee мишени (вход + выход)
+                current_oracle_net_spread = gross_spread - (target_fee * 2.0)
+                if current_oracle_net_spread < self.min_spread_entry:
+                    spread_evaporated = True
+
+        use_emergency = is_emergency or spread_evaporated
+        active_decay_map = self.emergency_decay_map if use_emergency else self.decay_map
+        active_ttl = self.emergency_ttl_sec if use_emergency else self.ttl_sec
+        active_duration = emergency_duration_sec if (use_emergency and emergency_duration_sec is not None) else duration_sec
+
         target_val, exit_level_index = self.get_exit_target_val(
-            duration_sec, actual_net_spread_entry, decay_map=self.decay_map
+            active_duration, actual_net_spread_entry, decay_map=active_decay_map
         )
         is_ttl = target_val <= -999.0
         reported_target = None if is_ttl else target_val
         
-        # TTL check (no liquidity check needed yet, but we will market close)
-        if duration_sec >= self.ttl_sec or is_ttl:
-            return True, {
-                "reason": "TTL_EXPIRED",
-                "net_pnl_pct": None,
-                "gross_pnl_pct": None,
-                "exit_price": None,
-                "duration_sec": duration_sec,
-                "target_val": reported_target,
-                "exit_level_index": exit_level_index
-            }
-        
         target_vol = self._get_vol_discount_exit(target_ex)
         
-        if side == "LONG":
-            # Для закрытия Long — продаём в bids
-            exit_price = OrderbookUtils.calculate_vwap_by_qty(
-                target_book.get("bids", []), qty, target_vol
-            )
-        else:
-            # Для закрытия Short — покупаем из asks
-            exit_price = OrderbookUtils.calculate_vwap_by_qty(
-                target_book.get("asks", []), qty, target_vol
-            )
+        exit_price = 0.0
+        if target_book:
+            if side == "LONG":
+                exit_price = OrderbookUtils.calculate_vwap_by_qty(
+                    target_book.get("bids", []), qty, target_vol
+                )
+            else:
+                exit_price = OrderbookUtils.calculate_vwap_by_qty(
+                    target_book.get("asks", []), qty, target_vol
+                )
         
-        if exit_price <= 0:
+        if exit_price > 0 and entry_price > 0:
+            if side == "LONG":
+                gross_pnl_pct = (exit_price - entry_price) / entry_price
+            else:
+                gross_pnl_pct = (entry_price - exit_price) / entry_price
+            net_pnl_pct = gross_pnl_pct - (target_fee * 2.0)
+        else:
+            gross_pnl_pct = None
+            net_pnl_pct = None
+            exit_price = None
+
+        # TTL check (unconditional market exit)
+        if active_duration >= active_ttl or is_ttl:
+            reason = "EMERGENCY_TTL" if use_emergency else "TTL_EXPIRED"
+            return True, {
+                "reason": reason,
+                "net_pnl_pct": net_pnl_pct,
+                "gross_pnl_pct": gross_pnl_pct,
+                "exit_price": exit_price,
+                "entry_price": entry_price,
+                "duration_sec": duration_sec,
+                "target_val": reported_target,
+                "exit_level_index": exit_level_index,
+                "use_emergency_decay": use_emergency,
+                "oracle_net_spread": current_oracle_net_spread
+            }
+        
+        if exit_price is None or exit_price <= 0:
             return False, {
                 "reason": "NO_EXIT_LIQUIDITY", 
                 "net_pnl_pct": None, 
+                "gross_pnl_pct": None,
                 "exit_price": None, 
+                "entry_price": entry_price,
+                "duration_sec": duration_sec,
                 "target_val": reported_target,
-                "exit_level_index": exit_level_index
+                "exit_level_index": exit_level_index,
+                "use_emergency_decay": use_emergency,
+                "oracle_net_spread": current_oracle_net_spread
             }
-        
-        # Расчёт P&L
-        target_fee = self._get_fee(target_ex)
-        if side == "LONG":
-            gross_pnl_pct = (exit_price - entry_price) / entry_price
-        else:
-            gross_pnl_pct = (entry_price - exit_price) / entry_price
-        
-        net_pnl_pct = gross_pnl_pct - (target_fee * 2.0)  # вход + выход
         
         result = {
             "net_pnl_pct": net_pnl_pct,
@@ -401,7 +459,9 @@ class TradingEngine:
             "entry_price": entry_price,
             "duration_sec": duration_sec,
             "target_val": reported_target,
-            "exit_level_index": exit_level_index
+            "exit_level_index": exit_level_index,
+            "use_emergency_decay": use_emergency,
+            "oracle_net_spread": current_oracle_net_spread
         }
         
         # Stop-Loss
@@ -409,9 +469,10 @@ class TradingEngine:
             result["reason"] = "STOP_LOSS"
             return True, result
         
-        # Take-Profit
+        # Take-Profit / Emergency Breakeven
         if net_pnl_pct >= target_val:
-            result["reason"] = "TAKE_PROFIT"
+            reason = "EMERGENCY_BREAKEVEN" if (use_emergency and target_val <= 0.0) else "TAKE_PROFIT"
+            result["reason"] = reason
             return True, result
         
         result["reason"] = "HOLD"

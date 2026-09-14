@@ -283,7 +283,12 @@ class Main:
                         if not target_ex or not oracle_ex or entry_price <= 0.0 or qty <= 0.0:
                             continue
                             
+                        oracle_book = self.books.get(oracle_ex, {}).get(sym, {})
                         target_book = self.books.get(target_ex, {}).get(sym, {})
+                        
+                        is_emergency_prev = state["details"].get("use_emergency_decay", False)
+                        emergency_since = state["details"].get("emergency_since")
+                        emergency_duration = (now - emergency_since) if emergency_since is not None else None
                         
                         is_exit, exit_res = self.engine.evaluate_exit_v9(
                             target_book=target_book,
@@ -292,12 +297,25 @@ class Main:
                             qty=qty,
                             side=side,
                             duration_sec=duration_sec,
-                            actual_net_spread_entry=net_spread
+                            actual_net_spread_entry=net_spread,
+                            oracle_book=oracle_book,
+                            oracle_ex=oracle_ex,
+                            is_emergency=is_emergency_prev,
+                            emergency_duration_sec=emergency_duration
                         )
                         
+                        # Handle transition into emergency decay
+                        if exit_res.get("use_emergency_decay") and not is_emergency_prev:
+                            state["details"]["use_emergency_decay"] = True
+                            state["details"]["emergency_since"] = now
+                            orcl_sp = exit_res.get("oracle_net_spread")
+                            sp_str = f"{orcl_sp*100:+.3f}%" if orcl_sp is not None else "N/A"
+                            log(f"[{sym}] ⚠️ SPREAD EVAPORATED (Oracle Net: {sp_str} < Min: {self.engine.min_spread_entry*100:.3f}%). "
+                                f"Switching to EMERGENCY DECAY map (exit in <= {self.engine.emergency_ttl_sec:.1f}s)!", level="WARNING")
+                        
                         # Protection against phantom spikes on exit ONLY for TAKE_PROFIT.
-                        # Emergency exits (STOP_LOSS, TTL) must NEVER be blocked!
-                        if is_exit and exit_res.get("reason") == "TAKE_PROFIT":
+                        # Emergency exits (STOP_LOSS, TTL, EMERGENCY_TTL) must NEVER be blocked!
+                        if is_exit and exit_res.get("reason") in ("TAKE_PROFIT", "EMERGENCY_BREAKEVEN"):
                             oracle_ts = self.ts[oracle_ex].get(sym, 0.0)
                             target_ts = self.ts[target_ex].get(sym, 0.0)
                             if oracle_ts > 0 and target_ts > 0:
@@ -317,20 +335,24 @@ class Main:
                             _reason = exit_res.get("reason", "?")
                             _ep = state["details"].get("entry_price", 0.0)
                             _lvl = exit_res.get("exit_level_index", "?")
+                            _is_emerg = state["details"].get("use_emergency_decay", False)
+                            _mode = "⚠️EMERGENCY" if _is_emerg else "STANDARD"
+                            _orcl_sp = exit_res.get("oracle_net_spread")
+                            _orcl_str = f" OrclSp:{_orcl_sp*100:+.3f}%" if _orcl_sp is not None else ""
                             
                             _net_s = f"{_net*100:+.4f}%" if _net is not None else "N/A"
                             _tgt_s = f"{_tgt*100:+.4f}%" if _tgt is not None else "TTL"
                             _ep_s = f"{_ep:.6f}" if _ep else "N/A"
                             
                             if is_exit:
-                                log(f"[{sym}] EXIT_SIGNAL: net={_net_s} tgt={_tgt_s} | "
+                                log(f"[{sym}] EXIT_SIGNAL ({_mode}): net={_net_s} tgt={_tgt_s}{_orcl_str} | "
                                     f"Entry={_ep_s} | "
                                     f"dur={duration_sec:.0f}s lvl={_lvl} | {_reason}", level="INFO")
                             else:
                                 _gap = ""
                                 if _net is not None and _tgt is not None:
                                     _gap = f" gap={(_net - _tgt)*100:+.4f}%"
-                                log(f"[{sym}] EXIT_HOLD: net={_net_s} tgt={_tgt_s}{_gap} | "
+                                log(f"[{sym}] EXIT_HOLD ({_mode}): net={_net_s} tgt={_tgt_s}{_gap}{_orcl_str} | "
                                     f"Entry={_ep_s} | "
                                     f"dur={duration_sec:.0f}s lvl={_lvl} | SKIP: {_reason}", level="INFO")
                         

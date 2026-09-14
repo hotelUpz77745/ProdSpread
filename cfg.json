@@ -194,6 +194,8 @@
                 "exit_slip_ratio_desc": "Проскальзывание для выходного LIMIT_IOC ордера (0.001 = 0.1%).",
                 "close_poll_interval_sec": 0.005,
                 "close_poll_interval_sec_desc": "Интервал опроса WS-кэша позиции при закрытии (сек).",
+                "min_spread_entry": 0.0030,
+                "min_spread_entry_desc": "Минимальный чистый спред относительно Oracle после входа (0.0030 = 0.30%). Если текущий спред сдулся ниже порога, активируется emergency_decay_map.",
                 "decay_map": [
                     {
                         "step": 0,
@@ -221,7 +223,20 @@
                         "min_profit_ratio": -999.0
                     }
                 ],
-                "decay_map_desc": "Карта снижения порога прибыли во времени. Шаг с min_profit_ratio: -999.0 (after_sec: 15) задает безусловный выход по рынку (TTL дедлайн)."
+                "decay_map_desc": "Карта снижения порога прибыли во времени. Шаг с min_profit_ratio: -999.0 (after_sec: 15) задает безусловный выход по рынку (TTL дедлайн).",
+                "emergency_decay_map": [
+                    {
+                        "step": 0,
+                        "after_sec": 0,
+                        "min_profit_ratio": 0.0
+                    },
+                    {
+                        "step": 1,
+                        "after_sec": 3,
+                        "min_profit_ratio": -999.0
+                    }
+                ],
+                "emergency_decay_map_desc": "Аварийная ускоренная карта деградации при сдувшемся спреде (< min_spread_entry). Шаг 0 (0-3с): попытка выйти в безубыток (0.0). Шаг 1 (3с): принудительный сброс по рынку (TTL дедлайн)."
             },
             "max_desync_ms": {
                 "BINANCE_KUCOIN": 350,

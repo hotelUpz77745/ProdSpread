@@ -316,6 +316,19 @@ class PositionFSM:
         
         target_fee = float(self.cfg["trading_risks"][self.target_ex.lower()]["taker_fee"])
         
+        expected_price = self.engine_res.get("entry_price", filled_price)
+        slippage = 0.0
+        if expected_price > 0 and filled_price > 0:
+            if self.side == "LONG":
+                slippage = (filled_price - expected_price) / expected_price
+            else:
+                slippage = (expected_price - filled_price) / expected_price
+        actual_net_spread = self.engine_res.get("net_spread", 0.0) - slippage
+        
+        target_exit_cfg = self.cfg.get("trading_rules", {}).get("target_exit", {})
+        min_spread_entry = float(target_exit_cfg.get("min_spread_entry", 0.0030))
+        use_emergency = actual_net_spread < min_spread_entry
+        
         self.exec_res = {
             "engine_res": self.engine_res,
             "target_ex": self.target_ex,
@@ -326,7 +339,11 @@ class PositionFSM:
             "entry_price": filled_price,
             "qty": filled_qty,
             "executed_volume_rate": fill_rate,
-            "net_spread": self.engine_res.get("net_spread", 0.0),
+            "net_spread": actual_net_spread,
+            "planned_net_spread": self.engine_res.get("net_spread", 0.0),
+            "entry_slippage": slippage,
+            "use_emergency_decay": use_emergency,
+            "emergency_since": self.open_time if use_emergency else None,
             "open_time": self.open_time,
             "open_time_ms": self.open_time_ms
         }
@@ -335,7 +352,9 @@ class PositionFSM:
         if self.pm:
             self.pm.confirm_entry(self.oracle_ex, self.target_ex, self.sym, self.exec_res, self.open_time)
             
-        log(f"[{self.sym}] Position opened! Filled: {filled_qty:.4f} @ {filled_price:.6f}", level="INFO")
+        decay_str = "⚠️ EMERGENCY DECAY" if use_emergency else "STANDARD DECAY"
+        log(f"[{self.sym}] Position opened! Filled: {filled_qty:.4f} @ {filled_price:.6f} | "
+            f"Net Spread: {actual_net_spread*100:+.3f}% (Min: {min_spread_entry*100:+.3f}%) -> {decay_str}", level="INFO")
 
         if self.writer:
             asyncio.create_task(async_write_msg(self.writer, "POS_OPENED", {
@@ -438,7 +457,7 @@ class PositionFSM:
         entry_price = self.exec_res.get("entry_price") or self.engine_res.get("entry_price", 0.0)
         exit_price = exit_res.get("exit_price") or entry_price
         
-        if reason in ("TTL_EXPIRED", "STOP_LOSS", "TTL_EXPIRED_NO_LIQUIDITY", "TTL_EXPIRED_STALE_DATA"):
+        if reason in ("TTL_EXPIRED", "STOP_LOSS", "TTL_EXPIRED_NO_LIQUIDITY", "TTL_EXPIRED_STALE_DATA", "EMERGENCY_TTL"):
             o_type = "MARKET"
         else:
             o_type = self.exit_order_type
