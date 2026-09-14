@@ -11,6 +11,7 @@ import os
 import json
 import numpy as np
 from typing import Optional
+from datetime import datetime
 import multiprocessing as mp
 from dotenv import load_dotenv
 
@@ -80,6 +81,7 @@ class Main:
         
         # Throttle diagnostic exit logs (once every 5s per symbol)
         self._exit_log_ts = {}
+        self._last_radar_ts = time.monotonic() - 10.0  # First radar after 5s
         
         # IPC to Executor Process
         self.executor_writer = None
@@ -170,6 +172,63 @@ class Main:
         elif limit_cfg is not None:
             return float(limit_cfg)
         return None
+
+    def _emit_radar(self):
+        try:
+            total_pairs = len(self.discovery.active_pairs_map)
+            spread_list = []
+            
+            for sym in self.discovery.active_pairs_map:
+                for route_key, roles in self.engine.exchange_roles.items():
+                    oracle_ex = roles["oracle"]
+                    target_ex = roles["target"]
+                    o_book = self.books.get(oracle_ex, {}).get(sym)
+                    t_book = self.books.get(target_ex, {}).get(sym)
+                    if not o_book or not t_book:
+                        continue
+                    o_bids = o_book.get("bids")
+                    o_asks = o_book.get("asks")
+                    t_bids = t_book.get("bids")
+                    t_asks = t_book.get("asks")
+                    if not o_bids or not o_asks or not t_bids or not t_asks:
+                        continue
+                    # Long Target: Oracle Bid vs Target Ask
+                    sp_long = (float(o_bids[0][0]) - float(t_asks[0][0])) / float(o_bids[0][0])
+                    # Short Target: Target Bid vs Oracle Ask
+                    sp_short = (float(t_bids[0][0]) - float(o_asks[0][0])) / float(t_bids[0][0])
+                    raw_sp = max(sp_long, sp_short)
+                    comm = self.engine._get_fee(oracle_ex) + self.engine._get_fee(target_ex)
+                    net_sp = raw_sp - comm
+                    spread_list.append((sym, net_sp))
+                    
+            best_by_sym = {}
+            for sym, net_sp in spread_list:
+                if sym not in best_by_sym or net_sp > best_by_sym[sym]:
+                    best_by_sym[sym] = net_sp
+                    
+            top_syms = sorted(best_by_sym.items(), key=lambda x: x[1], reverse=True)[:3]
+            top_str = ", ".join([f"{s} ({net*100:+.2f}%)" for s, net in top_syms]) if top_syms else "N/A"
+            
+            kuc_gate = self.engine.get_spread_entry_base("KUCOIN") * 100
+            bitg_gate = self.engine.get_spread_entry_base("BITGET") * 100
+            
+            open_pos = self.pm.get_open_positions() if self.pm else []
+            if open_pos:
+                status = f"ПОЗИЦИЯ ОТКРЫТА ({len(open_pos)})"
+            else:
+                status = "ОЖИДАНИЕ ИМПУЛЬСА"
+                
+            time_str = datetime.now().strftime("%H:%M:%S")
+            radar_msg = (
+                f"[RADAR {time_str}] Мониторинг: {total_pairs} пар | "
+                f"ТОП спреды: {top_str} | "
+                f"Порог: KuC >= {kuc_gate:.2f}%, Bitg >= {bitg_gate:.2f}% | "
+                f"Статус: {status}"
+            )
+            print(radar_msg, flush=True)
+            log(radar_msg, level="INFO")
+        except Exception:
+            pass
 
     async def _handle_ipc_events(self, reader, writer):
         """Async reader for events and statuses from executor process."""
@@ -485,6 +544,11 @@ class Main:
                                 k: v for k, v in self._signal_first_seen.items()
                                 if (now_mono - v) <= 1.0
                             }
+
+                    # --- RADAR / HEARTBEAT (every 15 seconds) ---
+                    if now_mono - self._last_radar_ts >= 15.0:
+                        self._last_radar_ts = now_mono
+                        self._emit_radar()
 
                 except asyncio.CancelledError:
                     raise

@@ -246,7 +246,7 @@
                 },
                 "signal_filters": {
                     "spread_entry_pre": [
-                        0.010,
+                        0.006,
                         0.05
                     ],
                     "spread_entry_base": 0.006,
@@ -354,7 +354,7 @@
                 },
                 "signal_filters": {
                     "spread_entry_pre": [
-                        0.012,
+                        0.008,
                         0.05
                     ],
                     "spread_entry_base": 0.008,
