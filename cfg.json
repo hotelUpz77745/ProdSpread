@@ -190,6 +190,8 @@
                 "exit_slip_ratio_desc": "(Только для LIMIT_IOC) Допустимое проскальзывание цены ордера выхода в долях от 1 (например, 0.0010 = 0.10%).",
                 "ioc_close_confirm_timeout_sec": 0.2,
                 "ioc_close_confirm_timeout_sec_desc": "(Только для LIMIT_IOC) Время ожидания (сек) подтверждения налива по WS. Если за 200мс ордер не налился 100%, остаток мгновенно дожимается через MARKET.",
+                "close_poll_interval_sec": 0.0,
+                "close_poll_interval_sec_desc": "Интервал опроса WS-кэша в цикле ожидания выхода (0.0 = чисто реактивный Event-driven).",
                 "min_spread_entry": 0.0030,
                 "min_spread_entry_desc": "Минимальный чистый спред относительно Oracle после входа в долях от 1 (например, 0.0030 = 0.30%). Если текущий спред сдулся ниже порога, активируется emergency_decay_map.",
                 "decay_map": [

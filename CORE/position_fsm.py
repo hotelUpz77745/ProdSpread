@@ -100,7 +100,7 @@ class PositionFSM:
         ioc_timeout = target_exit_cfg.get("ioc_close_confirm_timeout_sec", target_exit_cfg.get("ioc_chase_timeout_sec", 0.2))
         self.ioc_close_confirm_timeout_sec = float(ioc_timeout)
         self.ioc_chase_timeout_sec = self.ioc_close_confirm_timeout_sec
-        self.close_poll_interval = float(target_exit_cfg.get("close_poll_interval_sec", 0.005))
+        self.close_poll_interval = float(target_exit_cfg["close_poll_interval_sec"])
         
         timeout_cfg = target_entry_cfg["fill_confirm_timeout_sec"]
         pair_key1 = f"{self.target_ex}_{self.oracle_ex}".upper()
@@ -203,8 +203,7 @@ class PositionFSM:
                         elapsed_ms = (time.perf_counter() - t0) * 1000
                         log(f"[{self.sym}] v9 Immediate Zero Fill on {self.target_ex} (order {status} in {elapsed_ms:.1f}ms).", level="INFO")
                         return {"size": 0.0, "price": 0.0}, 0.0
-            poll_sleep = self.fill_confirm_poll_interval if self.fill_confirm_poll_interval > 0 else 0.005
-            await asyncio.sleep(poll_sleep)
+            await asyncio.sleep(self.fill_confirm_poll_interval)
                 
         # If we got here, neither a position fill nor an order cancel event was received within timeout
         log(f"[{self.sym}] v9 Fill confirmation timeout on {self.target_ex}.", level="WARNING")

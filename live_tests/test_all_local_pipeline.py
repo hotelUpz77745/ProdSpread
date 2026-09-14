@@ -73,6 +73,7 @@ def get_base_cfg():
                     "exit_order_type": "LIMIT_IOC",
                     "exit_slip_ratio": 0.001,
                     "ioc_chase_timeout_sec": 0.2,
+                    "close_poll_interval_sec": 0.0,
                     "stop_loss_ratio": 0.015,
                     "min_spread_entry": 0.0030,
                     "decay_map": [
