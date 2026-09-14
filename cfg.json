@@ -26,7 +26,7 @@
             "trade_size_usd": 0.0,
             "taker_fee": 0.0005,
             "limit_slip_ratio": 0.0015,
-            "volatility_discount_entry": 0.25,
+            "volatility_discount_entry": 0.30,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
         },
@@ -35,7 +35,7 @@
             "trade_size_usd": 25.0,
             "taker_fee": 0.0006,
             "limit_slip_ratio": 0.0030,
-            "volatility_discount_entry": 0.25,
+            "volatility_discount_entry": 0.30,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
         },
@@ -44,7 +44,7 @@
             "trade_size_usd": 0.0,
             "taker_fee": 0.0006,
             "limit_slip_ratio": 0.0015,
-            "volatility_discount_entry": 0.25,
+            "volatility_discount_entry": 0.30,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
         },
@@ -52,7 +52,7 @@
             "paper_start_balance": 9.71,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0006,
-            "limit_slip_ratio": 0.0015,
+            "limit_slip_ratio": 0.0030,
             "volatility_discount_entry": 0.25,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -121,12 +121,12 @@
             },
             "signal_filters": {
                 "spread_entry_pre": [
-                    0.010,
+                    0.013,
                     0.05
                 ],
-                "spread_entry_base": 0.006,
+                "spread_entry_base": 0.008,
                 "spread_entry_desc": "spread_entry_pre: Диапазон [min, max] грубого префильтра (триггер запуска таймера задержки dwell_ms). spread_entry_base: Финальный порог входа в эвалюаторе. Позволяет спреду слегка откатиться во время удержания сигнала, но не ниже base.",
-                "min_top_depth_usd": 30.0,
+                "min_top_depth_usd": 50.0,
                 "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
                 "min_signal_dwell_ms": 0,
                 "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
@@ -141,7 +141,7 @@
                 },
                 "max_desync_ms_desc": "Пороги рассинхрона стаканов (мс) для каждой связки. Настроены индивидуально под скорость стримов бирж.",
                 "orderbook_imbalance": {
-                    "enabled": true,
+                    "enabled": false,
                     "max_adverse_imbalance": 0.55,
                     "depth_levels": 5,
                     "desc": "Отсекает вход, если на одной из ног стакан перекошен против направления удара (на Long-бирже тяжелые аски, на Short-бирже тяжелые биды)."
