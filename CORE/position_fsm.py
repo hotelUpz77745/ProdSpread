@@ -97,8 +97,10 @@ class PositionFSM:
             self.ttl_sec = 60.0
         self.exit_order_type = target_exit_cfg["exit_order_type"]
         self.exit_slip_ratio = float(target_exit_cfg["exit_slip_ratio"])
-        self.ioc_chase_timeout_sec = float(target_exit_cfg["ioc_chase_timeout_sec"])
-        self.close_poll_interval = float(target_exit_cfg["close_poll_interval_sec"]) if "close_poll_interval_sec" in target_exit_cfg else 0.005
+        ioc_timeout = target_exit_cfg.get("ioc_close_confirm_timeout_sec", target_exit_cfg.get("ioc_chase_timeout_sec", 0.2))
+        self.ioc_close_confirm_timeout_sec = float(ioc_timeout)
+        self.ioc_chase_timeout_sec = self.ioc_close_confirm_timeout_sec
+        self.close_poll_interval = float(target_exit_cfg.get("close_poll_interval_sec", 0.005))
         
         timeout_cfg = target_entry_cfg["fill_confirm_timeout_sec"]
         pair_key1 = f"{self.target_ex}_{self.oracle_ex}".upper()
@@ -211,10 +213,8 @@ class PositionFSM:
                         elapsed_ms = (time.perf_counter() - t0) * 1000
                         log(f"[{self.sym}] v9 Immediate Zero Fill on {self.target_ex} (order {status} in {elapsed_ms:.1f}ms).", level="INFO")
                         return {"size": 0.0, "price": 0.0}, 0.0
-            if self.fill_confirm_poll_interval > 0:
-                await asyncio.sleep(self.fill_confirm_poll_interval)
-            else:
-                await asyncio.sleep(self.close_poll_interval)
+            poll_sleep = self.fill_confirm_poll_interval if self.fill_confirm_poll_interval > 0 else 0.005
+            await asyncio.sleep(poll_sleep)
                 
         # If we got here, neither a position fill nor an order cancel event was received within timeout
         log(f"[{self.sym}] v9 Fill confirmation timeout on {self.target_ex}.", level="WARNING")
@@ -488,9 +488,9 @@ class PositionFSM:
             log(f"[{self.sym}] Close order error on {self.target_ex}: {e}", level="ERROR")
         
         if o_type == "LIMIT_IOC":
-            # For IOC, match engine execution is instant. If WS event not received in ioc_chase_timeout_sec,
+            # For IOC, match engine execution is instant. If WS event not received in ioc_close_confirm_timeout_sec,
             # remainder was cancelled by exchange -> immediately fall back without lag
-            is_closed = await self._wait_for_close_v9(ev_target, timeout=min(self.ioc_chase_timeout_sec, self.close_confirm_timeout))
+            is_closed = await self._wait_for_close_v9(ev_target, timeout=min(self.ioc_close_confirm_timeout_sec, self.close_confirm_timeout))
         else:
             is_closed = await self._wait_for_close_v9(ev_target)
         

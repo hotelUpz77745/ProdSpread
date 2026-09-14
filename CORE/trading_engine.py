@@ -73,7 +73,15 @@ class TradingEngine:
         if stop_loss_val is not None and not isinstance(stop_loss_val, bool):
             try:
                 val = float(stop_loss_val)
-                self.stop_loss_pct = val if val > 0 else None
+                if val > 0:
+                    # Защита от ввода в процентах: если указано >= 0.05 (например 0.5 вместо 0.005)
+                    if val >= 0.05:
+                        log(f"⚠️ [CONFIG WARNING] stop_loss_pct задан как {val} (>= 5%). "
+                            f"Автоматически нормализовано: {val}% -> {val / 100.0:.4f}", level="WARNING")
+                        val = val / 100.0
+                    self.stop_loss_pct = val
+                else:
+                    self.stop_loss_pct = None
             except (ValueError, TypeError):
                 self.stop_loss_pct = None
         else:
