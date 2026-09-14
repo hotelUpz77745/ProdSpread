@@ -88,6 +88,8 @@ async def test_exchange(ex_name: str, symbol: str, open_qty: float, cfg: dict, s
     fsm = PositionFSM(
         sym="XRP",
         route=f"{ex_name}_{other_ex}",
+        target_ex=ex_name,
+        oracle_ex=other_ex,
         long_ex=ex_name,
         short_ex=other_ex,
         engine_res={"long_avg_price": actual_price, "short_avg_price": actual_price},
@@ -108,14 +110,15 @@ async def test_exchange(ex_name: str, symbol: str, open_qty: float, cfg: dict, s
     final_pos = await adapter.get_position_rest(symbol, "LONG")
     print(f"[{ex_name}] 4. Final Position Check: {final_pos}")
     assert final_pos.get("size", 0.0) == 0.0, f"Position on {ex_name} still open: {final_pos}"
-    print(f">>> {ex_name} PASSED: Cleanly closed via limit chasing! <<<")
+    print(f">>> {ex_name} PASSED: Cleanly closed! <<<")
 
 async def main():
     load_dotenv()
     with open("cfg.json", "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
-    cfg["trading_rules"]["exit"]["single_leg_exit"]["immediate_market"] = False
+    if "single_leg_exit" in cfg.get("trading_rules", {}).get("exit", {}):
+        cfg["trading_rules"]["exit"]["single_leg_exit"]["immediate_market"] = False
 
     async with aiohttp.ClientSession() as session:
         # Test BITGET

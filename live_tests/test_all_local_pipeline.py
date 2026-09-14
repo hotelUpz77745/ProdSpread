@@ -53,10 +53,7 @@ def get_base_cfg():
                     "buffer_window_sec": 0.25
                 },
                 "target_entry_logic": {
-                    "entry_slip_ratio": 0.0015,
-                    "dynamic_slip_profit_ratio": 0.30,
-                    "max_entry_slip_ratio": 0.005,
-                    "min_entry_slip_ratio": 0.0005,
+                    "entry_slip_ratio": 0.0020,
                     "fill_confirm_timeout_sec": {"BINANCE_KUCOIN": 0.5, "BINANCE_BITGET": 0.5},
                     "fill_confirm_poll_interval_sec": 0.005,
                     "entry_api_timeout_sec": 2.0

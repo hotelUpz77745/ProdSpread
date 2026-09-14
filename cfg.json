@@ -155,14 +155,8 @@
                 }
             },
             "target_entry_logic": {
-                "dynamic_slip_profit_ratio": 0.30,
-                "dynamic_slip_profit_ratio_desc": "Максимальная доля расчетной прибыли, выделяемая на проскальзывание входа (0.30 = 30% от net_spread).",
-                "max_entry_slip_ratio": 0.005,
-                "max_entry_slip_ratio_desc": "Максимальный потолок (фоллбэк) проскальзывания входа (0.005 = 0.5%).",
-                "min_entry_slip_ratio": 0.0005,
-                "min_entry_slip_ratio_desc": "Минимальный порог проскальзывания входа (0.0005 = 0.05%).",
-                "entry_slip_ratio": 0.0015,
-                "entry_slip_ratio_desc": "Базовое проскальзывание входа (фоллбэк, если net_spread недоступен). Например 0.0015 = 0.15% вглубь стакана.",
+                "entry_slip_ratio": 0.0020,
+                "entry_slip_ratio_desc": "Статический допустимый предел проскальзывания ордера входа LIMIT_IOC вглубь стакана (0.0020 = 0.20%).",
                 "fill_confirm_timeout_sec": {
                     "BINANCE_KUCOIN": 0.3,
                     "BINANCE_BITGET": 0.3,

@@ -26,10 +26,7 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
                         "buffer_window_sec": 0.25
                     },
                     "target_entry_logic": {
-                        "entry_slip_ratio": 0.0015,
-                        "dynamic_slip_profit_ratio": 0.30,
-                        "max_entry_slip_ratio": 0.005,
-                        "min_entry_slip_ratio": 0.0005,
+                        "entry_slip_ratio": 0.0020,
                         "fill_confirm_timeout_sec": {"BINANCE_BITGET": 0.05},
                         "fill_confirm_poll_interval_sec": 0.0,
                         "entry_api_timeout_sec": 1.0
@@ -232,19 +229,16 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
             "BTCUSDT", "BUY", 100.0, 50075.0, order_type="LIMIT_IOC", position_side="LONG"
         )
 
-    async def test_dynamic_entry_slippage_and_cap(self):
-        cfg_dyn = copy.deepcopy(self.cfg)
-        cfg_dyn["trading_rules"]["entry"]["target_entry_logic"] = {
-            "entry_slip_ratio": 0.0015,
-            "dynamic_slip_profit_ratio": 0.30,
-            "max_entry_slip_ratio": 0.005,
-            "min_entry_slip_ratio": 0.0005,
+    async def test_static_entry_slippage(self):
+        cfg_static = copy.deepcopy(self.cfg)
+        cfg_static["trading_rules"]["entry"]["target_entry_logic"] = {
+            "entry_slip_ratio": 0.0020,
             "fill_confirm_timeout_sec": {"BINANCE_BITGET": 0.05},
             "fill_confirm_poll_interval_sec": 0.0,
             "entry_api_timeout_sec": 1.0
         }
         
-        # Test 1: 1.0% net spread -> 30% of profit = 0.3% (0.003) slip
+        # Test 1: LONG with 0.0020 (0.20%) slip regardless of net_spread
         engine_res1 = {
             "side": "LONG",
             "entry_price": 50000.0,
@@ -253,42 +247,54 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
         }
         fsm1 = PositionFSM(
             sym="BTCUSDT", route="BINANCE_BITGET", target_ex="BITGET", oracle_ex="BINANCE",
-            side="LONG", engine_res=engine_res1, cfg=cfg_dyn, orders=self.orders_mock,
+            side="LONG", engine_res=engine_res1, cfg=cfg_static, orders=self.orders_mock,
             coin_to_native={"BTCUSDT": {"BITGET": "BTCUSDT"}}, pm=self.pm_mock, writer=self.writer_mock
         )
-        self.mock_bitget.get_executed_position.return_value = {"size": 0.002, "price": 50150.0}
+        self.mock_bitget.get_executed_position.return_value = {"size": 0.002, "price": 50100.0}
         await fsm1.run_open()
-        # 50000 * (1 + 0.003) = 50150.0
+        # 50000 * (1 + 0.0020) = 50100.0
         args, kwargs = self.mock_bitget.place_order.call_args
         self.assertEqual(args[0], "BTCUSDT")
         self.assertEqual(args[1], "BUY")
         self.assertEqual(args[2], 100.0)
-        self.assertAlmostEqual(args[3], 50150.0, places=4)
+        self.assertAlmostEqual(args[3], 50100.0, places=4)
         self.assertEqual(kwargs.get("order_type"), "LIMIT_IOC")
         self.assertEqual(kwargs.get("position_side"), "LONG")
 
-        # Test 2: 2.5% net spread -> 30% of profit = 0.75%, capped at max 0.5% (0.005)
+        # Test 2: SHORT with 0.0020 (0.20%) slip regardless of high net_spread (e.g. 0.035)
         engine_res2 = {
-            "side": "LONG",
+            "side": "SHORT",
             "entry_price": 50000.0,
             "qty": 0.002,
-            "net_spread": 0.025
+            "net_spread": 0.035
         }
         fsm2 = PositionFSM(
             sym="BTCUSDT", route="BINANCE_BITGET", target_ex="BITGET", oracle_ex="BINANCE",
-            side="LONG", engine_res=engine_res2, cfg=cfg_dyn, orders=self.orders_mock,
+            side="SHORT", engine_res=engine_res2, cfg=cfg_static, orders=self.orders_mock,
             coin_to_native={"BTCUSDT": {"BITGET": "BTCUSDT"}}, pm=self.pm_mock, writer=self.writer_mock
         )
-        self.mock_bitget.get_executed_position.return_value = {"size": 0.002, "price": 50250.0}
+        self.mock_bitget.get_executed_position.return_value = {"size": 0.002, "price": 49900.0}
         await fsm2.run_open()
-        # 50000 * (1 + 0.005) = 50250.0
+        # 50000 * (1 - 0.0020) = 49900.0
         args2, kwargs2 = self.mock_bitget.place_order.call_args
         self.assertEqual(args2[0], "BTCUSDT")
-        self.assertEqual(args2[1], "BUY")
+        self.assertEqual(args2[1], "SELL")
         self.assertEqual(args2[2], 100.0)
-        self.assertAlmostEqual(args2[3], 50250.0, places=4)
+        self.assertAlmostEqual(args2[3], 49900.0, places=4)
         self.assertEqual(kwargs2.get("order_type"), "LIMIT_IOC")
-        self.assertEqual(kwargs2.get("position_side"), "LONG")
+        self.assertEqual(kwargs2.get("position_side"), "SHORT")
+
+    async def test_run_single_leg_exposure_compatibility(self):
+        fsm = PositionFSM(
+            sym="BTCUSDT", route="BINANCE_BITGET", target_ex="BITGET", oracle_ex="BINANCE",
+            long_ex="BITGET", short_ex="BINANCE",
+            side="LONG", engine_res={}, cfg=self.cfg, orders=self.orders_mock,
+            coin_to_native={"BTCUSDT": {"BITGET": "BTCUSDT", "BINANCE": "BTCUSDT"}},
+            pm=self.pm_mock, writer=self.writer_mock
+        )
+        await fsm._run_single_leg_exposure(l_qty=0.002, s_qty=0.0, l_price=50000.0, s_price=0.0)
+        self.mock_bitget.place_order.assert_called_once()
+        self.assertEqual(fsm.state, PositionState.ABORTED)
 
     async def test_fast_zero_fill_on_order_cancel_event(self):
         engine_res = {

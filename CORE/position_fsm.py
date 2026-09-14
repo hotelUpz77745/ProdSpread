@@ -55,6 +55,8 @@ class PositionFSM:
             
         self.target_ex = target_ex or "BITGET"
         self.oracle_ex = oracle_ex or "BINANCE"
+        self.long_ex = kwargs.get("long_ex", self.oracle_ex)
+        self.short_ex = kwargs.get("short_ex", self.target_ex)
         self.side = side
         self.engine_res = engine_res or {}
         self.cfg = cfg or {}
@@ -114,7 +116,7 @@ class PositionFSM:
         self.fill_confirm_poll_interval = float(target_entry_cfg["fill_confirm_poll_interval_sec"])
         self.entry_api_timeout = float(target_entry_cfg["entry_api_timeout_sec"])
         
-        # Entry slip ratio / дальность заброса лимитной заявки LIMIT_IOC
+        # Entry slip ratio: единый статический допустимый предел (0.0020 = 0.20%)
         if "entry_slip_ratio" in target_entry_cfg:
             slip_cfg = target_entry_cfg["entry_slip_ratio"]
             if isinstance(slip_cfg, dict):
@@ -130,12 +132,7 @@ class PositionFSM:
         elif self.target_ex.lower() in self.cfg["trading_risks"] and "limit_slip_ratio" in self.cfg["trading_risks"][self.target_ex.lower()]:
             self.entry_slip_ratio = float(self.cfg["trading_risks"][self.target_ex.lower()]["limit_slip_ratio"])
         else:
-            self.entry_slip_ratio = 0.0015
-        
-        # Dynamic controlled entry slippage (up to 30% of planned profit, capped by max_entry_slip_ratio)
-        self.dynamic_slip_profit_ratio = float(target_entry_cfg["dynamic_slip_profit_ratio"]) if "dynamic_slip_profit_ratio" in target_entry_cfg else None
-        self.max_entry_slip_ratio = float(target_entry_cfg["max_entry_slip_ratio"]) if "max_entry_slip_ratio" in target_entry_cfg else 0.005
-        self.min_entry_slip_ratio = float(target_entry_cfg["min_entry_slip_ratio"]) if "min_entry_slip_ratio" in target_entry_cfg else 0.0005
+            self.entry_slip_ratio = 0.0020
         
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
         self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
@@ -243,13 +240,8 @@ class PositionFSM:
         entry_price = self.engine_res["entry_price"]
         size_usd = float(self.cfg["trading_risks"][self.target_ex.lower()]["trade_size_usd"])
         
-        # Dynamic controlled entry slippage (up to 30% of planned profit, max cap at 0.5%)
         planned_profit = float(self.engine_res.get("net_spread", 0.0))
-        if self.dynamic_slip_profit_ratio is not None and self.dynamic_slip_profit_ratio > 0 and planned_profit > 0:
-            target_slip = planned_profit * self.dynamic_slip_profit_ratio
-            slip = max(self.min_entry_slip_ratio, min(self.max_entry_slip_ratio, target_slip))
-        else:
-            slip = self.entry_slip_ratio
+        slip = self.entry_slip_ratio
         
         if self.side == "LONG":
             order_side = "BUY"
@@ -567,12 +559,43 @@ class PositionFSM:
         except Exception as e:
             log(f"[{self.sym}] Unwind error on {ex}: {e}", level="ERROR")
 
-    async def _run_single_leg_exposure(self, long_qty: float, short_qty: float, long_entry_price: float, short_entry_price: float):
-        """DEPRECATED v8 compatibility method for tests."""
+    async def _run_single_leg_exposure(
+        self,
+        l_qty: float = 0.0,
+        s_qty: float = 0.0,
+        l_price: float = 0.0,
+        s_price: float = 0.0,
+        long_qty: float = 0.0,
+        short_qty: float = 0.0,
+        long_entry_price: float = 0.0,
+        short_entry_price: float = 0.0,
+        **kwargs
+    ):
+        """Emergency unwind / closing of a single exposed position leg."""
+        qty_l = l_qty if l_qty > 0 else long_qty
+        qty_s = s_qty if s_qty > 0 else short_qty
+        price_l = l_price if l_price > 0 else long_entry_price
+        price_s = s_price if s_price > 0 else short_entry_price
+
+        self._set_state(PositionState.EMERGENCY_UNWIND)
+
+        ex_l = self.long_ex if (hasattr(self, "long_ex") and self.long_ex in self.orders) else (
+            self.target_ex if self.target_ex in self.orders else (
+                self.oracle_ex if self.oracle_ex in self.orders else next(iter(self.orders), "BITGET")
+            )
+        )
+        ex_s = self.short_ex if (hasattr(self, "short_ex") and self.short_ex in self.orders) else (
+            self.target_ex if self.target_ex in self.orders else (
+                self.oracle_ex if self.oracle_ex in self.orders else next(iter(self.orders), "BITGET")
+            )
+        )
+
+        if qty_l > 0:
+            native_l = self.coin_to_native.get(self.sym, {}).get(ex_l, self.sym)
+            await self._emergency_unwind_single(ex_l, native_l, qty_l, price_l, "BUY", "LONG")
+
+        if qty_s > 0:
+            native_s = self.coin_to_native.get(self.sym, {}).get(ex_s, self.sym)
+            await self._emergency_unwind_single(ex_s, native_s, qty_s, price_s, "SELL", "SHORT")
+
         self._set_state(PositionState.ABORTED)
-        ex = self.oracle_ex if long_qty > 0 else self.target_ex
-        qty = long_qty if long_qty > 0 else short_qty
-        price = long_entry_price if long_qty > 0 else short_entry_price
-        side = "LONG" if long_qty > 0 else "SHORT"
-        native = self.coin_to_native.get(self.sym, {}).get(ex, self.sym)
-        await self._emergency_unwind_single(ex, native, qty, price, "BUY" if side == "LONG" else "SELL", side)
