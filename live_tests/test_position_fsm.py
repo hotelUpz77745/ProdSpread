@@ -22,7 +22,7 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
                     "static_detector": {
                         "enabled": True,
                         "static_leg": "TARGET",
-                        "max_static_leg_pct": 0.0020,
+                        "max_static_leg_ratio": 0.0020,
                         "buffer_window_sec": 0.25
                     },
                     "target_entry_logic": {
@@ -51,7 +51,7 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
                 },
                 "ban_rules": {
                     "quarantine_sec": {"entry_error": 60, "zero_fill": 10},
-                    "perm_ban_loss_pct": 0.0075
+                    "perm_ban_loss_ratio": 0.0075
                 },
                 "emergency_unwind": {
                     "max_attempts": 2,

@@ -19,7 +19,7 @@ class TestStaticDetector(unittest.TestCase):
                     "static_detector": {
                         "enabled": True,
                         "static_leg": "TARGET",
-                        "max_static_leg_pct": 0.0020,
+                        "max_static_leg_ratio": 0.0020,
                         "buffer_window_sec": 0.25
                     }
                 }

@@ -320,12 +320,12 @@ class ExecutorProcess:
 
             if net_usd < 0:
                 ban_rules = self.cfg["trading_rules"]["ban_rules"]
-                raw_perm = ban_rules.get("perm_ban_loss_ratio")
-                if raw_perm is None:
-                    raw_perm = ban_rules.get("perm_ban_loss_pct")
-                    if raw_perm is not None and float(raw_perm) >= 0.05:
-                        raw_perm = float(raw_perm) / 100.0
-                perm_ban_ratio = float(raw_perm) if raw_perm is not None and float(raw_perm) > 0 else None
+                if "perm_ban_loss_ratio" in ban_rules and ban_rules["perm_ban_loss_ratio"] is not None:
+                    perm_ban_ratio = float(ban_rules["perm_ban_loss_ratio"])
+                elif "perm_ban_loss_pct" in ban_rules and ban_rules["perm_ban_loss_pct"] is not None:
+                    perm_ban_ratio = float(ban_rules["perm_ban_loss_pct"]) / 100.0
+                else:
+                    perm_ban_ratio = None
                 if perm_ban_ratio is not None and abs(net_yield) >= perm_ban_ratio:
                     log(f"[{sym}] Severe loss trade ({net_yield*100:+.2f}% <= -{perm_ban_ratio*100:.2f}%). PERMANENT BAN!", level="ERROR")
                     self.ban_coin(sym, reason=f"Severe loss trade ({reason}), Net: {net_usd:+.4f}$ ({net_yield*100:+.2f}%)", duration_sec=None)

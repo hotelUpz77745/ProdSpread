@@ -49,7 +49,7 @@ def get_base_cfg():
                 "static_detector": {
                     "enabled": True,
                     "static_leg": "TARGET",
-                    "max_static_leg_pct": 0.0020,
+                    "max_static_leg_ratio": 0.0020,
                     "buffer_window_sec": 0.25
                 },
                 "target_entry_logic": {
@@ -73,7 +73,7 @@ def get_base_cfg():
                     "exit_order_type": "LIMIT_IOC",
                     "exit_slip_ratio": 0.001,
                     "ioc_chase_timeout_sec": 0.2,
-                    "stop_loss_pct": 0.015,
+                    "stop_loss_ratio": 0.015,
                     "decay_map": [
                         {"step": 1, "after_sec": 0, "target_spread": 0.005},
                         {"step": 2, "after_sec": 10, "target_spread": 0.002},
@@ -89,7 +89,7 @@ def get_base_cfg():
             "ban_rules": {
                 "is_active": True,
                 "max_consecutive_losses": 3,
-                "perm_ban_loss_pct": 0.0075,
+                "perm_ban_loss_ratio": 0.0075,
                 "quarantine_sec": {
                     "entry_error": 60,
                     "zero_fill": 10,

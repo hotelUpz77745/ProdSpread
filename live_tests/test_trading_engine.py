@@ -38,7 +38,7 @@ class TestTradingEngine(unittest.TestCase):
                         "normal_decay": []
                     },
                     "target_exit": {
-                        "stop_loss_pct": 0.01,
+                        "stop_loss_ratio": 0.01,
                         "ttl_sec": 60.0,
                         "exit_order_type": "LIMIT_IOC",
                         "exit_slip_ratio": 0.001,
@@ -237,11 +237,12 @@ class TestTradingEngine(unittest.TestCase):
         self.assertEqual(res["reason"], "TTL_EXPIRED")
 
     def test_evaluate_exit_v9_stop_loss_disabled_null(self):
-        # When stop_loss_pct is None/null, drawdown does not trigger STOP_LOSS
+        # When stop_loss_ratio is None/null, drawdown does not trigger STOP_LOSS
         cfg_copy = copy.deepcopy(self.cfg)
-        cfg_copy["trading_rules"]["exit"]["target_exit"]["stop_loss_pct"] = None
+        cfg_copy["trading_rules"]["exit"]["target_exit"]["stop_loss_ratio"] = None
+        cfg_copy["trading_rules"]["exit"]["target_exit"].pop("stop_loss_pct", None)
         engine = TradingEngine(cfg_copy, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
-        self.assertIsNone(engine.stop_loss_pct)
+        self.assertIsNone(engine.stop_loss_ratio)
 
         target_book = {
             "bids": [[49000.0, 5.0]],

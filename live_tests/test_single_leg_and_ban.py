@@ -59,9 +59,9 @@ class TestSingleLegAndBan(unittest.IsolatedAsyncioTestCase):
             self.cfg = json.load(f)
 
     async def test_circuit_breaker_hard_stop_loss(self):
-        """If price moves against single leg by >= stop_loss_pct (0.50%), market exit triggers."""
         cfg = copy.deepcopy(self.cfg)
-        cfg["trading_rules"]["exit"]["target_exit"]["stop_loss_pct"] = 0.0050
+        cfg["trading_rules"]["exit"]["target_exit"]["stop_loss_ratio"] = 0.0050
+        cfg["trading_rules"]["exit"]["target_exit"].pop("stop_loss_pct", None)
         
         engine = TradingEngine(cfg, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
         

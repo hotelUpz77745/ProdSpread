@@ -69,25 +69,20 @@ class TradingEngine:
         target_exit_cfg = self.cfg["trading_rules"]["exit"]["target_exit"]
         
         # v9: stop loss can be null / <= 0 (disabled).
-        # Suffix _ratio -> доля от единицы (0.005 = 0.5%). Suffix _pct -> процент от 100 (0.5 = 0.5%).
+        # Протокол разработки: строгое следование семантике конфига без эвристической самодеятельности.
+        # stop_loss_ratio -> строго доля от единицы (например 0.0050 = 0.50%).
+        # stop_loss_pct   -> строго процент от 100 (например 0.50 = 0.50% -> делится на 100.0).
         self.stop_loss_ratio = None
         if "stop_loss_ratio" in target_exit_cfg and target_exit_cfg["stop_loss_ratio"] is not None:
             try:
                 val = float(target_exit_cfg["stop_loss_ratio"])
-                if val > 0:
-                    if val >= 0.05:
-                        log(f"⚠️ [CONFIG WARNING] stop_loss_ratio задан как {val} (>= 5%). "
-                            f"Нормализовано как процент: {val}% -> {val / 100.0:.4f}", level="WARNING")
-                        val = val / 100.0
-                    self.stop_loss_ratio = val
+                self.stop_loss_ratio = val if val > 0 else None
             except (ValueError, TypeError):
                 self.stop_loss_ratio = None
         elif "stop_loss_pct" in target_exit_cfg and target_exit_cfg["stop_loss_pct"] is not None:
             try:
                 val = float(target_exit_cfg["stop_loss_pct"])
-                if val > 0:
-                    # Суффикс _pct: если передано 0.5, это 0.5% -> переводим в ratio 0.0050
-                    self.stop_loss_ratio = (val / 100.0) if val >= 0.05 else val
+                self.stop_loss_ratio = (val / 100.0) if val > 0 else None
             except (ValueError, TypeError):
                 self.stop_loss_ratio = None
         self.stop_loss_pct = self.stop_loss_ratio  # backward compatibility alias

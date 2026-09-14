@@ -158,12 +158,12 @@ class PositionFSM:
             self.close_confirm_timeout = float(close_timeout_cfg)
         
         ban_cfg = self.cfg["trading_rules"]["ban_rules"]
-        raw_perm = ban_cfg.get("perm_ban_loss_ratio")
-        if raw_perm is None:
-            raw_perm = ban_cfg.get("perm_ban_loss_pct", 0.0075)
-            if float(raw_perm) >= 0.05:
-                raw_perm = float(raw_perm) / 100.0
-        self.perm_ban_loss_ratio = float(raw_perm)
+        if "perm_ban_loss_ratio" in ban_cfg:
+            self.perm_ban_loss_ratio = float(ban_cfg["perm_ban_loss_ratio"])
+        elif "perm_ban_loss_pct" in ban_cfg:
+            self.perm_ban_loss_ratio = float(ban_cfg["perm_ban_loss_pct"]) / 100.0
+        else:
+            self.perm_ban_loss_ratio = float(ban_cfg["perm_ban_loss_ratio"])
         self.perm_ban_loss_pct = self.perm_ban_loss_ratio  # backward compatibility alias
         
         self.target_pos: dict = {"size": 0.0, "price": 0.0}
