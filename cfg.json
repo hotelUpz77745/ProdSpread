@@ -34,7 +34,7 @@
             "paper_start_balance": 5.95,
             "trade_size_usd": 25.0,
             "taker_fee": 0.0006,
-            "limit_slip_ratio": 0.0015,
+            "limit_slip_ratio": 0.0030,
             "volatility_discount_entry": 0.25,
             "volatility_discount_exit": 0.85,
             "max_positions": 1
@@ -60,7 +60,7 @@
     },
     "volume_filters": {
         "BINANCE": 5000000.0,
-        "KUCOIN": 2000000.0,
+        "KUCOIN": 1000000.0,
         "OKX": 2000000.0,
         "BITGET": 2000000.0
     },
@@ -121,18 +121,18 @@
             },
             "signal_filters": {
                 "spread_entry_pre": [
-                    0.013,
+                    0.010,
                     0.05
                 ],
-                "spread_entry_base": 0.008,
+                "spread_entry_base": 0.006,
                 "spread_entry_desc": "spread_entry_pre: Диапазон [min, max] грубого префильтра (триггер запуска таймера задержки dwell_ms). spread_entry_base: Финальный порог входа в эвалюаторе. Позволяет спреду слегка откатиться во время удержания сигнала, но не ниже base.",
-                "min_top_depth_usd": 50.0,
+                "min_top_depth_usd": 30.0,
                 "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
                 "min_signal_dwell_ms": 0,
                 "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
                 "top_n_candidates": 4,
                 "max_desync_ms": {
-                    "BINANCE_KUCOIN": 125,
+                    "BINANCE_KUCOIN": 250,
                     "BINANCE_BITGET": 200,
                     "KUCOIN_BITGET": 200,
                     "BINANCE_OKX": 150,
@@ -150,7 +150,7 @@
                     "enabled": true,
                     "check_slippage": true,
                     "max_slippage_ratio": 0.50,
-                    "hard_max_slippage": 0.008,
+                    "hard_max_slippage": 0.012,
                     "desc": "Симуляция немедленного закрытия. Защита от входа в спреды, где обратный bid/ask спред съест большую часть расчетной прибыли."
                 }
             },
