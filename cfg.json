@@ -18,6 +18,8 @@
         "max_log_lines": 50000,
         "log_to_console": false,
         "log_to_file": true,
+        "radar_enabled": false,
+        "radar_interval_sec": 15.0,
         "TIME_ZONE": "UTC"
     },
     "volume_filters": {

@@ -81,7 +81,10 @@ class Main:
         
         # Throttle diagnostic exit logs (once every 5s per symbol)
         self._exit_log_ts = {}
-        self._last_radar_ts = time.monotonic() - 10.0  # First radar after 5s
+        logging_cfg = self.cfg.get("logging", {})
+        self.radar_enabled = bool(logging_cfg.get("radar_enabled", False))
+        self.radar_interval_sec = float(logging_cfg.get("radar_interval_sec", 15.0))
+        self._last_radar_ts = time.monotonic() - (self.radar_interval_sec - 5.0)
         
         # IPC to Executor Process
         self.executor_writer = None
@@ -545,10 +548,11 @@ class Main:
                                 if (now_mono - v) <= 1.0
                             }
 
-                    # --- RADAR / HEARTBEAT (every 15 seconds) ---
-                    if now_mono - self._last_radar_ts >= 15.0:
-                        self._last_radar_ts = now_mono
-                        self._emit_radar()
+                    # --- RADAR / HEARTBEAT ---
+                    if self.radar_enabled and self.radar_interval_sec > 0:
+                        if now_mono - self._last_radar_ts >= self.radar_interval_sec:
+                            self._last_radar_ts = now_mono
+                            self._emit_radar()
 
                 except asyncio.CancelledError:
                     raise
