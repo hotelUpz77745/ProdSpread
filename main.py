@@ -330,7 +330,7 @@ class Main:
                         _last_log = self._exit_log_ts.get(sym, 0.0)
                         if _now_log - _last_log >= 5.0:
                             self._exit_log_ts[sym] = _now_log
-                            _net = exit_res.get("net_pnl_pct")
+                            _net = exit_res.get("net_pnl_ratio", exit_res.get("net_pnl_pct"))
                             _tgt = exit_res.get("target_val")
                             _reason = exit_res.get("reason", "?")
                             _ep = state["details"].get("entry_price", 0.0)

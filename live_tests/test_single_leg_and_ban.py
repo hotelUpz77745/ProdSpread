@@ -93,9 +93,9 @@ class TestSingleLegAndBan(unittest.IsolatedAsyncioTestCase):
         # Net yield = -0.80% (exceeds perm_ban_loss_pct 0.75%)
         net_yield = -0.0080
         net_usd = -0.20
-        perm_ban_pct = float(cfg["trading_rules"]["ban_rules"]["perm_ban_loss_pct"])
+        perm_ban_ratio = float(cfg["trading_rules"]["ban_rules"].get("perm_ban_loss_ratio", cfg["trading_rules"]["ban_rules"].get("perm_ban_loss_pct")))
         
-        if abs(net_yield) >= perm_ban_pct:
+        if abs(net_yield) >= perm_ban_ratio:
             executor.ban_coin("TOXICCOIN", reason=f"Severe loss trade, Net: {net_usd:+.4f}$ ({net_yield*100:+.2f}%)", duration_sec=None)
             
         self.assertIn("TOXICCOIN", executor.banned_symbols)

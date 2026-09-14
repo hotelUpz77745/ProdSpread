@@ -296,8 +296,14 @@ class StaticDetector:
     def __init__(self, cfg: dict):
         static_cfg = cfg["trading_rules"]["entry"]["static_detector"]
         self.is_enabled = bool(static_cfg["enabled"])
-        self.static_leg = str(static_cfg["static_leg"]).upper()
-        self.max_static_leg_pct = float(static_cfg["max_static_leg_pct"])
+        self.static_leg = str(static_cfg.get("static_leg", "TARGET")).upper()
+        raw_static = static_cfg.get("max_static_leg_ratio")
+        if raw_static is None:
+            raw_static = static_cfg.get("max_static_leg_pct", 0.0020)
+            if float(raw_static) >= 0.05:
+                raw_static = float(raw_static) / 100.0
+        self.max_static_leg_ratio = float(raw_static)
+        self.max_static_leg_pct = self.max_static_leg_ratio  # backward compatibility alias
         self.buffer_window_sec = float(static_cfg["buffer_window_sec"])
             
         # Хранилище тиков на низкоуровневых Си-деках CPython:
@@ -399,11 +405,11 @@ class StaticDetector:
         # 3. Относительное отклонение текущей цены
         deviation = abs(current_price - mean_price) / mean_price
         
-        if deviation > self.max_static_leg_pct:
+        if deviation > self.max_static_leg_ratio:
             # Нестояк зафиксирован: взводим кулдаун ровно на окно buffer_window_sec,
             # чтобы аномальная цена и переходной шум полностью выбыли из буфера!
             self._cool_off_until[key] = ts_mono + self.buffer_window_sec
-            return False, f"LEG_NOT_STATIC (dev {deviation*100:.3f}% > max {self.max_static_leg_pct*100:.3f}%, cooldown {self.buffer_window_sec:.3f}s)", deviation
+            return False, f"LEG_NOT_STATIC (dev {deviation*100:.3f}% > max {self.max_static_leg_ratio*100:.3f}%, cooldown {self.buffer_window_sec:.3f}s)", deviation
             
         return True, "LEG_STATIC_OK", deviation
 

@@ -347,5 +347,43 @@ class TestTradingEngine(unittest.TestCase):
         self.assertTrue(res["use_emergency_decay"])
         self.assertLess(res["oracle_net_spread"], self.engine.min_spread_entry)
 
+    def test_stop_loss_ratio_and_pct_interpretations(self):
+        """Verify that stop_loss_ratio (fraction of 1) and stop_loss_pct (percent of 100) yield exact same threshold."""
+        # Case A: configured with ratio 0.0050 (0.50%)
+        cfg_ratio = copy.deepcopy(self.cfg)
+        cfg_ratio["trading_rules"]["exit"]["target_exit"]["stop_loss_ratio"] = 0.0050
+        cfg_ratio["trading_rules"]["exit"]["target_exit"].pop("stop_loss_pct", None)
+        engine_ratio = TradingEngine(cfg_ratio, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
+        self.assertAlmostEqual(engine_ratio.stop_loss_ratio, 0.0050)
+        self.assertAlmostEqual(engine_ratio.stop_loss_pct, 0.0050)
+
+        # Case B: configured with pct 0.5 (0.5%)
+        cfg_pct = copy.deepcopy(self.cfg)
+        cfg_pct["trading_rules"]["exit"]["target_exit"].pop("stop_loss_ratio", None)
+        cfg_pct["trading_rules"]["exit"]["target_exit"]["stop_loss_pct"] = 0.50
+        engine_pct = TradingEngine(cfg_pct, {0: "BINANCE", 1: "KUCOIN", 2: "OKX", 3: "BITGET"})
+        self.assertAlmostEqual(engine_pct.stop_loss_ratio, 0.0050)
+        self.assertAlmostEqual(engine_pct.stop_loss_pct, 0.0050)
+
+        # Drawdown: entry 50000, bids 49600 -> -0.80% gross -> net ~ -0.88% < -0.50%
+        target_book = {
+            "bids": [[49600.0, 5.0]],
+            "asks": [[49610.0, 5.0]]
+        }
+        for eng in [engine_ratio, engine_pct]:
+            should_exit, res = eng.evaluate_exit_v9(
+                target_book=target_book,
+                target_ex="BITGET",
+                entry_price=50000.0,
+                qty=0.02,
+                side="LONG",
+                duration_sec=1.0,
+                actual_net_spread_entry=0.001
+            )
+            self.assertTrue(should_exit)
+            self.assertEqual(res["reason"], "STOP_LOSS")
+            self.assertIn("net_pnl_ratio", res)
+            self.assertIn("gross_pnl_ratio", res)
+
 if __name__ == '__main__':
     unittest.main()

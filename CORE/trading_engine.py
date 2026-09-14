@@ -68,24 +68,29 @@ class TradingEngine:
         # v9: target exit params (TTL is derived directly from decay_map)
         target_exit_cfg = self.cfg["trading_rules"]["exit"]["target_exit"]
         
-        # v9: stop loss can be null / <= 0 (disabled)
-        stop_loss_val = target_exit_cfg["stop_loss_pct"] if "stop_loss_pct" in target_exit_cfg else None
-        if stop_loss_val is not None and not isinstance(stop_loss_val, bool):
+        # v9: stop loss can be null / <= 0 (disabled).
+        # Suffix _ratio -> доля от единицы (0.005 = 0.5%). Suffix _pct -> процент от 100 (0.5 = 0.5%).
+        self.stop_loss_ratio = None
+        if "stop_loss_ratio" in target_exit_cfg and target_exit_cfg["stop_loss_ratio"] is not None:
             try:
-                val = float(stop_loss_val)
+                val = float(target_exit_cfg["stop_loss_ratio"])
                 if val > 0:
-                    # Защита от ввода в процентах: если указано >= 0.05 (например 0.5 вместо 0.005)
                     if val >= 0.05:
-                        log(f"⚠️ [CONFIG WARNING] stop_loss_pct задан как {val} (>= 5%). "
-                            f"Автоматически нормализовано: {val}% -> {val / 100.0:.4f}", level="WARNING")
+                        log(f"⚠️ [CONFIG WARNING] stop_loss_ratio задан как {val} (>= 5%). "
+                            f"Нормализовано как процент: {val}% -> {val / 100.0:.4f}", level="WARNING")
                         val = val / 100.0
-                    self.stop_loss_pct = val
-                else:
-                    self.stop_loss_pct = None
+                    self.stop_loss_ratio = val
             except (ValueError, TypeError):
-                self.stop_loss_pct = None
-        else:
-            self.stop_loss_pct = None
+                self.stop_loss_ratio = None
+        elif "stop_loss_pct" in target_exit_cfg and target_exit_cfg["stop_loss_pct"] is not None:
+            try:
+                val = float(target_exit_cfg["stop_loss_pct"])
+                if val > 0:
+                    # Суффикс _pct: если передано 0.5, это 0.5% -> переводим в ratio 0.0050
+                    self.stop_loss_ratio = (val / 100.0) if val >= 0.05 else val
+            except (ValueError, TypeError):
+                self.stop_loss_ratio = None
+        self.stop_loss_pct = self.stop_loss_ratio  # backward compatibility alias
         
         self.decay_map = target_exit_cfg["decay_map"]
         derived_ttl = None
@@ -421,13 +426,13 @@ class TradingEngine:
         
         if exit_price > 0 and entry_price > 0:
             if side == "LONG":
-                gross_pnl_pct = (exit_price - entry_price) / entry_price
+                gross_pnl_ratio = (exit_price - entry_price) / entry_price
             else:
-                gross_pnl_pct = (entry_price - exit_price) / entry_price
-            net_pnl_pct = gross_pnl_pct - (target_fee * 2.0)
+                gross_pnl_ratio = (entry_price - exit_price) / entry_price
+            net_pnl_ratio = gross_pnl_ratio - (target_fee * 2.0)
         else:
-            gross_pnl_pct = None
-            net_pnl_pct = None
+            gross_pnl_ratio = None
+            net_pnl_ratio = None
             exit_price = None
 
         # TTL check (unconditional market exit)
@@ -435,8 +440,10 @@ class TradingEngine:
             reason = "EMERGENCY_TTL" if use_emergency else "TTL_EXPIRED"
             return True, {
                 "reason": reason,
-                "net_pnl_pct": net_pnl_pct,
-                "gross_pnl_pct": gross_pnl_pct,
+                "net_pnl_ratio": net_pnl_ratio,
+                "gross_pnl_ratio": gross_pnl_ratio,
+                "net_pnl_pct": net_pnl_ratio,  # backward compatibility alias
+                "gross_pnl_pct": gross_pnl_ratio,  # backward compatibility alias
                 "exit_price": exit_price,
                 "entry_price": entry_price,
                 "duration_sec": duration_sec,
@@ -449,6 +456,8 @@ class TradingEngine:
         if exit_price is None or exit_price <= 0:
             return False, {
                 "reason": "NO_EXIT_LIQUIDITY", 
+                "net_pnl_ratio": None,
+                "gross_pnl_ratio": None,
                 "net_pnl_pct": None, 
                 "gross_pnl_pct": None,
                 "exit_price": None, 
@@ -461,8 +470,10 @@ class TradingEngine:
             }
         
         result = {
-            "net_pnl_pct": net_pnl_pct,
-            "gross_pnl_pct": gross_pnl_pct,
+            "net_pnl_ratio": net_pnl_ratio,
+            "gross_pnl_ratio": gross_pnl_ratio,
+            "net_pnl_pct": net_pnl_ratio,  # backward compatibility alias
+            "gross_pnl_pct": gross_pnl_ratio,  # backward compatibility alias
             "exit_price": exit_price,
             "entry_price": entry_price,
             "duration_sec": duration_sec,
@@ -473,12 +484,12 @@ class TradingEngine:
         }
         
         # Stop-Loss
-        if self.stop_loss_pct is not None and net_pnl_pct <= -self.stop_loss_pct:
+        if self.stop_loss_ratio is not None and net_pnl_ratio is not None and net_pnl_ratio <= -self.stop_loss_ratio:
             result["reason"] = "STOP_LOSS"
             return True, result
         
         # Take-Profit / Emergency Breakeven
-        if net_pnl_pct >= target_val:
+        if net_pnl_ratio is not None and net_pnl_ratio >= target_val:
             reason = "EMERGENCY_BREAKEVEN" if (use_emergency and target_val <= 0.0) else "TAKE_PROFIT"
             result["reason"] = reason
             return True, result
