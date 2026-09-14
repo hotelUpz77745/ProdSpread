@@ -1,0 +1,104 @@
+{
+    "BINANCE_BITGET": {
+        "XRP": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "BTC": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ETH": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        }
+    },
+    "BINANCE_KUCOIN": {
+        "XRP": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "BTC": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ETH": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        }
+    },
+    "BINANCE_OKX": {
+        "XRP": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "BTC": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ETH": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        }
+    },
+    "KUCOIN_OKX": {
+        "XRP": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "BTC": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ETH": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        }
+    },
+    "KUCOIN_BITGET": {
+        "XRP": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "BTC": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ETH": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        }
+    },
+    "OKX_BITGET": {
+        "XRP": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "BTC": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        },
+        "ETH": {
+            "current_position": false,
+            "pending_action": null,
+            "details": {}
+        }
+    }
+}
