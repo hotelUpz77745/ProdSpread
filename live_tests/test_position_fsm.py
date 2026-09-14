@@ -196,11 +196,11 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
     async def test_entry_slip_ratio_override(self):
         cfg_custom = copy.deepcopy(self.cfg)
         cfg_custom["trading_rules"]["entry"]["target_entry_logic"] = {
-            "entry_slip_ratio": 0.0015,
             "fill_confirm_timeout_sec": {"BINANCE_BITGET": 0.05},
             "fill_confirm_poll_interval_sec": 0.0,
             "entry_api_timeout_sec": 1.0
         }
+        cfg_custom["trading_risks"]["bitget"]["limit_slip_ratio"] = 0.0015
         engine_res = {
             "side": "LONG",
             "entry_price": 50000.0,
@@ -233,11 +233,11 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
     async def test_static_entry_slippage(self):
         cfg_static = copy.deepcopy(self.cfg)
         cfg_static["trading_rules"]["entry"]["target_entry_logic"] = {
-            "entry_slip_ratio": 0.0020,
             "fill_confirm_timeout_sec": {"BINANCE_BITGET": 0.05},
             "fill_confirm_poll_interval_sec": 0.0,
             "entry_api_timeout_sec": 1.0
         }
+        cfg_static["trading_risks"]["bitget"]["limit_slip_ratio"] = 0.0020
         
         # Test 1: LONG with 0.0020 (0.20%) slip regardless of net_spread
         engine_res1 = {

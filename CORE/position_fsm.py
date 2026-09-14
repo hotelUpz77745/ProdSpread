@@ -118,23 +118,7 @@ class PositionFSM:
         self.fill_confirm_poll_interval = float(target_entry_cfg["fill_confirm_poll_interval_sec"])
         self.entry_api_timeout = float(target_entry_cfg["entry_api_timeout_sec"])
         
-        # Entry slip ratio: единый статический допустимый предел (0.0020 = 0.20%)
-        if "entry_slip_ratio" in target_entry_cfg:
-            slip_cfg = target_entry_cfg["entry_slip_ratio"]
-            if isinstance(slip_cfg, dict):
-                self.entry_slip_ratio = float(slip_cfg[self.target_ex] if self.target_ex in slip_cfg else slip_cfg[self.target_ex.lower()])
-            else:
-                self.entry_slip_ratio = float(slip_cfg)
-        elif "limit_slip_ratio" in target_entry_cfg:
-            slip_cfg = target_entry_cfg["limit_slip_ratio"]
-            if isinstance(slip_cfg, dict):
-                self.entry_slip_ratio = float(slip_cfg[self.target_ex] if self.target_ex in slip_cfg else slip_cfg[self.target_ex.lower()])
-            else:
-                self.entry_slip_ratio = float(slip_cfg)
-        elif self.target_ex.lower() in self.cfg["trading_risks"] and "limit_slip_ratio" in self.cfg["trading_risks"][self.target_ex.lower()]:
-            self.entry_slip_ratio = float(self.cfg["trading_risks"][self.target_ex.lower()]["limit_slip_ratio"])
-        else:
-            self.entry_slip_ratio = 0.0020
+        self.entry_slip_ratio = float(self.cfg["trading_risks"][self.target_ex.lower()]["limit_slip_ratio"])
         
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
         self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
