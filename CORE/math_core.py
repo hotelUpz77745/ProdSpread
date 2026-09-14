@@ -278,14 +278,20 @@ def is_stale_jit(binance_ts: float, kucoin_ts: float, now_ts: float, timeout: fl
     return False
 
 from collections import deque
+import math
+import time
 from typing import Dict, Tuple, Optional
 
 class StaticDetector:
     """
     Детектор покоя стоячей ноги (Static Leg Detector).
-    Накапливает историю цен за скользящее окно buffer_window_sec,
-    рассчитывает среднее арифметическое накопленного ряда цен
-    и проверяет, не превышает ли отклонение входящей цены порог max_static_leg_pct.
+    1. Накапливает историю цен за скользящее окно buffer_window_sec.
+       Подрезка хвостов (popleft) и вычисление среднего арифметического
+       накопленного ряда (math.fsum) выполняются на низком уровне Си в CPython.
+    2. При обнаружении нестояка (delta > max_static_leg_pct) включается
+       карантин-кулдаун ровно на окно buffer_window_sec. В течение этого окна
+       метод возвращает False, пока входящие тики вхолостую обновляют буфер,
+       полностью вымывая аномальные цены и устраняя эффект 'резинового буфера'.
     """
     def __init__(self, cfg: dict):
         static_cfg = cfg["trading_rules"]["entry"]["static_detector"]
@@ -294,8 +300,22 @@ class StaticDetector:
         self.max_static_leg_pct = float(static_cfg["max_static_leg_pct"])
         self.buffer_window_sec = float(static_cfg["buffer_window_sec"])
             
-        # Хранилище тиков: (symbol, exchange) -> deque of (timestamp_mono, price)
-        self._buffers: Dict[Tuple[str, str], deque] = {}
+        # Хранилище тиков на низкоуровневых Си-деках CPython:
+        # (symbol, exchange) -> deque of float timestamps
+        self._ts_buffers: Dict[Tuple[str, str], deque] = {}
+        # (symbol, exchange) -> deque of float prices
+        self._price_buffers: Dict[Tuple[str, str], deque] = {}
+        
+        # Кулдаун после обнаружения нестояка: (symbol, exchange) -> float (deadline ts_mono)
+        self._cool_off_until: Dict[Tuple[str, str], float] = {}
+
+    @property
+    def _buffers(self) -> Dict[Tuple[str, str], deque]:
+        """Свойство совместимости для прямого доступа к парам (ts, price)."""
+        res = {}
+        for k in self._ts_buffers:
+            res[k] = deque(zip(self._ts_buffers[k], self._price_buffers[k]))
+        return res
 
     @staticmethod
     def calc_top3_mid_price(bids: list, asks: list) -> float:
@@ -312,52 +332,76 @@ class StaticDetector:
         return (sum_b + sum_a) / 2.0
 
     def update(self, sym: str, ex: str, price: float, ts_mono: float):
-        """Параллельное накопление тика в буфер с подрезкой хвостов."""
+        """
+        Параллельное накопление тика в буфер с подрезкой хвостов на Си.
+        popleft() и append() выполняются на уровне языка Си в CPython (_collectionsmodule.c).
+        """
         if price <= 0.0:
             return
         key = (sym, ex)
-        if key not in self._buffers:
-            self._buffers[key] = deque()
-        buf = self._buffers[key]
-        buf.append((ts_mono, price))
+        if key not in self._ts_buffers:
+            self._ts_buffers[key] = deque()
+            self._price_buffers[key] = deque()
+            
+        ts_buf = self._ts_buffers[key]
+        price_buf = self._price_buffers[key]
         
-        # Подрезка устаревших тиков по окну buffer_window_sec
+        # 1. Низкоуровневая подрезка устаревших тиков на Си: popleft() в CPython _collectionsmodule.c
         cutoff = ts_mono - self.buffer_window_sec
-        while buf and buf[0][0] < cutoff:
-            buf.popleft()
+        while ts_buf and ts_buf[0] < cutoff:
+            ts_buf.popleft()
+            price_buf.popleft()
 
-    def is_leg_static(self, sym: str, ex: str, current_price: float) -> Tuple[bool, str, float]:
+        # 2. Накопление нового значения (вхолостую во время кулдауна или штатно)
+        ts_buf.append(ts_mono)
+        price_buf.append(price)
+
+    def is_leg_static(self, sym: str, ex: str, current_price: float, ts_mono: Optional[float] = None) -> Tuple[bool, str, float]:
         """
-        Проверяет покой ноги ex:
-        Считает среднее арифметическое ряда цен в буфере и процентное отклонение current_price.
-        Возвращает (is_static, reason, deviation).
+        Проверяет покой стоячей ноги ex:
+        1. Если действует кулдаун после нестояка — возвращает False, ожидая полного выбывания аномалии.
+        2. Считает среднее арифметическое на Си через math.fsum.
+        3. Если delta > max_static_leg_pct — ставит кулдаун на buffer_window_sec и возвращает False.
         """
         if not self.is_enabled:
             return True, "STATIC_CHECK_DISABLED", 0.0
             
+        if ts_mono is None:
+            ts_mono = time.monotonic()
+            
         key = (sym, ex)
-        buf = self._buffers.get(key)
-        if not buf:
-            # Если истории еще нет (первый тик) — 1-е значение тоже значение
+        
+        # 1. Проверка активного кулдауна после нестояка (вымывание 'резинового буфера')
+        cool_deadline = self._cool_off_until.get(key, 0.0)
+        if ts_mono < cool_deadline:
+            remaining = cool_deadline - ts_mono
+            return False, f"LEG_COOLING_OFF (remaining {remaining:.3f}s)", 0.0
+            
+        price_buf = self._price_buffers.get(key)
+        if not price_buf or len(price_buf) < 1:
+            # Первый тик / пустой буфер — 1-е значение тоже значение
             return True, "FIRST_TICK_BASELINE", 0.0
             
-        # Среднее арифметическое накопленного ряда цен
-        mean_price = sum(p for _, p in buf) / len(buf)
+        # 2. Среднее арифметическое накопленного ряда на Си (math.fsum)
+        mean_price = math.fsum(price_buf) / len(price_buf)
         if mean_price <= 0.0:
             return True, "INVALID_MEAN_PRICE", 0.0
             
+        # 3. Относительное отклонение текущей цены
         deviation = abs(current_price - mean_price) / mean_price
         
         if deviation > self.max_static_leg_pct:
-            return False, f"LEG_NOT_STATIC (dev {deviation*100:.3f}% > max {self.max_static_leg_pct*100:.3f}%)", deviation
+            # Нестояк зафиксирован: взводим кулдаун ровно на окно buffer_window_sec,
+            # чтобы аномальная цена и переходной шум полностью выбыли из буфера!
+            self._cool_off_until[key] = ts_mono + self.buffer_window_sec
+            return False, f"LEG_NOT_STATIC (dev {deviation*100:.3f}% > max {self.max_static_leg_pct*100:.3f}%, cooldown {self.buffer_window_sec:.3f}s)", deviation
             
         return True, "LEG_STATIC_OK", deviation
 
-    # Alias for backward compatibility
-    def check_impulse(self, sym: str, oracle_ex: str, target_ex: str, oracle_price: float, target_price: float, side: Optional[str] = None) -> Tuple[bool, str, float, float]:
+    def check_impulse(self, sym: str, oracle_ex: str, target_ex: str, oracle_price: float, target_price: float, side: Optional[str] = None, ts_mono: Optional[float] = None) -> Tuple[bool, str, float, float]:
         static_ex = target_ex if self.static_leg == "TARGET" else oracle_ex
         chk_price = target_price if self.static_leg == "TARGET" else oracle_price
-        is_st, reason, dev = self.is_leg_static(sym, static_ex, chk_price)
+        is_st, reason, dev = self.is_leg_static(sym, static_ex, chk_price, ts_mono)
         return is_st, reason, 0.0, dev
 
 ImpulseDetector = StaticDetector

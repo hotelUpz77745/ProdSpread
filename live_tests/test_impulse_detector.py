@@ -72,11 +72,64 @@ class TestStaticDetector(unittest.TestCase):
         self.assertEqual(buf[0][1], 101.0)
         self.assertEqual(buf[1][1], 102.0)
 
-    def test_first_tick_baseline(self):
-        """Empty buffer should return baseline True without failing."""
-        is_static, reason, dev = self.detector.is_leg_static("ETH", "BITGET", 2500.0)
-        self.assertTrue(is_static)
-        self.assertEqual(reason, "FIRST_TICK_BASELINE")
+    def test_anomaly_cooldown_locks_and_flushes_buffer(self):
+        """
+        When an anomaly occurs (delta > max_static_leg_pct):
+        1. is_leg_static returns False with cooldown notice.
+        2. During buffer_window_sec (0.25s), is_leg_static returns False with LEG_COOLING_OFF.
+        3. Background updates continue buffering and naturally prune old ticks.
+        4. After buffer_window_sec, the anomaly is flushed out and steady price returns True.
+        """
+        ts = 1000.0
+        # Phase 1: Establish baseline at 100.0
+        self.detector.update("SOL", "BITGET", 100.0, ts)
+        self.detector.update("SOL", "BITGET", 100.0, ts + 0.05)
+        self.detector.update("SOL", "BITGET", 100.0, ts + 0.10)
+        
+        # Phase 2: Anomaly occurs (dump to 98.0 -> 2.0% deviation > 0.20%)
+        is_static, reason, dev = self.detector.is_leg_static("SOL", "BITGET", 98.0, ts_mono=ts + 0.10)
+        self.assertFalse(is_static)
+        self.assertIn("LEG_NOT_STATIC", reason)
+        self.assertIn("cooldown 0.250s", reason)
+        
+        # Phase 3: During cooldown (e.g. +0.10s after anomaly, remaining ~0.15s)
+        # Even if someone queries 100.0 (the old price), it MUST return False (LEG_COOLING_OFF)
+        is_static_cool, reason_cool, _ = self.detector.is_leg_static("SOL", "BITGET", 100.0, ts_mono=ts + 0.20)
+        self.assertFalse(is_static_cool)
+        self.assertIn("LEG_COOLING_OFF", reason_cool)
+        
+        # Phase 4: Idle background accumulation of new ticks at 98.0
+        self.detector.update("SOL", "BITGET", 98.0, ts + 0.15)
+        self.detector.update("SOL", "BITGET", 98.0, ts + 0.25)
+        self.detector.update("SOL", "BITGET", 98.0, ts + 0.36)  # 0.36 > 0.10 + 0.25 -> old ticks at 100.0 pruned!
+        
+        # Phase 5: Cooldown expired at ts + 0.36 (> ts + 0.10 + 0.25 = 1000.35)
+        # The buffer now contains only 98.0 ticks! Checking 98.0 must return True!
+        is_static_settled, reason_settled, dev_settled = self.detector.is_leg_static("SOL", "BITGET", 98.0, ts_mono=ts + 0.36)
+        self.assertTrue(is_static_settled)
+        self.assertEqual(reason_settled, "LEG_STATIC_OK")
+        self.assertAlmostEqual(dev_settled, 0.0, places=5)
+
+    def test_incoming_update_anomaly_triggers_cooldown(self):
+        """When an anomaly is queried, it triggers cooldown, and subsequent queries are locked in LEG_COOLING_OFF."""
+        ts = 2000.0
+        self.detector.update("XRP", "BITGET", 1.00, ts)
+        self.detector.update("XRP", "BITGET", 1.00, ts + 0.05)
+        
+        # Huge jump arrives
+        self.detector.update("XRP", "BITGET", 1.05, ts + 0.10) # 5% jump
+        
+        # First query detects the non-static move and sets cooldown
+        is_static, reason, _ = self.detector.is_leg_static("XRP", "BITGET", 1.05, ts_mono=ts + 0.12)
+        self.assertFalse(is_static)
+        self.assertIn("LEG_NOT_STATIC", reason)
+        self.assertIn("cooldown 0.250s", reason)
+        
+        # Subsequent query at ts + 0.15 is locked in cooldown
+        is_static2, reason2, _ = self.detector.is_leg_static("XRP", "BITGET", 1.05, ts_mono=ts + 0.15)
+        self.assertFalse(is_static2)
+        self.assertIn("LEG_COOLING_OFF", reason2)
 
 if __name__ == '__main__':
     unittest.main()
+
