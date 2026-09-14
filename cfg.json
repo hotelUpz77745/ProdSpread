@@ -155,8 +155,6 @@
                 }
             },
             "target_entry_logic": {
-                "entry_slip_ratio": 0.0030,
-                "entry_slip_ratio_desc": "Статический допустимый предел проскальзывания ордера входа LIMIT_IOC вглубь стакана в долях от 1 (например, 0.0020 = 0.20%).",
                 "fill_confirm_timeout_sec": {
                     "BINANCE_KUCOIN": 0.3,
                     "BINANCE_BITGET": 0.3,
