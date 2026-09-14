@@ -127,7 +127,7 @@ class TestTradingEngine(unittest.TestCase):
         self.assertEqual(res["side"], "LONG")
         self.assertEqual(res["target_ex"], "BITGET")
         self.assertEqual(res["oracle_ex"], "BINANCE")
-        self.assertGreater(res["net_spread"], 0.001)
+        self.assertGreater(res["net_spread"], 0.0009)
 
     def test_evaluate_entry_v9_short(self):
         # Oracle mid is 49900

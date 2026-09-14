@@ -280,94 +280,84 @@ def is_stale_jit(binance_ts: float, kucoin_ts: float, now_ts: float, timeout: fl
 from collections import deque
 from typing import Dict, Tuple, Optional
 
-class ImpulseDetector:
+class StaticDetector:
+    """
+    Детектор покоя стоячей ноги (Static Leg Detector).
+    Накапливает историю цен за скользящее окно buffer_window_sec,
+    рассчитывает среднее арифметическое накопленного ряда цен
+    и проверяет, не превышает ли отклонение входящей цены порог max_static_leg_pct.
+    """
     def __init__(self, cfg: dict):
-        try:
-            impulse_cfg = cfg["trading_rules"]["entry"]["impulse_detector"]
-            self.is_enabled = bool(impulse_cfg["enabled"])
-            self.buffer_window_sec = float(impulse_cfg["buffer_window_ms"]) / 1000.0
-            
-            if "static_leg" in impulse_cfg:
-                self.static_leg = str(impulse_cfg["static_leg"]).upper()
-            elif "impulse_leg" in impulse_cfg:
-                imp = str(impulse_cfg["impulse_leg"]).upper()
-                self.static_leg = "TARGET" if imp == "ORACLE" else "ORACLE"
-            else:
-                self.static_leg = "TARGET"
-                
-            self.max_static_leg_ratio = float(impulse_cfg.get("max_static_leg_ratio", 0.25))
-        except KeyError:
-            self.is_enabled = False
-            self.buffer_window_sec = 0.250
-            self.static_leg = "TARGET"
-            self.max_static_leg_ratio = 0.25
+        static_cfg = cfg["trading_rules"]["entry"]["static_detector"]
+        self.is_enabled = bool(static_cfg["enabled"])
+        self.static_leg = str(static_cfg["static_leg"]).upper()
+        self.max_static_leg_pct = float(static_cfg["max_static_leg_pct"])
+        self.buffer_window_sec = float(static_cfg["buffer_window_sec"])
             
         # Хранилище тиков: (symbol, exchange) -> deque of (timestamp_mono, price)
         self._buffers: Dict[Tuple[str, str], deque] = {}
 
-    def update(self, sym: str, ex: str, vwap_price: float, ts_mono: float):
+    @staticmethod
+    def calc_top3_mid_price(bids: list, asks: list) -> float:
+        """
+        Экономный и точный расчет цены: полусумма средних первых 3 асков и 3 бидов.
+        ((ask1 + ask2 + ask3)/3 + (bid1 + bid2 + bid3)/3) / 2
+        """
+        b_slice = bids[:3]
+        a_slice = asks[:3]
+        if not b_slice or not a_slice:
+            return 0.0
+        sum_b = sum(float(b[0]) for b in b_slice) / len(b_slice)
+        sum_a = sum(float(a[0]) for a in a_slice) / len(a_slice)
+        return (sum_b + sum_a) / 2.0
+
+    def update(self, sym: str, ex: str, price: float, ts_mono: float):
+        """Параллельное накопление тика в буфер с подрезкой хвостов."""
+        if price <= 0.0:
+            return
         key = (sym, ex)
         if key not in self._buffers:
             self._buffers[key] = deque()
         buf = self._buffers[key]
-        buf.append((ts_mono, vwap_price))
+        buf.append((ts_mono, price))
         
-        # Очистка устаревших тиков за пределами окна
+        # Подрезка устаревших тиков по окну buffer_window_sec
         cutoff = ts_mono - self.buffer_window_sec
         while buf and buf[0][0] < cutoff:
             buf.popleft()
 
-    def get_delta(self, sym: str, ex: str, current_price: float) -> float:
+    def is_leg_static(self, sym: str, ex: str, current_price: float) -> Tuple[bool, str, float]:
+        """
+        Проверяет покой ноги ex:
+        Считает среднее арифметическое ряда цен в буфере и процентное отклонение current_price.
+        Возвращает (is_static, reason, deviation).
+        """
+        if not self.is_enabled:
+            return True, "STATIC_CHECK_DISABLED", 0.0
+            
         key = (sym, ex)
         buf = self._buffers.get(key)
         if not buf:
-            return 0.0
-        base_price = buf[0][1]
-        if base_price <= 0:
-            return 0.0
-        return (current_price - base_price) / base_price
-
-    def check_impulse(
-        self,
-        sym: str,
-        oracle_ex: str,
-        target_ex: str,
-        oracle_price: float,
-        target_price: float,
-        side: Optional[str] = None
-    ) -> Tuple[bool, str, float, float]:
-        """
-        Проверяет соблюдение условий импульса (Кейс Б или Кейс В):
-        - Для LONG: спред расширяется в пользу покупки на Target (o_delta - t_delta > 0).
-        - Для SHORT: спред расширяется в пользу продажи на Target (t_delta - o_delta > 0).
-        - Статичная нога (TARGET или ORACLE) не должна иметь шум более max_static_leg_ratio от дельты спреда.
-        """
-        if not self.is_enabled:
-            return True, "IMPULSE_DISABLED", 0.0, 0.0
+            # Если истории еще нет (первый тик) — 1-е значение тоже значение
+            return True, "FIRST_TICK_BASELINE", 0.0
             
-        o_delta = self.get_delta(sym, oracle_ex, oracle_price)
-        t_delta = self.get_delta(sym, target_ex, target_price)
+        # Среднее арифметическое накопленного ряда цен
+        mean_price = sum(p for _, p in buf) / len(buf)
+        if mean_price <= 0.0:
+            return True, "INVALID_MEAN_PRICE", 0.0
+            
+        deviation = abs(current_price - mean_price) / mean_price
         
-        if side is None:
-            spread_delta = abs(o_delta - t_delta)
-        elif side.upper() == "LONG":
-            spread_delta = o_delta - t_delta
-        elif side.upper() == "SHORT":
-            spread_delta = t_delta - o_delta
-        else:
-            spread_delta = abs(o_delta - t_delta)
+        if deviation > self.max_static_leg_pct:
+            return False, f"LEG_NOT_STATIC (dev {deviation*100:.3f}% > max {self.max_static_leg_pct*100:.3f}%)", deviation
+            
+        return True, "LEG_STATIC_OK", deviation
 
-        # Импульс обязан быть строго положительным (спред расширяется в направлении сделки)
-        if spread_delta <= 1e-7:
-            return False, f"NO_IMPULSE_MOMENTUM ({side or 'DELTA'} requires spread_delta > 0, got {spread_delta*100:+.3f}%)", o_delta, t_delta
+    # Alias for backward compatibility
+    def check_impulse(self, sym: str, oracle_ex: str, target_ex: str, oracle_price: float, target_price: float, side: Optional[str] = None) -> Tuple[bool, str, float, float]:
+        static_ex = target_ex if self.static_leg == "TARGET" else oracle_ex
+        chk_price = target_price if self.static_leg == "TARGET" else oracle_price
+        is_st, reason, dev = self.is_leg_static(sym, static_ex, chk_price)
+        return is_st, reason, 0.0, dev
 
-        allowed_noise = spread_delta * self.max_static_leg_ratio
-        
-        if self.static_leg == "TARGET":
-            if abs(t_delta) > allowed_noise:
-                return False, f"TARGET_NOT_STATIC (noise {abs(t_delta)*100:+.3f}% > allowed {allowed_noise*100:+.3f}%)", o_delta, t_delta
-        elif self.static_leg == "ORACLE":
-            if abs(o_delta) > allowed_noise:
-                return False, f"ORACLE_NOT_STATIC (noise {abs(o_delta)*100:+.3f}% > allowed {allowed_noise*100:+.3f}%)", o_delta, t_delta
-                
-        return True, "VALID_IMPULSE", o_delta, t_delta
+ImpulseDetector = StaticDetector

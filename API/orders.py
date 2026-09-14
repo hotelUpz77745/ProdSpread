@@ -178,7 +178,7 @@ class BinanceOrder:
             raw_qty = float(exact_qty)
         else:
             raw_qty = size_usd / price
-        price_rounding = ROUND_FLOOR if side.upper() == "BUY" else ROUND_CEILING
+        price_rounding = ROUND_CEILING if side.upper() == "BUY" else ROUND_FLOOR
         qty_str = round_by_step(raw_qty, step_size, rounding=ROUND_FLOOR)
         price_str = round_by_step(price, tick_size, rounding=price_rounding)
         
@@ -301,6 +301,11 @@ class BinanceOrder:
     def unsubscribe_position_update(self, symbol: str, side: str) -> None:
         if self.position_stream and hasattr(self.position_stream, "unsubscribe_update"):
             self.position_stream.unsubscribe_update(symbol, side)
+
+    def get_last_order_event(self, symbol: str, side: str) -> Optional[dict]:
+        if self.position_stream and hasattr(self.position_stream, "get_last_order_event"):
+            return self.position_stream.get_last_order_event(symbol, side)
+        return None
 
     def get_last_close_price(self, symbol: str) -> float:
         if self.position_stream and hasattr(self.position_stream, "get_last_close_price"):
@@ -581,7 +586,7 @@ class KucoinOrder:
         else:
             raw_lots = (size_usd / price) / multiplier
         
-        price_rounding = ROUND_FLOOR if side.upper() == "BUY" else ROUND_CEILING
+        price_rounding = ROUND_CEILING if side.upper() == "BUY" else ROUND_FLOOR
         qty_str = round_by_step(raw_lots, lot_size, rounding=ROUND_FLOOR)
         price_str = round_by_step(price, tick_size, rounding=price_rounding)
         
@@ -908,6 +913,11 @@ class KucoinOrder:
         if self.position_stream and hasattr(self.position_stream, "unsubscribe_update"):
             self.position_stream.unsubscribe_update(symbol, side)
 
+    def get_last_order_event(self, symbol: str, side: str) -> Optional[dict]:
+        if self.position_stream and hasattr(self.position_stream, "get_last_order_event"):
+            return self.position_stream.get_last_order_event(symbol, side)
+        return None
+
     def get_last_close_price(self, symbol: str) -> float:
         if self.position_stream and hasattr(self.position_stream, "get_last_close_price"):
             return self.position_stream.get_last_close_price(symbol)
@@ -1117,7 +1127,7 @@ class BitgetOrder:
             raw_qty = (size_usd / price)
         price_step = f"1e-{pricePlace}" if pricePlace > 0 else "1"
         vol_step = f"1e-{volumePlace}" if volumePlace > 0 else "1"
-        price_rounding = ROUND_FLOOR if side.upper() == "BUY" else ROUND_CEILING
+        price_rounding = ROUND_CEILING if side.upper() == "BUY" else ROUND_FLOOR
         qty_str = round_by_step(raw_qty, vol_step, rounding=ROUND_FLOOR)
         price_str = round_by_step(price, price_step, rounding=price_rounding)
         
@@ -1407,6 +1417,11 @@ class BitgetOrder:
     def unsubscribe_position_update(self, symbol: str, side: str) -> None:
         if self.position_stream and hasattr(self.position_stream, "unsubscribe_update"):
             self.position_stream.unsubscribe_update(symbol, side)
+
+    def get_last_order_event(self, symbol: str, side: str) -> Optional[dict]:
+        if self.position_stream and hasattr(self.position_stream, "get_last_order_event"):
+            return self.position_stream.get_last_order_event(symbol, side)
+        return None
 
     def get_last_close_price(self, symbol: str) -> float:
         if self.position_stream and hasattr(self.position_stream, "get_last_close_price"):

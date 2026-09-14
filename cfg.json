@@ -109,15 +109,15 @@
     "trading_rules": {
         "entry": {
             "order_execution_type": "TARGET_LIMIT_IOC",
-            "impulse_detector": {
+            "static_detector": {
                 "enabled": true,
-                "enabled_desc": "Включение детектора истинного направленного импульса. Блокирует вход при отсутствии импульса или движении против сделки.",
-                "buffer_window_ms": 250,
-                "buffer_window_ms_desc": "Длина скользящего окна анализа импульса (мс).",
+                "enabled_desc": "Включение детектора стоячей ноги. Блокирует вход, если стоячая нога отклоняется от скользящего среднего ряда цен.",
                 "static_leg": "TARGET",
-                "static_leg_desc": "Статичная нога ('TARGET' для Кейса Б, когда импульс на Поводыре; 'ORACLE' для Кейса В, когда импульс на Мишени). Также поддерживается ключ impulse_leg ('ORACLE' | 'TARGET').",
-                "max_static_leg_ratio": 0.25,
-                "max_static_leg_ratio_desc": "Допустимый зазор шума для стоячей ноги (0.25 = 25% от величины изменения спреда)."
+                "static_leg_desc": "Стоячая нога: 'TARGET' для Кейса Б (Оракул летит, Мишень стоит); 'ORACLE' для Кейса В (Мишень летит, Оракул стоит).",
+                "max_static_leg_pct": 0.0020,
+                "max_static_leg_pct_desc": "Максимально допустимое процентное отклонение текущей цены от среднего арифметического буфера (0.0020 = 0.2%).",
+                "buffer_window_sec": 0.25,
+                "buffer_window_sec_desc": "Окно накопления цен и замера среднего (сек). 0.25 с = 250 мс."
             },
             "signal_filters": {
                 "spread_entry_pre": [
@@ -128,7 +128,7 @@
                 "spread_entry_desc": "spread_entry_pre: Диапазон [min, max] грубого префильтра (триггер запуска таймера задержки dwell_ms). spread_entry_base: Финальный порог входа в эвалюаторе. Позволяет спреду слегка откатиться во время удержания сигнала, но не ниже base.",
                 "min_top_depth_usd": 50.0,
                 "min_top_depth_usd_desc": "Минимальный объем (USD) на первом уровне стакана (Ask/Bid) для допуска связки к арбитражу в pre_calculate_orderbook.",
-                "min_signal_dwell_ms": 15,
+                "min_signal_dwell_ms": 0,
                 "min_signal_dwell_ms_desc": "Minimum milliseconds an entry signal must continuously persist across ticks before firing (0 to disable).",
                 "top_n_candidates": 4,
                 "max_desync_ms": {
@@ -155,8 +155,14 @@
                 }
             },
             "target_entry_logic": {
+                "dynamic_slip_profit_ratio": 0.30,
+                "dynamic_slip_profit_ratio_desc": "Максимальная доля расчетной прибыли, выделяемая на проскальзывание входа (0.30 = 30% от net_spread).",
+                "max_entry_slip_ratio": 0.005,
+                "max_entry_slip_ratio_desc": "Максимальный потолок (фоллбэк) проскальзывания входа (0.005 = 0.5%).",
+                "min_entry_slip_ratio": 0.0005,
+                "min_entry_slip_ratio_desc": "Минимальный порог проскальзывания входа (0.0005 = 0.05%).",
                 "entry_slip_ratio": 0.0015,
-                "entry_slip_ratio_desc": "Дальность заброса лимитной заявки LIMIT_IOC (проскальзывание входа). Например 0.0015 = 0.15% вглубь стакана от расчетной VWAP цены для гарантированного моментального налива.",
+                "entry_slip_ratio_desc": "Базовое проскальзывание входа (фоллбэк, если net_spread недоступен). Например 0.0015 = 0.15% вглубь стакана.",
                 "fill_confirm_timeout_sec": {
                     "BINANCE_KUCOIN": 0.3,
                     "BINANCE_BITGET": 0.3,

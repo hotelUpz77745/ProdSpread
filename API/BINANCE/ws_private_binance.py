@@ -5,6 +5,7 @@
 
 import asyncio
 import aiohttp
+import time
 import re
 import json
 from typing import Optional, Callable, Set, Dict, Any, Tuple
@@ -95,6 +96,7 @@ class BinancePositionStream:
         self.last_close_prices: Dict[str, float] = {}
         # Reactive listener registry: (symbol, side) -> asyncio.Event
         self._update_events: Dict[Tuple[str, str], asyncio.Event] = {}
+        self.last_order_events: Dict[Tuple[str, str], dict] = {}
 
     def subscribe_update(self, symbol: str, side: str) -> asyncio.Event:
         """Registers or returns Event BEFORE submitting order."""
@@ -105,6 +107,8 @@ class BinancePositionStream:
         if ev is None:
             ev = asyncio.Event()
             self._update_events[key] = ev
+        else:
+            ev.clear()
         return ev
 
     def unsubscribe_update(self, symbol: str, side: str) -> None:
@@ -112,6 +116,11 @@ class BinancePositionStream:
         sym = normalize_symbol(symbol) or symbol.strip().upper()
         s = side.strip().upper()
         self._update_events.pop((sym, s), None)
+
+    def get_last_order_event(self, symbol: str, side: str) -> Optional[dict]:
+        sym = normalize_symbol(symbol) or symbol.strip().upper()
+        s = side.strip().upper()
+        return self.last_order_events.get((sym, s))
 
     def _notify(self, symbol: str, side: str) -> None:
         """Instantly awakens FSM on position update for (symbol, side)."""
@@ -195,6 +204,15 @@ class BinancePositionStream:
         if symbol not in self.positions:
             self.positions[symbol] = {"LONG": {"size": 0.0, "price": 0.0}, "SHORT": {"size": 0.0, "price": 0.0}}
 
+        if pos_side_raw in ("LONG", "SHORT"):
+            self.last_order_events[(symbol, pos_side_raw)] = {
+                "status": order_status.lower(),
+                "cum_qty": cum_qty,
+                "avg_price": avg_price,
+                "is_close": is_reduce,
+                "timestamp": time.time()
+            }
+
         if order_status in ("FILLED", "PARTIALLY_FILLED"):
             if order_status == "FILLED" and is_reduce:
                 self.positions[symbol][pos_side_raw] = {"size": 0.0, "price": 0.0}
@@ -207,6 +225,8 @@ class BinancePositionStream:
                     "price": avg_price
                 }
                 self._notify(symbol, pos_side_raw)
+        elif order_status in ("CANCELED", "EXPIRED", "REJECTED"):
+            self._notify(symbol, pos_side_raw)
 
     async def _handle_account_update(self, data: dict):
         acc = data.get("a", {})

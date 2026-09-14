@@ -1,14 +1,20 @@
-# 🧠 Архитектура HFT Спредера (Mental Map v8.0 - Parallel LIMIT_IOC Execution)
+# 🧠 Архитектура HFT Спредера (Mental Map v9.1 - Single-Leg Lead-Lag Execution with StaticDetector)
 
 > [!NOTE]
-> **СТАТУС ТЕКУЩЕЙ АРХИТЕКТУРЫ: PARALLEL_LIMIT_IOC (v8.0)**
-> В версии **v8.0** система использует параллельный симметричный протокол исполнения `LIMIT_IOC` со следующими рубежами защиты капитала:
-> - **Пре-фильтр OBI (Order Book Imbalance):** Оценка дисбаланса топ-уровней стакана на обеих биржах до выстрела (Long-аски, Short-биды). Отсекает вход при давлении против входа. По умолчанию отключен (`enabled: false`) как избыточный для жесткого LIMIT_IOC.
-> - **Синтетический выход (Synthetic Exit):** Симуляция немедленного закрытия по встречным стаканам. Блокирует спред, если внутренний bid-ask съедает >50% прибыли (защита от фантомных спредов).
-> - **Параллельный вход (Parallel Entry):** Лимитный прострел обеих бирж (LIMIT_IOC) с независимым контролем дальности заброса (`limit_slip_ratio` из `trading_risks` для каждой биржи).
-> - **Валидация налива (Fill Validation):** Оценка соотношения налитых объемов `min_hedge_fill_rate` (>= 60%). Если достигнуто — переход в `ACTIVE_HEDGED`. Если нет — `SINGLE_LEG_EXPOSURE`. При нулевом наливе обеих ног — карантин `10s`.
-> - **Выход Hedged (Hedged Exit):** Обычный выход по карте `normal_decay`. Спреды рассчитываются строго относительно цены Short-ноги (Bid) для 100% математического совпадения с `PapperSpread`.
-> - **Выход Single Leg (Single Leg Exit):** Попытка дозакрыть зависшую ногу лимитками (чейзинг стакана) по карте `chase_map`, либо мгновенный сброс маркетом (если `immediate_market: true` или частичный дисбалансный налив обеих ног).
+> **СТАТУС ТЕКУЩЕЙ АРХИТЕКТУРЫ: SINGLE_LEG_LEAD_LAG (v9.1)**
+> В версии **v9.1** система использует одноногий направленный арбитраж (Lead-Lag Arbitrage) со следующими рубежами защиты капитала:
+> - **Оракул-Поводырь (Oracle Compass):** Ведущая биржа (Binance) выступает ориентиром ценового импульса. Торговые API-ключи на Binance отключены от отправки ордеров — биржа работает исключительно в режиме сверхбыстрого WS-чтения стаканов.
+> - **Детектор Стояка (StaticDetector):** В реальном времени (окно 250 мс, ~5–8 тиков) буферизирует среднюю цену топ-3 уровней стакана ((a1+a2+a3)/3 + (b1+b2+b3)/3)/2. Проверяет, что статичная нога (`static_leg: "TARGET"` для Кейса Б) отклоняется от своего скользящего среднего не более чем на `max_static_leg_pct: 0.0020` (0.2%). Любое движение мишени против входа отсекается до отправки ордеров.
+> - **Глубокий математический анализ (evaluate_entry):**
+>   - Отсечение фасадного мусора стакана через квалифицированный уровень `min_top_depth_usd`.
+>   - Расчет реального VWAP исполнения под размер `size_usd` с учетом индивидуального дисконта волатильности биржи.
+>   - Полный учет комиссий тейкера обеих бирж в спреде.
+>   - Проверка дисбаланса книги заявок (OBI) на обеих ногах.
+>   - Синтетическая симуляция немедленного обратного выхода (Synthetic Exit) с контролем динамического и жесткого проскальзывания.
+> - **Одноногий реактивный выстрел (Target Shot):** Ордер `LIMIT_IOC` отправляется исключительно на Target-биржу (Bitget или KuCoin). Квантование цен инвертировано: `BUY` округляется вверх (`ROUND_CEILING`), `SELL` — вниз (`ROUND_FLOOR`), гарантируя налив встречной ликвидности.
+> - **Динамическое проскальзывание:** Размер допустимого заброса цены рассчитывается динамически от чистого спреда (slip = clamp(net_spread * 0.30, min_entry_slip_ratio, max_entry_slip_ratio)).
+> - **Валидация налива (Fill Validation):** Ожидание WS-подтверждения. При нулевом наливе (0%) — мгновенный переход в `ABORTED` и изоляция в карантине `zero_fill` без подвисаний. При наливе >0% — статус `ACTIVE`.
+> - **Выход из позиции:** Осуществляется по локальному профиту на самой ведомой бирже по карте деградации `normal_decay`.
 
 ---
 
@@ -22,12 +28,12 @@
 │                    (main.py)                           │
 │  • Public WS Streams (Binance, KuCoin, Bitget, OKX)    │
 │  • Numba JIT Orderbook Scan (pre_calculate_orderbook)   │
-│  • VWAP & Spread Analysis (trading_engine.py)          │
+│  • Top-3 Mid-Price Tracking (math_core.py)             │
+│  • Standing Leg Detector (StaticDetector v9.1)         │
+│  • Deep VWAP & Spread Analysis (evaluate_entry)        │
 │  • Synthetic Reverse Liquidity Check (ratio: 0.50)     │
-│  • Signal Dwell Time Filter (min_signal_dwell_ms)      │
 │  • Global Symbol & Exchange Locks (position_manager)   │
-│  • Profit Decay Monitoring:                            │
-│      - normal_decay (60с TTL, 30с 0.00)                │
+│  • Profit Decay Monitoring (local target net yield)    │
 └─────────────────────────┬──────────────────────────────┘
                           │ Local Async TCP Socket (IPC)
                           │ [CMD_OPEN, CMD_CLOSE, INIT_TOPOLOGY]
@@ -37,23 +43,22 @@
 │               (CORE/executor_process.py)               │
 │  • Pre-warmed Persistent TCP/TLS REST Sessions         │
 │    (Keepalive Loop каждые 45с с фейк-ордерами warmup)  │
-│  • Position FSM (Reactive Finite State Machine v8.0)   │
+│  • Position FSM (Reactive Single-Leg FSM v9.1)         │
 │  • Reactive Event Bus (asyncio.Event per symbol/side)  │
 │    [Zero OS Timer Sleep Jitter: FSM wakeup < 0.1 ms]   │
 │  • Real-Time Private WS Position Streams (KuCoin,      │
-│    Binance, Bitget) с контрактными множителями         │
+│    Bitget) с контрактными множителями                  │
 │  • Directional Safe Quantization:                      │
-│      - BUY: ROUND_FLOOR (никогда не платить выше)      │
-│      - SELL: ROUND_CEILING (не продавать ниже)         │
+│      - BUY: ROUND_CEILING (запас для налив асков)     │
+│      - SELL: ROUND_FLOOR (запас для налива бидов)      │
 │      - QTY: ROUND_FLOOR + Epsilon 1e-8 (нет остатка)   │
-│  • Exact Nominal Dispatch (exact_qty)                  │
-│  • Parallel LIMIT_IOC Shot (slippage from risks)       │
+│  • Dynamic Entry Slippage (30% of net spread)          │
+│  • Single-Leg Target LIMIT_IOC Shot                    │
 │  • Fill Confirmation via WS (timeout 0.6s)             │
-│  • Single Leg Book Chasing (chase_map LIMIT_IOC)       │
+│  • Zero-Fill Fast Path (instant ABORTED quarantine)    │
 │  • Emergency Unwind (MARKET reduce_only)               │
 │  • Instant 0ms PnL Calculation (analytics.py)          │
 │  • Automated Margin & Leverage Setup (leverage_setter) │
-└────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -64,59 +69,70 @@
 - **Топология инструментов (`discovery.py`):** Запрашивает 24ч объемы торгов (фильтр от $2M–$5M), отсекает неликвид, строит нормализованный кросс-биржевой маппинг `coin_to_native` для активных связок (`BINANCE_KUCOIN`, `BINANCE_BITGET`).
 - **Сбор стаканов:** Поддерживает пулы WebSocket-стримов стаканов глубины (L2 Depth).
 - **Микросекундный пре-фильтр (`CORE/math_core.py`):** Каждую итерацию без задержки обновляет 4-колоночную матрицу цен и объемов `prices_array` (`[ask_p, ask_usd, bid_p, bid_usd]`) и прогоняет ее через `pre_calculate_orderbook` (`Numba @njit`), мгновенно отсекая тонкие уровни (`min_top_depth_usd: 50.0`) и сортируя связки по величине спреда без аллокаций памяти Python.
-- **Оценка входа (`CORE/trading_engine.py`):** 
-  - Рассчитывает взвешенные VWAP-цены входа с дисконтом глубины (`volatility_discount_entry: 0.40`), вычитает суммарные комиссии обеих бирж.
+- **Трекинг цен топ-3 уровней и Детектор Стояка (`StaticDetector` в `math_core.py`):**
+  - Непрерывно буферизирует средневзвешенную цену топ-3 уровней стакана: $P_{mid} = \frac{\frac{a_1+a_2+a_3}{3} + \frac{b_1+b_2+b_3}{3}}{2}$.
+  - Ведет скользящее окно тиков `buffer_window_sec: 0.25` (250 мс, ~5–8 тиков).
+  - Проверяет, что статичная нога (`static_leg: "TARGET"` для Кейса Б) отклоняется от своего скользящего среднего не более чем на `max_static_leg_pct: 0.0020` (0.2%).
+- **Глубокая оценка входа (`CORE/trading_engine.py` -> `evaluate_entry` & `evaluate_entry_v9`):** 
+  - Находит первый квалифицированный уровень стакана с объемом `>= min_top_depth_usd` (устранение фронтран-мусора).
+  - Рассчитывает взвешенные VWAP-цены входа для заданного объема `size_usd` с дисконтом глубины (`volatility_discount_entry`), вычитает суммарные комиссии обеих бирж.
   - Базис спреда рассчитывается относительно цены Short-ноги: `(short_vwap_bid - long_vwap_ask) / short_vwap_bid`.
   - **Синтетический выход (Synthetic Exit):** Симуляция немедленного закрытия встречными стаканами (`max_slippage_ratio = 0.50`, `hard_max_slippage = 0.008`).
   - **Фильтр давления стакана (OBI):** Рассчитывает дисбаланс топ-5 уровней стакана для обеих ног. Опционален, по умолчанию отключен.
 - **Signal Dwell Time (Выдержка сигнала):** Фильтр устойчивости сигнала (`min_signal_dwell_ms`, 0 — мгновенный выстрел на первом тике).
 - **Мониторинг позиций и деградация профита:** 
-  - На каждом тике рассчитывает суммарный арбитражный PnL связки (`net_yield`) по реальным бидам/аскам стаканов с учетом объемов и комиссий (вход + выход обеих ног).
-  - Сетка выхода `normal_decay`: 0с — 80% от спреда входа, 15с — 50%, 30с — безубыток (0.0%), 45с — -20%, 60с — аварийный Hard TTL сброс (-999.0).
+  - На каждом тике рассчитывает локальный арбитражный PnL позиции на ведомой бирже (`net_yield`).
+  - Сетка выхода `normal_decay`: 0с — 80% от целевого профита, 15с — 50%, 30с — безубыток (0.0%), 45с — -20%, 60с — аварийный Hard TTL сброс (-999.0).
 
 ### 2. Execution & FSM Engine (`CORE/executor_process.py` + `CORE/position_fsm.py`)
 - **Реактивная шина событий (Reactive Event Bus):**
-  - В приватных сокетах (`BinancePositionStream`, `KucoinPositionStream`, `BitgetPositionStream`) внедрены реестры `_update_events[(symbol, side)] = asyncio.Event()`.
+  - В приватных сокетах (`KucoinPositionStream`, `BitgetPositionStream`) внедрены реестры `_update_events[(symbol, side)] = asyncio.Event()`.
   - При получении пуша сокет мгновенно дергает `_notify(symbol, side)`, пробуждая ожидающие корутины за $< 0.1$ мс без джиттера таймеров OS.
-- **Безопасное квантование цен и объемов (`API/orders.py`):**
-  - `BUY` $\to$ `ROUND_FLOOR` (гарантирует, что цена покупки лимитки никогда не превысит допустимый предел).
-  - `SELL` $\to$ `ROUND_CEILING` (гарантирует, что цена продажи лимитки никогда не опустится ниже расчетного пола).
+- **Инвертированное безопасное квантование цен и объемов (`API/orders.py`):**
+  - `BUY` $\to$ `ROUND_CEILING` (запас цены вверх для гарантированного мгновенного налива встречных асков).
+  - `SELL` $\to$ `ROUND_FLOOR` (запас цены вниз для гарантированного мгновенного налива встречных бидов).
   - `QTY` $\to$ `ROUND_FLOOR` с защитой эпсилона `1e-8` (устраняет дельту от усечения).
   - Поддержка точного номинала `exact_qty` во всех ордерах.
-- **Параллельный вход (Parallel Entry):**
-  - Одновременная отправка двух `LIMIT_IOC` ордеров (Long и Short) через `asyncio.gather`.
-  - Предельные цены рассчитываются с индивидуальным проскальзыванием `limit_slip_ratio` из `trading_risks` для каждой биржи.
-- **Валидация налива и балансировка:**
+- **Динамическое проскальзывание входа:**
+  - Размер защитного сдвига цены рассчитывается как процент от чистого спреда:
+    $$\text{slip} = \text{clamp}(\text{net\_spread} \times \text{dynamic\_slip\_profit\_ratio}, \text{min\_entry\_slip\_ratio}, \text{max\_entry\_slip\_ratio})$$
+- **Одноногий реактивный выстрел (Single-Leg Target Shot):**
+  - Отправка `LIMIT_IOC` исключительно на Target-биржу (KuCoin или Bitget).
+  - Binance API используется исключительно в режиме чтения данных без торговых ключей.
+- **Валидация налива:**
   - Ожидание подтверждения налива по WS до `fill_confirm_timeout_sec` (0.6 с).
-  - При нулевом наливе обеих ног $\to$ Ветка Zero Fill (карантин `10с`).
-  - При балансе налива `min(notional) / max(notional) >= min_hedge_fill_rate` (0.60) $\to$ `ACTIVE_HEDGED`.
-  - При исполнении только одной ноги $\to$ `SINGLE_LEG_EXPOSURE` (чейзинг стакана).
-  - При частичном дисбалансном наливе обеих ног (`< 0.60`) $\to$ экстренный сброс обеих ног по рынку (`IMBALANCED_FILL_UNWOUND`, карантин 1800с).
+  - При нулевом наливе ($0\%$) $\to$ Ветка Zero Fill (мгновенный переход в `ABORTED`, карантин `zero_fill: 10с` без зависаний).
+  - При наливе $> 0\%$ $\to$ переход в статус `ACTIVE` (одноногая позиция открыта, передача в цикл мониторинга выхода).
 
 ### 3. Менеджер позиций (`CORE/position_manager.py`)
 - **Инвариант биржи (`max_positions`):** Число активных и ожидающих (`pending`) позиций по каждой бирже строго ограничено конфигом (по умолчанию 1).
 - **Инвариант символа:** Одна и та же монета не может одновременно торговаться более чем на одной связке.
+- **Изоляция Оракула:** Биржа Binance (Oracle) не занимает торговые слоты `PositionManager`.
 - **Сохранение флагов состояния:** Сохраняет `actual_gross_spread` и `actual_net_spread` в `active_positions.json`.
 
 ### 4. Аналитика и клиринг PnL (`analytics.py`)
-- Фиксация реальных цен исполнения обеих ног (`entry_long_price`, `entry_short_price`, `close_long_price`, `close_short_price`).
-- Учет полного цикла комиссий (Round-Trip Taker Fees: вход + выход по обеим ногам).
+- Фиксация реальных цен исполнения на Target-бирже (`entry_price`, `close_price`).
+- Учет комиссий тейкера Target-биржи (Round-Trip Taker Fees: вход + выход).
 - Синхронная запись сделок в `total_balance.json` и `active_positions.json`.
 
 ---
 
-## 🔄 Жизненный цикл сделки v8.0 (Parallel LIMIT_IOC)
+## 🔄 Жизненный цикл сделки v9.1 (Single-Leg Lead-Lag Arbitrage)
 
 ```
 [Стаканы L2 WS] ──> [pre_calculate_orderbook (Numba JIT)]
-                               │ (Топ-кандидат: спред > spread_entry, объем >= 50$)
+                               │ (Топ-кандидат: спред > spread_entry_pre, объем >= 50$)
                                ▼
-                    [trading_engine.evaluate_entry]
-                               ├── Расчет VWAP с дисконтом волатильности 0.40
-                               ├── Синтетический выход (slip <= 0.50*net, hard <= 0.8%)
-                               └── Базис спреда: (Short_Bid - Long_Ask) / Short_Bid
+                    [StaticDetector: is_leg_static]
+                               ├── Окно 250 мс: расчет top3_mid price
+                               └── Отклонение static_leg от среднего <= 0.20% (Кейс Б)
                                ▼
-                    [Signal Dwell Time Filter] (0 - мгновенный выстрел)
+                    [trading_engine.evaluate_entry (Глубокий анализ)]
+                               ├── Поиск первого квалифицированного уровня depth >= 50$
+                               ├── Расчет VWAP по объему size_usd с дисконтом волатильности
+                               ├── Учет полных комиссий тейкера обеих бирж
+                               ├── Проверка дисбаланса OBI на обеих ногах
+                               └── Проверка обратной ликвидности Synthetic Exit (slip <= 50% net)
                                ▼
                     [PositionManager.can_enter] -> lock_for_entry
                                ▼
@@ -124,29 +140,6 @@
                                │
                                ▼
                     [PositionFSM: run_open()]
-                     ├── Фаза 1: Одновременный выстрел (PARALLEL LIMIT_IOC)
-                     │     ├── Long Leg: BUY LIMIT_IOC (slip из trading_risks)
-                     │     └── Short Leg: SELL LIMIT_IOC (slip из trading_risks)
-                     │
-                     ├── Фаза 2: Реактивное ожидание налива по WS (до 600 мс)
-                     │     ├── l_qty == 0 и s_qty == 0: ZERO_FILL -> Карантин 10с
-                     │     ├── Налив обеих ног с ratio >= 60%: ACTIVE_HEDGED
-                     │     ├── Налита только одна нога: SINGLE_LEG_EXPOSURE
-                     │     └── Частичный перекос обеих ног (ratio < 60%):
-                     │           Аварийный сброс обеих ног маркетом (IMBALANCED_FILL_UNWOUND)
-                     │
-                     └── При переходе в SINGLE_LEG_EXPOSURE:
-                           ├── Если immediate_market: true -> мгновенный сброс маркетом
-                           └── Если immediate_market: false -> Чейзинг стакана (chase_map):
-                                 ├── Запрос живого стакана через get_book_ticker (Best Bid / Best Ask)
-                                 ├── 0с  -> LIMIT_IOC точно по рынку (price_slip: -0.0)
-                                 ├── 15с -> LIMIT_IOC с уступкой вглубь стакана (price_slip: -0.0005 / -0.05%)
-                                 ├── 30с -> LIMIT_IOC с уступкой вглубь стакана (price_slip: -0.001 / -0.10%)
-                                 ├── 45с -> Принудительный сброс остатка по MARKET (-999.0)
-                                 └── Bitget: Автоматическая ориентация side под hedge_mode (устранение ошибки 22002)
-                               │
-                               ▼
-                    [main.py: мониторинг выхода (ACTIVE_HEDGED)]
                                ├── Расчет net_yield по реальным стаканам выхода
                                └── Карта normal_decay:
                                      0с -> 80% профита
@@ -172,35 +165,32 @@
 
 | Блок / Фаза | Параметр | Значение | Описание |
 | :--- | :--- | :--- | :--- |
-| **Режим входа** | `order_execution_type` | `"PARALLEL_LIMIT_IOC"` | Параллельный синхронный выстрел в обе ноги |
-| **Сигнальные фильтры** | `spread_entry` | `0.008` (0.80%) | Минимальный требуемый чистый спред входа после вычета комиссий |
+| **Режим исполнения** | `order_execution_type` | `"PARALLEL_LIMIT_IOC"` / Single-Leg Target | Выстрел только в ведомую биржу (Target) |
+| **Детектор Стояка** | `static_detector.enabled` | `true` | Включение детектора стояка статичной ноги |
+| | `static_detector.static_leg` | `"TARGET"` | Статичная нога ('TARGET' для Кейса Б, 'ORACLE' для Кейса В) |
+| | `static_detector.max_static_leg_pct` | `0.0020` (0.20%) | Максимально допустимое отклонение цены ноги от скользящего среднего |
+| | `static_detector.buffer_window_sec` | `0.25` (250 мс) | Окно накопления тиков (~5–8 тиков при поступлении WS каждые 30–50 мс) |
+| **Сигнальные фильтры** | `spread_entry_base` | `0.008` (0.80%) | Базовый требуемый чистый спред входа после вычета комиссий |
 | | `min_top_depth_usd` | `$50.0` | Минимальный объем (USD) на первом квалифицированном уровне стакана |
 | | `min_signal_dwell_ms` | `0` (мс) | Выдержка сигнала перед входом (0 — выстрел на первом тике) |
 | | `top_n_candidates` | `4` | Количество лучших связок-кандидатов из `pre_calculate_orderbook` |
 | | `max_desync_ms` | `BN_KU: 125, BN_BG: 200` (мс) | Допустимый рассинхрон получения стаканов между биржами |
-| | `orderbook_imbalance.enabled` | `false` | Фильтр дисбаланса OBI (отключен как избыточный для LIMIT_IOC) |
+| | `orderbook_imbalance.enabled` | `false` | Фильтр дисбаланса OBI |
 | | `synthetic_exit.enabled` | `true` | Симуляция немедленного обратного закрытия |
 | | `synthetic_exit.max_slippage_ratio` | `0.50` (50%) | Предельная доля спреда, съедаемая обратным стаканом |
 | | `synthetic_exit.hard_max_slippage` | `0.008` (0.80%) | Жесткий потолок обратного проскальзывания |
-| **Параллельный вход** | `trading_risks.<ex>.limit_slip_ratio` | `0.0015` (0.15%) | Индивидуальная дальность заброса LIMIT_IOC ордера для каждой биржи |
-| | `min_hedge_fill_rate` | `0.60` (60%) | Минимальный баланс налива ног для признания позиции хеджированной |
+| **Динамический вход** | `dynamic_slip_profit_ratio` | `0.30` (30%) | Доля прогнозируемого спреда, отдаваемая на проскальзывание входа |
+| | `min_entry_slip_ratio` | `0.0005` (0.05%) | Минимальный порог заброса цены для ордера входа |
+| | `max_entry_slip_ratio` | `0.0050` (0.50%) | Максимальный потолок заброса цены для ордера входа |
 | | `fill_confirm_timeout_sec` | `0.6` (600 мс) | Таймаут ожидания подтверждения налива по WS |
-| | `fill_confirm_poll_interval_sec` | `0.0` | Интервал опроса WS-кэша (0.0 = чистый Event-driven) |
-| | `entry_api_timeout_sec` | `5.0` (сек) | Таймаут параллельной отправки пары ордеров LIMIT_IOC в asyncio.wait_for |
-| **Выход из хеджа** | `normal_decay` | `60 сек` | Сетка деградации: 0с: 80%, 15с: 50%, 30с: 0%, 45с: -20%, 60с: TTL |
-| | `market_close_confirm_timeout_sec` | `1.8` (с) | Таймаут реактивного подтверждения закрытия позиции ордером MARKET |
-| **Выход Single Leg** | `single_leg_exit.immediate_market` | `false` | Использовать ли чейзинг лимитками перед сбросом по рынку |
-| | `single_leg_exit.chase_map` | `4 шага (до 45с)` | Чейзинг: 0с: 0.0%, 15с: -0.05%, 30с: -0.10%, 45с: MARKET (-999.0) |
-| | `single_leg_exit.limit_fill_wait_sec` | `0.5` (500 мс) | Пауза ожидания исполнения лимитного ордера чейзинга перед проверкой |
-| **Аварийный сброс** | `emergency_unwind.max_attempts` | `2` | Число повторных попыток очистки остатков позиции |
-| | `emergency_unwind.retry_pause_sec` | `0.05` (50 мс) | Пауза между попытками очистки остатков |
-| | `emergency_unwind.ws_verify_timeout_sec` | `0.3` (300 мс) | Таймаут реактивного подтверждения обнуления позиции по WS |
+| **Выход из позиции** | `normal_decay` | `60 сек` | Сетка деградации: 0с: 80%, 15с: 50%, 30с: 0%, 45с: -20%, 60с: TTL |
+| | `stop_loss_pct` | `null` | Запрет фиктивного стоп-лосса (сохранено по указанию пользователя) |
 | **Сетевой прогрев** | `network_settings.rest_keepalive_interval_sec` | `45` (сек) | Фоновый опрос/прогрев постоянных TCP/TLS сессий к биржам |
 | | `network_settings.idle_warmup_threshold_sec` | `30` (сек) | Порог бездействия перед отправкой прогревочного фейк-ордера |
 | **Карантины** | `zero_fill` | `10` (сек) | Карантин при нулевом наливе ордера Target |
 | | `entry_error` | `60` (сек) | Карантин при ошибке API / сети на входе |
 | | `loss_trade` | `300` (сек) | Карантин при закрытии сделки с убытком |
-| **Инварианты рисков** | `max_positions` | `1` | Максимум 1 активная позиция на биржу |
+| **Инварианты рисков** | `max_positions` | `1` | Максимум 1 активная позиция на Target-биржу |
 
 ---
 

@@ -46,13 +46,24 @@ def get_base_cfg():
         "trading_rules": {
             "entry": {
                 "order_execution_type": "TARGET_LIMIT_IOC",
+                "static_detector": {
+                    "enabled": True,
+                    "static_leg": "TARGET",
+                    "max_static_leg_pct": 0.0020,
+                    "buffer_window_sec": 0.25
+                },
                 "target_entry_logic": {
+                    "entry_slip_ratio": 0.0015,
+                    "dynamic_slip_profit_ratio": 0.30,
+                    "max_entry_slip_ratio": 0.005,
+                    "min_entry_slip_ratio": 0.0005,
                     "fill_confirm_timeout_sec": {"BINANCE_KUCOIN": 0.5, "BINANCE_BITGET": 0.5},
                     "fill_confirm_poll_interval_sec": 0.005,
                     "entry_api_timeout_sec": 2.0
                 },
                 "signal_filters": {
                     "spread_entry_pre": [0.004, 0.03],
+                    "spread_entry_base": 0.004,
                     "min_top_depth_usd": 50.0,
                     "orderbook_imbalance": {"enabled": True, "depth_levels": 5, "max_adverse_imbalance": 0.55}
                 }

@@ -31,6 +31,7 @@ class BitgetPositionStream:
         self.last_close_prices: Dict[str, float] = {}
         # Reactive listener registry: (symbol, side) -> asyncio.Event
         self._update_events: Dict[Tuple[str, str], asyncio.Event] = {}
+        self.last_order_events: Dict[Tuple[str, str], dict] = {}
 
     def subscribe_update(self, symbol: str, side: str) -> asyncio.Event:
         """Registers or returns Event BEFORE submitting order."""
@@ -41,6 +42,8 @@ class BitgetPositionStream:
         if ev is None:
             ev = asyncio.Event()
             self._update_events[key] = ev
+        else:
+            ev.clear()
         return ev
 
     def unsubscribe_update(self, symbol: str, side: str) -> None:
@@ -48,6 +51,11 @@ class BitgetPositionStream:
         sym = symbol.replace("_UMCBL", "").strip().upper()
         s = side.strip().upper()
         self._update_events.pop((sym, s), None)
+
+    def get_last_order_event(self, symbol: str, side: str) -> Optional[dict]:
+        sym = symbol.replace("_UMCBL", "").strip().upper()
+        s = side.strip().upper()
+        return self.last_order_events.get((sym, s))
 
     def _notify(self, symbol: str, side: str) -> None:
         """Instantly awakens FSM on position update for (symbol, side)."""
@@ -158,7 +166,7 @@ class BitgetPositionStream:
                                     incoming_syms.add((sym, raw_side))
                                     
                                     size = float(p.get("total", 0.0))
-                                    price = float(p.get("openPriceAvg") or p.get("averageOpenPrice") or p.get("breakEvenPrice") or 0.0)
+                                    price = float(p.get("openAvgPrice") or p.get("openPriceAvg") or p.get("averageOpenPrice") or p.get("breakEvenPrice") or 0.0)
                                     
                                     if sym not in self.positions:
                                         self.positions[sym] = {
@@ -198,6 +206,13 @@ class BitgetPositionStream:
                                         }
 
                                     if raw_side in ("LONG", "SHORT"):
+                                        self.last_order_events[(sym, raw_side)] = {
+                                            "status": order_status,
+                                            "cum_qty": cum_qty,
+                                            "avg_price": avg_price,
+                                            "is_close": is_close,
+                                            "timestamp": time.time()
+                                        }
                                         if order_status == "filled" and is_close:
                                             self.positions[sym][raw_side] = {"size": 0.0, "price": 0.0}
                                             if avg_price > 0:
@@ -208,6 +223,9 @@ class BitgetPositionStream:
                                                 "size": cum_qty,
                                                 "price": avg_price
                                             }
+                                            self._notify(sym, raw_side)
+                                        elif order_status in ("canceled", "cancelled", "rejected"):
+                                            # Immediate notification for zero-fill or canceled order
                                             self._notify(sym, raw_side)
                                         
             except Exception as e:

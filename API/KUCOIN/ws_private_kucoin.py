@@ -41,6 +41,7 @@ class KucoinPositionStream:
         self.last_close_prices: Dict[str, float] = {}
         # Reactive listener registry: (symbol, side) -> asyncio.Event
         self._update_events: Dict[Tuple[str, str], asyncio.Event] = {}
+        self.last_order_events: Dict[Tuple[str, str], dict] = {}
 
     def subscribe_update(self, symbol: str, side: str) -> asyncio.Event:
         """Registers or returns Event BEFORE submitting order."""
@@ -51,6 +52,8 @@ class KucoinPositionStream:
         if ev is None:
             ev = asyncio.Event()
             self._update_events[key] = ev
+        else:
+            ev.clear()
         return ev
 
     def unsubscribe_update(self, symbol: str, side: str) -> None:
@@ -58,6 +61,11 @@ class KucoinPositionStream:
         sym = symbol.strip().upper()
         s = side.strip().upper()
         self._update_events.pop((sym, s), None)
+
+    def get_last_order_event(self, symbol: str, side: str) -> Optional[dict]:
+        sym = symbol.strip().upper()
+        s = side.strip().upper()
+        return self.last_order_events.get((sym, s))
 
     def _notify(self, symbol: str, side: str) -> None:
         """Instantly awakens FSM on position update for (symbol, side)."""
@@ -203,12 +211,19 @@ class KucoinPositionStream:
             if topic == "/contractMarket/tradeOrders":
                 pdata = data.get("data", {})
                 symbol = pdata.get("symbol")
-                status = pdata.get("status")
+                status = str(pdata.get("status") or "").lower()
                 filled_size = float(pdata.get("filledSize", 0))
                 match_price = float(pdata.get("matchPrice", 0)) or float(pdata.get("price", 0))
                 pos_side = (pdata.get("positionSide") or ("LONG" if pdata.get("side") == "buy" else "SHORT")).upper()
                 
                 if symbol:
+                    sym_clean = symbol.strip().upper()
+                    self.last_order_events[(sym_clean, pos_side)] = {
+                        "status": status,
+                        "cum_qty": filled_size,
+                        "avg_price": match_price,
+                        "timestamp": time.time()
+                    }
                     if match_price > 0:
                         self.last_close_prices[symbol] = match_price
                     if symbol not in self.positions:
@@ -220,6 +235,8 @@ class KucoinPositionStream:
                                 "size": filled_size,
                                 "price": match_price if match_price > 0 else curr_p.get("price", 0.0)
                             }
+                        self._notify(symbol, pos_side)
+                    elif status in ("done", "canceled", "cancelled") and filled_size == 0:
                         self._notify(symbol, pos_side)
 
             elif topic.startswith("/contract/position"):

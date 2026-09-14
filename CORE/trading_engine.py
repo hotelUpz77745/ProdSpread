@@ -4,7 +4,7 @@
 # ============================================================
 
 from typing import Tuple, Dict, Any, Optional
-from CORE.math_core import OrderbookUtils, ImpulseDetector
+from CORE.math_core import OrderbookUtils, StaticDetector, ImpulseDetector
 
 class TradingEngine:
     def __init__(self, cfg: dict, exchanges: dict):
@@ -15,7 +15,24 @@ class TradingEngine:
         self.cfg = cfg
         self.exchanges = exchanges
         
-        self.impulse = ImpulseDetector(cfg)
+        if "static_detector" in self.cfg["trading_rules"]["entry"]:
+            self.static_detector = StaticDetector(cfg)
+        elif "impulse_detector" in self.cfg["trading_rules"]["entry"]:
+            self.static_detector = StaticDetector(cfg)
+        else:
+            self.static_detector = StaticDetector({
+                "trading_rules": {
+                    "entry": {
+                        "static_detector": {
+                            "enabled": False,
+                            "static_leg": "TARGET",
+                            "max_static_leg_pct": 0.0020,
+                            "buffer_window_sec": 0.25
+                        }
+                    }
+                }
+            })
+        self.impulse = self.static_detector
         
         entry_rules = self.cfg["trading_rules"]["entry"]
         signal_cfg = entry_rules["signal_filters"]
@@ -114,22 +131,134 @@ class TradingEngine:
         return float(self.trading_risks[exchange_name.lower()]["taker_fee"])
 
     def update_market_data(self, sym: str, ex: str, book: dict, ts_mono: float):
-        """Called on every incoming websocket tick to maintain impulse detector state."""
-        if not self.impulse.is_enabled:
+        """Called on every incoming websocket tick to maintain static detector state."""
+        if not self.static_detector.is_enabled:
             return
             
-        bids = book.get("bids", [])[:3]
-        asks = book.get("asks", [])[:3]
+        bids = book.get("bids", [])
+        asks = book.get("asks", [])
+        if bids and asks:
+            mid_p = StaticDetector.calc_top3_mid_price(bids, asks)
+            self.static_detector.update(sym, ex, mid_p, ts_mono)
+
+    def evaluate_entry(
+        self, 
+        long_book: Dict[str, Any], 
+        short_book: Dict[str, Any], 
+        cand: list,
+        size_usd: float,
+        long_ask_offset: int = 0,
+        short_bid_offset: int = 0
+    ) -> Tuple[bool, Dict[str, Any]]:
+        long_idx = int(cand[0])
+        short_idx = int(cand[1])
+        long_ex = self.exchanges[long_idx]
+        short_ex = self.exchanges[short_idx]
         
-        # Calculate VWAP of top 3 levels for noise reduction
-        sum_bid_vol = sum(float(b[1]) for b in bids)
-        sum_ask_vol = sum(float(a[1]) for a in asks)
+        # If offsets not provided, find first qualified levels (filtering front junk)
+        if long_ask_offset <= 0 and self.min_top_depth_usd > 0.0:
+            idx, _, _ = OrderbookUtils.find_first_qualified_level(
+                long_book.get("asks", []), self.min_top_depth_usd, is_ask=True
+            )
+            if idx < 0:
+                return False, {"reason": "NO_QUALIFIED_ASK_DEPTH"}
+            long_ask_offset = idx
+
+        if short_bid_offset <= 0 and self.min_top_depth_usd > 0.0:
+            idx, _, _ = OrderbookUtils.find_first_qualified_level(
+                short_book.get("bids", []), self.min_top_depth_usd, is_ask=False
+            )
+            if idx < 0:
+                return False, {"reason": "NO_QUALIFIED_BID_DEPTH"}
+            short_bid_offset = idx
+
+        long_vol = self._get_vol_discount_entry(long_ex)
+        short_vol = self._get_vol_discount_entry(short_ex)
         
-        if sum_bid_vol > 0 and sum_ask_vol > 0:
-            vwap_bid = sum(float(b[0]) * float(b[1]) for b in bids) / sum_bid_vol
-            vwap_ask = sum(float(a[0]) * float(a[1]) for a in asks) / sum_ask_vol
-            mid_vwap = (vwap_bid + vwap_ask) / 2.0
-            self.impulse.update(sym, ex, mid_vwap, ts_mono)
+        # Order book slice strictly from first qualified level with volume >= min_top_depth_usd
+        asks_slice = long_book["asks"][long_ask_offset:] if long_ask_offset > 0 else long_book.get("asks", [])
+        bids_slice = short_book["bids"][short_bid_offset:] if short_bid_offset > 0 else short_book.get("bids", [])
+        
+        # For Long - buy from asks. For Short - sell into bids.
+        long_vwap_ask = OrderbookUtils.calculate_vwap_by_usd(asks_slice, size_usd, long_vol)
+        short_vwap_bid = OrderbookUtils.calculate_vwap_by_usd(bids_slice, size_usd, short_vol)
+        
+        if long_vwap_ask <= 0 or short_vwap_bid <= 0:
+            return False, {"reason": "INSUFFICIENT_VOLUME"}
+            
+        long_qty = size_usd / long_vwap_ask
+        short_qty = size_usd / short_vwap_bid
+        
+        vwap_spread = (short_vwap_bid - long_vwap_ask) / short_vwap_bid
+        
+        # Account for own entry commission
+        entry_long_fee = self._get_fee(long_ex)
+        entry_short_fee = self._get_fee(short_ex)
+        entry_comm = entry_long_fee + entry_short_fee
+        net_spread = vwap_spread - entry_comm
+        
+        target_spread = self.spread_entry_base if self.spread_entry_base is not None else self.spread_entry
+        if target_spread is not None and net_spread < target_spread:
+            return False, {
+                "reason": f"LOW_SPREAD (Net: {net_spread * 100:.3f}% < {target_spread * 100:.3f}%, Gross: {vwap_spread * 100:.3f}%, Fee: {entry_comm * 100:.3f}%)"
+            }
+            
+        # ORDERBOOK IMBALANCE FILTER (OBI) - Evaluate on BOTH legs
+        if self.check_obi_filter:
+            l_bids = long_book.get("bids", [])[:self.obi_levels]
+            l_asks = long_book.get("asks", [])[:self.obi_levels]
+            sum_l_bids = sum(float(b[1]) for b in l_bids) if l_bids else 0.0
+            sum_l_asks = sum(float(a[1]) for a in l_asks) if l_asks else 0.0
+            if sum_l_bids + sum_l_asks > 0.0:
+                l_imbalance = (sum_l_bids - sum_l_asks) / (sum_l_bids + sum_l_asks)
+                if l_imbalance < -self.max_adverse_imbalance:
+                    return False, {"reason": f"ADVERSE_OBI_LONG (Ask skew: {l_imbalance:+.2f} < -{self.max_adverse_imbalance:.2f})"}
+
+            s_bids = short_book.get("bids", [])[:self.obi_levels]
+            s_asks = short_book.get("asks", [])[:self.obi_levels]
+            sum_s_bids = sum(float(b[1]) for b in s_bids) if s_bids else 0.0
+            sum_s_asks = sum(float(a[1]) for a in s_asks) if s_asks else 0.0
+            if sum_s_bids + sum_s_asks > 0.0:
+                s_imbalance = (sum_s_bids - sum_s_asks) / (sum_s_bids + sum_s_asks)
+                if s_imbalance > self.max_adverse_imbalance:
+                    return False, {"reason": f"ADVERSE_OBI_SHORT (Bid skew: {s_imbalance:+.2f} > +{self.max_adverse_imbalance:.2f})"}
+            
+        # ROUND-TRIP SYNTHETIC LIQUIDITY CHECK
+        if self.check_synthetic_exit:
+            long_vol_exit = self._get_vol_discount_exit(long_ex)
+            short_vol_exit = self._get_vol_discount_exit(short_ex)
+            long_exit_vwap_bid = OrderbookUtils.calculate_vwap_by_qty(long_book.get("bids", []), long_qty, long_vol_exit)
+            short_exit_vwap_ask = OrderbookUtils.calculate_vwap_by_qty(short_book.get("asks", []), short_qty, short_vol_exit)
+            
+            if long_exit_vwap_bid <= 0 or short_exit_vwap_ask <= 0:
+                return False, {"reason": "NO_REVERSE_LIQUIDITY"}
+                
+            if self.check_synthetic_slippage:
+                long_synthetic_slip = (long_vwap_ask - long_exit_vwap_bid) / long_vwap_ask
+                short_synthetic_slip = (short_exit_vwap_ask - short_vwap_bid) / short_vwap_bid
+                total_slippage = long_synthetic_slip + short_synthetic_slip
+                
+                max_allowed = net_spread * self.max_slippage_ratio
+                if total_slippage > max_allowed:
+                    return False, {"reason": f"HIGH_REVERSE_SLIPPAGE (Slip: {total_slippage*100:.2f}% > DynMax: {max_allowed*100:.2f}%)"}
+                    
+                if total_slippage > self.hard_max_slippage:
+                    return False, {"reason": f"HARD_SLIPPAGE_LIMIT (Slip: {total_slippage*100:.2f}% > HardMax: {self.hard_max_slippage*100:.2f}%)"}
+                    
+        return True, {
+            "vwap_spread": vwap_spread,
+            "net_spread": net_spread,
+            "entry_comm": entry_comm,
+            "long_avg_price": long_vwap_ask,
+            "short_avg_price": short_vwap_bid,
+            "long_qty": long_qty,
+            "short_qty": short_qty,
+            "details": f"Net Spread:{net_spread * 100:+.3f}% (Gross:{vwap_spread * 100:+.3f}%, Fee:{entry_comm * 100:.3f}%)",
+            "long_ex": long_ex,
+            "short_ex": short_ex,
+            "long_ask_offset": long_ask_offset,
+            "short_bid_offset": short_bid_offset
+        }
 
     def evaluate_entry_v9(
         self,
@@ -141,113 +270,67 @@ class TradingEngine:
         size_usd: float
     ) -> Tuple[bool, Dict[str, Any]]:
         """
-        v9: Одноногий арбитраж. Сравниваем oracle mid vs target mid.
-        Если спред >= spread_entry — определяем сторону на Target и возвращаем сигнал.
+        v9: Одноногий арбитраж на Мишени с фильтром стоячей ноги (StaticDetector).
         """
-        oracle_bids = oracle_book.get("bids", [])
-        oracle_asks = oracle_book.get("asks", [])
-        target_bids = target_book.get("bids", [])
-        target_asks = target_book.get("asks", [])
-        
-        if not oracle_bids or not oracle_asks or not target_bids or not target_asks:
+        # 1. Проверка покоя стоячей ноги
+        static_ex = target_ex if self.static_detector.static_leg == "TARGET" else oracle_ex
+        static_book = target_book if static_ex == target_ex else oracle_book
+        bids = static_book.get("bids", [])
+        asks = static_book.get("asks", [])
+        if not bids or not asks:
             return False, {"reason": "EMPTY_BOOK"}
-        
-        # Oracle mid price (информативная, без проскальзывания)
-        oracle_best_bid = float(oracle_bids[0][0])
-        oracle_best_ask = float(oracle_asks[0][0])
-        oracle_mid = (oracle_best_bid + oracle_best_ask) / 2.0
-        
-        if oracle_mid <= 0:
-            return False, {"reason": "INVALID_ORACLE_MID"}
-        
-        # Target VWAP (с проскальзыванием на реальный объём)
-        target_vol = self._get_vol_discount_entry(target_ex)
-        target_vwap_ask = OrderbookUtils.calculate_vwap_by_usd(target_asks, size_usd, target_vol)
-        target_vwap_bid = OrderbookUtils.calculate_vwap_by_usd(target_bids, size_usd, target_vol)
-        
-        if target_vwap_ask <= 0 or target_vwap_bid <= 0:
-            return False, {"reason": "INSUFFICIENT_TARGET_VOLUME"}
-        
-        target_mid = (target_vwap_bid + target_vwap_ask) / 2.0
-        target_fee = self._get_fee(target_ex)
-        
-        # Реальнее и точнее: расчет спреда от исполнимой цены Target (с учетом локального bid/ask спреда)
-        # Если Оракул выше аска Мишени -> Мишень отстает вверх -> LONG на Мишени
-        # Если Оракул ниже бида Мишени -> Мишень отстает вниз -> SHORT на Мишени
-        long_raw_spread = (oracle_mid - target_vwap_ask) / oracle_mid
-        short_raw_spread = (target_vwap_bid - oracle_mid) / oracle_mid
-        
-        if long_raw_spread >= short_raw_spread and long_raw_spread > 0:
-            side = "LONG"
-            entry_price = target_vwap_ask
-            raw_spread = long_raw_spread
-        elif short_raw_spread > 0:
-            side = "SHORT"
-            entry_price = target_vwap_bid
-            raw_spread = short_raw_spread
-        else:
-            # Спред отрицательный (нет арбитражной возможности)
-            raw_spread = (oracle_mid - target_mid) / oracle_mid
-            side = "LONG" if raw_spread >= 0 else "SHORT"
-            entry_price = target_vwap_ask if side == "LONG" else target_vwap_bid
-        
-        # Чистый спред = расчетный спред - комиссия за вход + выход (2x taker_fee)
-        net_spread = raw_spread - (target_fee * 2.0)
-        
-        if self.spread_entry_base is not None and net_spread < self.spread_entry_base:
-            return False, {
-                "reason": f"LOW_SPREAD (Net: {net_spread*100:.3f}% < {self.spread_entry_base*100:.3f}%, "
-                          f"Raw: {raw_spread*100:+.3f}%, Fee: {target_fee*200:.3f}%)"
-            }
-        
-        if self.spread_entry_max is not None and net_spread > self.spread_entry_max:
-            return False, {
-                "reason": f"HIGH_SPREAD (Net: {net_spread*100:.3f}% > Max: {self.spread_entry_max*100:.3f}%)"
-            }
-        
-        qty = size_usd / entry_price
-        
-        # OBI filter (только для Target)
-        if self.check_obi_filter:
-            t_bids = target_bids[:self.obi_levels]
-            t_asks = target_asks[:self.obi_levels]
-            sum_bids = sum(float(b[1]) for b in t_bids) if t_bids else 0.0
-            sum_asks = sum(float(a[1]) for a in t_asks) if t_asks else 0.0
-            if sum_bids + sum_asks > 0.0:
-                imbalance = (sum_bids - sum_asks) / (sum_bids + sum_asks)
-                # Для LONG: плохо если аски давят (imbalance сильно отрицательный)
-                if side == "LONG" and imbalance < -self.max_adverse_imbalance:
-                    return False, {"reason": f"ADVERSE_OBI_LONG (imb={imbalance:+.2f})"}
-                # Для SHORT: плохо если биды давят (imbalance сильно положительный)  
-                if side == "SHORT" and imbalance > self.max_adverse_imbalance:
-                    return False, {"reason": f"ADVERSE_OBI_SHORT (imb={imbalance:+.2f})"}
-        
-        # Check Impulse (Case B or Case V depending on config)
-        is_impulse, reason, o_delta, t_delta = self.impulse.check_impulse(
-            sym=sym,
-            oracle_ex=oracle_ex,
-            target_ex=target_ex,
-            oracle_price=oracle_mid,
-            target_price=target_mid,
-            side=side
-        )
-        if not is_impulse:
+            
+        curr_mid = StaticDetector.calc_top3_mid_price(bids, asks)
+        is_st, reason, dev = self.static_detector.is_leg_static(sym, static_ex, curr_mid)
+        if not is_st:
             return False, {"reason": reason}
             
-        return True, {
-            "side": side,
-            "target_ex": target_ex,
-            "oracle_ex": oracle_ex,
-            "entry_price": entry_price,
-            "qty": qty,
-            "oracle_mid": oracle_mid,
-            "target_mid": target_mid,
-            "raw_spread": raw_spread,
-            "net_spread": net_spread,
-            "target_fee": target_fee,
-            "details": f"v9 {side} Target:{target_ex} | Net:{net_spread*100:+.3f}% "
-                       f"Raw:{raw_spread*100:+.3f}% OracleMid:{oracle_mid:.6f} TargetMid:{target_mid:.6f}"
-        }
+        # 2. Оценка спреда и исполнения через глубокий evaluate_entry
+        ex_to_idx = {v: k for k, v in self.exchanges.items()}
+        oracle_idx = ex_to_idx.get(oracle_ex, 0)
+        target_idx = ex_to_idx.get(target_ex, 3)
+        
+        # Направление 1: LONG Target, SHORT Oracle
+        cand_long = [target_idx, oracle_idx, 0.0, 0.0, 0.0]
+        ok_long, res_long = self.evaluate_entry(target_book, oracle_book, cand_long, size_usd)
+        
+        # Направление 2: SHORT Target, LONG Oracle
+        cand_short = [oracle_idx, target_idx, 0.0, 0.0, 0.0]
+        ok_short, res_short = self.evaluate_entry(oracle_book, target_book, cand_short, size_usd)
+        
+        if ok_long and (not ok_short or res_long["net_spread"] >= res_short["net_spread"]):
+            entry_price = res_long["long_avg_price"]
+            qty = res_long["long_qty"]
+            net_spread = res_long["net_spread"]
+            return True, {
+                "side": "LONG",
+                "target_ex": target_ex,
+                "oracle_ex": oracle_ex,
+                "entry_price": entry_price,
+                "qty": qty,
+                "raw_spread": res_long["vwap_spread"],
+                "net_spread": net_spread,
+                "target_fee": self._get_fee(target_ex),
+                "details": f"v9 LONG Target:{target_ex} | Net:{net_spread*100:+.3f}% | {res_long['details']}"
+            }
+        elif ok_short:
+            entry_price = res_short["short_avg_price"]
+            qty = res_short["short_qty"]
+            net_spread = res_short["net_spread"]
+            return True, {
+                "side": "SHORT",
+                "target_ex": target_ex,
+                "oracle_ex": oracle_ex,
+                "entry_price": entry_price,
+                "qty": qty,
+                "raw_spread": res_short["vwap_spread"],
+                "net_spread": net_spread,
+                "target_fee": self._get_fee(target_ex),
+                "details": f"v9 SHORT Target:{target_ex} | Net:{net_spread*100:+.3f}% | {res_short['details']}"
+            }
+        else:
+            reason = res_long.get("reason") if res_long else (res_short.get("reason") if res_short else "NO_SPREAD")
+            return False, {"reason": reason}
 
     def evaluate_exit_v9(
         self,

@@ -115,16 +115,27 @@ class PositionFSM:
         self.entry_api_timeout = float(target_entry_cfg["entry_api_timeout_sec"])
         
         # Entry slip ratio / дальность заброса лимитной заявки LIMIT_IOC
-        slip_cfg = target_entry_cfg.get("entry_slip_ratio") if "entry_slip_ratio" in target_entry_cfg else target_entry_cfg.get("limit_slip_ratio")
-        if slip_cfg is not None:
+        if "entry_slip_ratio" in target_entry_cfg:
+            slip_cfg = target_entry_cfg["entry_slip_ratio"]
             if isinstance(slip_cfg, dict):
-                self.entry_slip_ratio = float(slip_cfg.get(self.target_ex, slip_cfg.get(self.target_ex.lower(), 0.0025)))
+                self.entry_slip_ratio = float(slip_cfg[self.target_ex] if self.target_ex in slip_cfg else slip_cfg[self.target_ex.lower()])
             else:
                 self.entry_slip_ratio = float(slip_cfg)
-        elif self.target_ex.lower() in self.cfg.get("trading_risks", {}) and "limit_slip_ratio" in self.cfg["trading_risks"][self.target_ex.lower()]:
+        elif "limit_slip_ratio" in target_entry_cfg:
+            slip_cfg = target_entry_cfg["limit_slip_ratio"]
+            if isinstance(slip_cfg, dict):
+                self.entry_slip_ratio = float(slip_cfg[self.target_ex] if self.target_ex in slip_cfg else slip_cfg[self.target_ex.lower()])
+            else:
+                self.entry_slip_ratio = float(slip_cfg)
+        elif self.target_ex.lower() in self.cfg["trading_risks"] and "limit_slip_ratio" in self.cfg["trading_risks"][self.target_ex.lower()]:
             self.entry_slip_ratio = float(self.cfg["trading_risks"][self.target_ex.lower()]["limit_slip_ratio"])
         else:
-            self.entry_slip_ratio = 0.0025
+            self.entry_slip_ratio = 0.0015
+        
+        # Dynamic controlled entry slippage (up to 30% of planned profit, capped by max_entry_slip_ratio)
+        self.dynamic_slip_profit_ratio = float(target_entry_cfg["dynamic_slip_profit_ratio"]) if "dynamic_slip_profit_ratio" in target_entry_cfg else None
+        self.max_entry_slip_ratio = float(target_entry_cfg["max_entry_slip_ratio"]) if "max_entry_slip_ratio" in target_entry_cfg else 0.005
+        self.min_entry_slip_ratio = float(target_entry_cfg["min_entry_slip_ratio"]) if "min_entry_slip_ratio" in target_entry_cfg else 0.0005
         
         unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
         self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
@@ -169,18 +180,46 @@ class PositionFSM:
             except asyncio.TimeoutError:
                 pass
                 
-        # Polling fallback
+        # Check immediate WS position fill
+        pos = self.orders[self.target_ex].get_executed_position(self.native_target, self.side)
+        if pos:
+            filled_qty = pos.get("size", 0.0)
+            if filled_qty > 0.0:
+                return pos, (filled_qty / req_qty if req_qty > 0 else 0.0)
+
+        # Check immediate WS order terminal event (canceled / expired / rejected with 0 fill)
+        if hasattr(self.orders[self.target_ex], "get_last_order_event"):
+            order_ev = self.orders[self.target_ex].get_last_order_event(self.native_target, self.side)
+            if order_ev:
+                status = str(order_ev.get("status", "")).lower()
+                cum_qty = float(order_ev.get("cum_qty", 0.0))
+                if status in ("canceled", "cancelled", "rejected", "expired") and cum_qty == 0.0:
+                    elapsed_ms = (time.perf_counter() - t0) * 1000
+                    log(f"[{self.sym}] v9 Immediate Zero Fill on {self.target_ex} (order {status} in {elapsed_ms:.1f}ms).", level="INFO")
+                    return {"size": 0.0, "price": 0.0}, 0.0
+
+        # Polling fallback if time permits
         while (time.perf_counter() - t0) < self.fill_confirm_timeout:
             pos = self.orders[self.target_ex].get_executed_position(self.native_target, self.side)
             if pos:
                 filled_qty = pos.get("size", 0.0)
                 if filled_qty > 0.0:
                     return pos, (filled_qty / req_qty if req_qty > 0 else 0.0)
+            if hasattr(self.orders[self.target_ex], "get_last_order_event"):
+                order_ev = self.orders[self.target_ex].get_last_order_event(self.native_target, self.side)
+                if order_ev:
+                    status = str(order_ev.get("status", "")).lower()
+                    cum_qty = float(order_ev.get("cum_qty", 0.0))
+                    if status in ("canceled", "cancelled", "rejected", "expired") and cum_qty == 0.0:
+                        elapsed_ms = (time.perf_counter() - t0) * 1000
+                        log(f"[{self.sym}] v9 Immediate Zero Fill on {self.target_ex} (order {status} in {elapsed_ms:.1f}ms).", level="INFO")
+                        return {"size": 0.0, "price": 0.0}, 0.0
             if self.fill_confirm_poll_interval > 0:
                 await asyncio.sleep(self.fill_confirm_poll_interval)
             else:
                 await asyncio.sleep(self.close_poll_interval)
                 
+        # If we got here, neither a position fill nor an order cancel event was received within timeout
         log(f"[{self.sym}] v9 Fill confirmation timeout on {self.target_ex}.", level="WARNING")
         
         # REST fallback
@@ -203,7 +242,14 @@ class PositionFSM:
         
         entry_price = self.engine_res["entry_price"]
         size_usd = float(self.cfg["trading_risks"][self.target_ex.lower()]["trade_size_usd"])
-        slip = self.entry_slip_ratio
+        
+        # Dynamic controlled entry slippage (up to 30% of planned profit, max cap at 0.5%)
+        planned_profit = float(self.engine_res.get("net_spread", 0.0))
+        if self.dynamic_slip_profit_ratio is not None and self.dynamic_slip_profit_ratio > 0 and planned_profit > 0:
+            target_slip = planned_profit * self.dynamic_slip_profit_ratio
+            slip = max(self.min_entry_slip_ratio, min(self.max_entry_slip_ratio, target_slip))
+        else:
+            slip = self.entry_slip_ratio
         
         if self.side == "LONG":
             order_side = "BUY"
@@ -215,8 +261,8 @@ class PositionFSM:
             position_side = "SHORT"
         
         log(f"[{self.sym}] v9 Opening {self.side} on {self.target_ex} | "
-            f"Price: {limit_price:.6f} (VWAP: {entry_price:.6f}) | "
-            f"Net Spread: {self.engine_res.get('net_spread', 0)*100:.3f}%", level="INFO")
+            f"Price: {limit_price:.6f} (VWAP: {entry_price:.6f}, Slip: {slip*100:.3f}%) | "
+            f"Net Spread: {planned_profit*100:.3f}%", level="INFO")
         
         ev_target = None
         if hasattr(self.orders[self.target_ex], "subscribe_position_update"):
@@ -340,10 +386,29 @@ class PositionFSM:
             except asyncio.TimeoutError:
                 pass
                 
+        # Check if position is already closed
+        pos = self.orders[self.target_ex].get_executed_position(self.native_target, self.side)
+        if pos and pos.get("size", 0.0) == 0.0:
+            return True
+
+        # Check if exit order was cancelled / expired while position remains open
+        if hasattr(self.orders[self.target_ex], "get_last_order_event"):
+            order_ev = self.orders[self.target_ex].get_last_order_event(self.native_target, self.side)
+            if order_ev:
+                status = str(order_ev.get("status", "")).lower()
+                if status in ("canceled", "cancelled", "rejected", "expired"):
+                    return False
+                
         while (time.perf_counter() - t0) < wait_timeout:
             pos = self.orders[self.target_ex].get_executed_position(self.native_target, self.side)
             if pos and pos.get("size", 0.0) == 0.0:
                 return True
+            if hasattr(self.orders[self.target_ex], "get_last_order_event"):
+                order_ev = self.orders[self.target_ex].get_last_order_event(self.native_target, self.side)
+                if order_ev:
+                    status = str(order_ev.get("status", "")).lower()
+                    if status in ("canceled", "cancelled", "rejected", "expired"):
+                        return False
             await asyncio.sleep(self.close_poll_interval)
             
         return False
