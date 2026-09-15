@@ -71,10 +71,10 @@ class PositionFSM:
         self.state = PositionState.IDLE
         self.engine = TradingEngine(self.cfg, {0:"BINANCE",1:"KUCOIN",2:"OKX",3:"BITGET"})
         
-        ban_q = self.cfg["trading_rules"]["ban_rules"]["quarantine_sec"]
-        
-        self.q_entry_error = float(ban_q["entry_error"])
-        self.q_zero_fill = float(ban_q["zero_fill"])
+        ban_cfg = self.cfg.get("ban_rules") or self.cfg.get("trading_rules", {}).get("ban_rules", {})
+        ban_q = ban_cfg.get("quarantine_sec", {"entry_error": 60, "zero_fill": 10})
+        self.q_entry_error = float(ban_q.get("entry_error", 60))
+        self.q_zero_fill = float(ban_q.get("zero_fill", 10))
         
         target_ex_upper = self.target_ex.upper()
         if "exchanges" in self.cfg and target_ex_upper in self.cfg["exchanges"]:
@@ -148,28 +148,35 @@ class PositionFSM:
             self.entry_api_timeout = 5.0
         
         if "exchanges" in self.cfg and target_ex_upper in self.cfg["exchanges"] and "trading_risks" in self.cfg["exchanges"][target_ex_upper]:
-            self.entry_slip_ratio = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"]["limit_slip_ratio"])
+            self.entry_slip_ratio = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"].get("limit_slip_ratio", 0.0015))
         elif "trading_risks" in self.cfg:
             ex_key = self.target_ex.lower() if self.target_ex.lower() in self.cfg["trading_risks"] else target_ex_upper
             if ex_key in self.cfg["trading_risks"]:
-                self.entry_slip_ratio = float(self.cfg["trading_risks"][ex_key]["limit_slip_ratio"])
+                self.entry_slip_ratio = float(self.cfg["trading_risks"][ex_key].get("limit_slip_ratio", 0.0015))
             else:
-                self.entry_slip_ratio = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"]["limit_slip_ratio"])
+                self.entry_slip_ratio = 0.0015
         else:
-            self.entry_slip_ratio = float(self.cfg["exchanges"][target_ex_upper]["trading_risks"]["limit_slip_ratio"])
+            self.entry_slip_ratio = 0.0015
         
-        unwind_cfg = self.cfg["trading_rules"]["emergency_unwind"]
-        self.unwind_max_attempts = int(unwind_cfg["max_attempts"])
-        self.ws_verify_timeout = float(unwind_cfg["ws_verify_timeout_sec"])
-        self.unwind_retry_pause = float(unwind_cfg["retry_pause_sec"])
+        unwind_cfg = self.cfg.get("trading_rules", {}).get("emergency_unwind", {})
+        self.unwind_max_attempts = int(unwind_cfg.get("max_attempts", 2))
+        self.ws_verify_timeout = float(unwind_cfg.get("ws_verify_timeout_sec", 0.3))
+        self.unwind_retry_pause = float(unwind_cfg.get("retry_pause_sec", 0.05))
+
+        ext_cfg = target_exit_cfg.get("orderbook_hunting", {}).get("extrime_close", {})
+        self.extrime_max_retries = int(ext_cfg.get("max_retries", 10))
+        self.extrime_retry_pause = float(ext_cfg.get("retry_ttl_sec", 0.3))
+        self.extrime_increase_fraction = float(ext_cfg.get("increase_fraction", 0.05))
+        self.extrime_orientation = float(ext_cfg.get("bid_to_ask_orientation", 0.0))
+        self.unwind_max_attempts = max(self.unwind_max_attempts, self.extrime_max_retries)
         
-        ban_cfg = self.cfg["trading_rules"]["ban_rules"]
+        ban_cfg = self.cfg.get("ban_rules") or self.cfg.get("trading_rules", {}).get("ban_rules", {})
         if "perm_ban_loss_ratio" in ban_cfg:
             self.perm_ban_loss_ratio = float(ban_cfg["perm_ban_loss_ratio"])
         elif "perm_ban_loss_pct" in ban_cfg:
             self.perm_ban_loss_ratio = float(ban_cfg["perm_ban_loss_pct"]) / 100.0
         else:
-            self.perm_ban_loss_ratio = float(ban_cfg["perm_ban_loss_ratio"])
+            self.perm_ban_loss_ratio = float(ban_cfg.get("perm_ban_loss_ratio", 0.0075))
         self.perm_ban_loss_pct = self.perm_ban_loss_ratio  # backward compatibility alias
         
         self.target_pos: dict = {"size": 0.0, "price": 0.0}
@@ -501,9 +508,9 @@ class PositionFSM:
         entry_price = self.exec_res.get("entry_price") or self.engine_res.get("entry_price", 0.0)
         exit_price = exit_res.get("exit_price") or entry_price
         
-        # В v11: Аварийный MARKET допустим ТОЛЬКО при жестком STOP_LOSS или развороте поводыря Binance (ORACLE_REVERSAL_STOP).
+        # В v11: Аварийный MARKET допустим ТОЛЬКО при жестком STOP_LOSS, развороте поводыря (ORACLE_REVERSAL_STOP) или отсутствии ликвидности/стакана на TTL.
         # Все штатные выходы (TAKE_PROFIT, BREAKEVEN, EXTRIME_CLOSE, TTL) выполняются СТРОГО через LIMIT_IOC.
-        if reason in ("STOP_LOSS", "ORACLE_REVERSAL_STOP", "TTL_EXPIRED_STALE_DATA"):
+        if reason in ("STOP_LOSS", "ORACLE_REVERSAL_STOP", "TTL_EXPIRED_STALE_DATA", "TTL_EXPIRED_NO_LIQUIDITY"):
             o_type = "MARKET"
         else:
             o_type = exit_res.get("order_type", self.exit_order_type)
@@ -555,7 +562,8 @@ class PositionFSM:
                 pass
                 
         if not is_closed:
-            # Extrime / Step unwind with LIMIT_IOC
+            # Extrime / Step unwind with LIMIT_IOC (10 attempts over ~3.0 seconds)
+            retry_pause = getattr(self, "extrime_retry_pause", self.unwind_retry_pause)
             for attempt in range(self.unwind_max_attempts):
                 rest_pos = await self.orders[self.target_ex].get_exact_position_guarded(self.native_target, pos_side)
                 rem = rest_pos.get("size", 0.0)
@@ -565,32 +573,37 @@ class PositionFSM:
                 if not isinstance(p, (int, float)) or p <= 0:
                     p = entry_price
                 
-                # Progressive step limit IOC for remainder
-                shift_mult = 1.0 - (0.0010 * (attempt + 1)) if close_side == "SELL" else 1.0 + (0.0010 * (attempt + 1))
+                # Progressive step limit IOC for remainder: progressively shifts deeper into book
+                shift_fraction = 0.0005 * (attempt + 1)
+                shift_mult = 1.0 - shift_fraction if close_side == "SELL" else 1.0 + shift_fraction
                 step_limit_p = p * shift_mult
-                log(f"[{self.sym}] Remainder {rem} on {self.target_ex}. Extrime LIMIT_IOC close (attempt {attempt+1}) @ {step_limit_p:.6f}.", level="WARNING")
+                log(f"[{self.sym}] Remainder {rem} on {self.target_ex}. Extrime LIMIT_IOC close (attempt {attempt+1}/{self.unwind_max_attempts}) @ {step_limit_p:.6f}.", level="WARNING")
                 try:
                     await self.orders[self.target_ex].place_order(
                         self.native_target, close_side, rem * step_limit_p, step_limit_p,
                         order_type="LIMIT_IOC", position_side=pos_side, reduce_only=True
                     )
                 except Exception as e:
-                    pass
-                await asyncio.sleep(self.unwind_retry_pause)
+                    log(f"[{self.sym}] Extrime close limit retry {attempt+1} error: {e}", level="WARNING")
+                await asyncio.sleep(retry_pause)
                 
             rest_pos = await self.orders[self.target_ex].get_exact_position_guarded(self.native_target, pos_side)
             if rest_pos.get("size", 0.0) > 0:
-                # Final emergency market close if extreme IOC failed to clear
+                # Guaranteed Final Emergency MARKET sweep if extreme IOC exhausted all attempts (3.0 seconds)
                 rem = rest_pos.get("size", 0.0)
                 p = rest_pos.get("price", entry_price)
-                log(f"[{self.sym}] Final Emergency MARKET sweep for remainder {rem} on {self.target_ex}.", level="WARNING")
-                try:
-                    await self.orders[self.target_ex].place_order(
-                        self.native_target, close_side, rem * p, p,
-                        order_type="MARKET", position_side=pos_side, reduce_only=True
-                    )
-                except Exception:
-                    pass
+                log(f"[{self.sym}] 🚨 Extrime Close retries exhausted. Executing Guaranteed Emergency MARKET sweep for remainder {rem} on {self.target_ex}!", level="WARNING")
+                for m_att in range(3):
+                    try:
+                        await self.orders[self.target_ex].place_order(
+                            self.native_target, close_side, rem * p, p,
+                            order_type="MARKET", position_side=pos_side, reduce_only=True
+                        )
+                        break
+                    except Exception as me:
+                        log(f"[{self.sym}] Emergency market sweep error (attempt {m_att+1}/3): {me}", level="ERROR")
+                        await asyncio.sleep(0.05)
+                        
                 rest_pos = await self.orders[self.target_ex].get_exact_position_guarded(self.native_target, pos_side)
                 if rest_pos.get("size", 0.0) > 0:
                     log(f"[{self.sym}] CRITICAL ERROR: Failed to close position on {self.target_ex}! Remainder: {rest_pos.get('size')}", level="ERROR")
@@ -600,7 +613,12 @@ class PositionFSM:
         log(f"[{self.sym}] Position fully liquidated on {self.target_ex}.", level="INFO")
         
         if hasattr(self.orders[self.target_ex], "cancel_all_orders"):
-            await self.orders[self.target_ex].cancel_all_orders(self.native_target)
+            try:
+                res = self.orders[self.target_ex].cancel_all_orders(self.native_target)
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception:
+                pass
             
         self._set_state(PositionState.SETTLED)
         self._finalize_close_v9(actual_exit_price, qty, reason)

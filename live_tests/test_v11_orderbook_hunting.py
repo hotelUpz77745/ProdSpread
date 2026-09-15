@@ -8,7 +8,7 @@ from CORE.math_core import StaticDetector, OrderbookHunter
 from CORE.trading_engine import TradingEngine
 
 
-class TestV11OrderbookHunting(unittest.TestCase):
+class TestV11OrderbookHunting(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.cfg = {
             "exchanges": {
@@ -194,6 +194,61 @@ class TestV11OrderbookHunting(unittest.TestCase):
         self.assertAlmostEqual(res["exit_price"], 100.85, places=2)
 
 
+    async def test_fsm_extrime_close_exhaustion_emergency_market_sweep(self):
+        """Гарантия: если 10 попыток LIMIT_IOC не налились, FSM делает аварийный MARKET sweep."""
+        from CORE.position_fsm import PositionFSM, PositionState
+        from unittest.mock import MagicMock, AsyncMock
+
+        mock_bitget_order = MagicMock()
+        placed_orders = []
+
+        async def mock_place_order(*args, **kwargs):
+            placed_orders.append(kwargs)
+            return {"status": "ok"}
+
+        mock_bitget_order.place_order = AsyncMock(side_effect=mock_place_order)
+        mock_bitget_order.get_executed_position.return_value = {"size": 1.0, "price": 100.0}
+        
+        # Guarded position returns size=1.0 for the first 11 calls (initial + 10 retries), then 0.0 after MARKET
+        positions_sequence = [{"size": 1.0, "price": 100.0, "status": "ok"}] * 11 + [{"size": 0.0, "price": 0.0, "status": "ok"}]
+        mock_bitget_order.get_exact_position_guarded = AsyncMock(side_effect=positions_sequence)
+        mock_bitget_order.get_last_close_price.return_value = 99.80
+        mock_bitget_order.cancel_all_orders = AsyncMock()
+
+        fsm = PositionFSM(
+            sym="BTC",
+            route="BINANCE_BITGET",
+            target_ex="BITGET",
+            oracle_ex="BINANCE",
+            side="LONG",
+            engine_res={"entry_price": 100.0, "net_spread": 0.010},
+            cfg=self.cfg,
+            orders={"BITGET": mock_bitget_order, "BINANCE": MagicMock()}
+        )
+        fsm.exec_res = {"entry_price": 100.0}
+        fsm.target_pos = {"size": 1.0, "price": 100.0}
+
+        exit_res = {
+            "reason": "EXTRIME_CLOSE",
+            "exit_price": 100.05,
+            "order_type": "LIMIT_IOC"
+        }
+
+        # Mock _wait_for_close_v9 to return False (simulating IOC cancellation by exchange due to no fill)
+        fsm._wait_for_close_v9 = AsyncMock(return_value=False)
+
+        success = await fsm.run_close(exit_res, reason="EXTRIME_CLOSE")
+        self.assertTrue(success)
+        self.assertEqual(fsm.state, PositionState.SETTLED)
+
+        # Verify that 1 initial LIMIT_IOC + 10 retry LIMIT_IOCs + 1 final emergency MARKET order were placed
+        order_types = [o.get("order_type") for o in placed_orders]
+        self.assertEqual(order_types.count("LIMIT_IOC"), 11)  # 1 initial + 10 retries
+        self.assertEqual(order_types.count("MARKET"), 1)     # 1 emergency sweep
+        self.assertEqual(order_types[-1], "MARKET")
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
