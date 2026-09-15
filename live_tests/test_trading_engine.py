@@ -183,7 +183,7 @@ class TestTradingEngine(unittest.TestCase):
     def test_spread_entry_range_list_and_nulls(self):
         """Проверка задания диапазона спреда списком [min, max] и поддержки null."""
         oracle_book = {"bids": [[102.0, 1000]], "asks": [[102.02, 1000]]}
-        target_book = {"bids": [[100.0, 1000]], "asks": [[100.05, 1000]]}
+        target_book = {"bids": [[100.0, 1000]], "asks": [[100.02, 1000]]}
 
         # 1. Диапазон [0.005, 0.03] -> спред ~1.9% попадает
         cfg1 = dict(self.cfg)

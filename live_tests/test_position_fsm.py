@@ -26,12 +26,6 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
             },
             "trading_rules": {
                 "entry": {
-                    "static_detector": {
-                        "enabled": True,
-                        "static_leg": "TARGET",
-                        "max_static_leg_ratio": 0.0020,
-                        "buffer_window_sec": 0.25
-                    },
                     "target_entry_logic": {
                         "entry_slip_ratio": 0.0020,
                         "fill_confirm_timeout_sec": {"BINANCE_BITGET": 0.05},
@@ -39,6 +33,12 @@ class TestPositionFSM(unittest.IsolatedAsyncioTestCase):
                         "entry_api_timeout_sec": 1.0
                     },
                     "signal_filters": {
+                        "static_detector": {
+                            "enabled": True,
+                            "static_leg": "ANY",
+                            "max_static_leg_ratio": 0.0020,
+                            "buffer_window_sec": 0.25
+                        },
                         "spread_entry": [0.008, 0.05],
                         "min_top_depth_usd": 50.0
                     }

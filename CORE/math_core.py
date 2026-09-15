@@ -294,9 +294,23 @@ class StaticDetector:
        полностью вымывая аномальные цены и устраняя эффект 'резинового буфера'.
     """
     def __init__(self, cfg: dict):
-        static_cfg = cfg["trading_rules"]["entry"]["static_detector"]
+        entry_cfg = cfg["trading_rules"]["entry"]
+        if "signal_filters" in entry_cfg and "static_detector" in entry_cfg["signal_filters"]:
+            static_cfg = entry_cfg["signal_filters"]["static_detector"]
+        elif "static_detector" in entry_cfg:
+            static_cfg = entry_cfg["static_detector"]
+        elif "static_detector" in cfg:
+            static_cfg = cfg["static_detector"]
+        else:
+            static_cfg = entry_cfg
+
         self.is_enabled = bool(static_cfg["enabled"])
-        self.static_leg = str(static_cfg["static_leg"]).upper()
+        leg_val = static_cfg["static_leg"]
+        if isinstance(leg_val, list):
+            self.static_leg = "ANY" if set(str(x).upper() for x in leg_val) >= {"TARGET", "ORACLE"} else str(leg_val[0]).upper()
+        else:
+            self.static_leg = str(leg_val).upper()
+
         if "max_static_leg_ratio" in static_cfg:
             self.max_static_leg_ratio = float(static_cfg["max_static_leg_ratio"])
         elif "max_static_leg_pct" in static_cfg:
@@ -314,6 +328,10 @@ class StaticDetector:
         
         # Кулдаун после обнаружения нестояка: (symbol, exchange) -> float (deadline ts_mono)
         self._cool_off_until: Dict[Tuple[str, str], float] = {}
+
+        # Предсигнальный спокойный базис (Quiescent Baseline Tracking):
+        # (symbol, oracle_ex, target_ex) -> (ts_mono, oracle_base_price, target_base_price)
+        self._quiescent_baselines: Dict[Tuple[str, str, str], Tuple[float, float, float]] = {}
 
     @property
     def _buffers(self) -> Dict[Tuple[str, str], deque]:
@@ -413,10 +431,225 @@ class StaticDetector:
             
         return True, "LEG_STATIC_OK", deviation
 
+    def evaluate_pair_stability(
+        self,
+        sym: str,
+        oracle_ex: str,
+        target_ex: str,
+        oracle_price: float,
+        target_price: float,
+        pre_filter_spread: float,
+        ts_mono: Optional[float] = None
+    ) -> Tuple[bool, str, Dict[str, Any]]:
+        """
+        Оценивает стабильность связки (Oracle, Target) через механизм предсигнального спокойного базиса.
+        1. Пока спред < pre_filter_spread (когерентное движение ног 'гуськом'), базис непрерывно
+           следует за ценами обеих бирж, исключая ложные срабатывания от общего рыночного тренда.
+        2. При расширении спреда >= pre_filter_spread базис фиксируется на время импульса.
+        3. Замеряются относительные смещения delta_target и delta_oracle относительно предсигнального базиса.
+        4. Классифицируются кейсы:
+           - Кейс Б (Oracle импульс, Target статика): Target <= max_static, Oracle > max_static
+           - Кейс В (Target импульс, Oracle статика): Oracle <= max_static, Target > max_static
+           - Кейс А (Обе ноги хаотично разлетелись): Target > max_static, Oracle > max_static -> REJECT
+        """
+        if not self.is_enabled:
+            return True, "STATIC_CHECK_DISABLED", {"case": "DISABLED", "static_leg": self.static_leg}
+
+        if ts_mono is None:
+            ts_mono = time.monotonic()
+
+        if oracle_price <= 0.0 or target_price <= 0.0:
+            return False, "INVALID_MID_PRICE", {"case": "INVALID"}
+
+        key = (sym, oracle_ex, target_ex)
+        max_price = max(oracle_price, target_price)
+        raw_spread = abs(oracle_price - target_price) / max_price if max_price > 0.0 else 0.0
+
+        base_record = self._quiescent_baselines.get(key)
+        if base_record is None:
+            self._quiescent_baselines[key] = (ts_mono, oracle_price, target_price)
+            if raw_spread < pre_filter_spread:
+                return True, "QUIESCENT_BASELINE_INITIALIZED", {"case": "QUIESCENT", "static_leg": self.static_leg}
+            return True, "FIRST_TICK_BASELINE", {"case": "FIRST_TICK", "static_leg": self.static_leg}
+
+        base_ts, base_oracle, base_target = base_record
+
+        # Если спред в пределах нормы (спокойный рынок / ноги идут 'гуськом')
+        if raw_spread < pre_filter_spread:
+            self._quiescent_baselines[key] = (ts_mono, oracle_price, target_price)
+            return True, "QUIESCENT_STATE", {"case": "QUIESCENT", "static_leg": self.static_leg}
+
+        # Спред расширился (импульс)! Базис зафиксирован. Проверяем возраст импульса
+        age = ts_mono - base_ts
+        max_impulse_age = max(1.5, self.buffer_window_sec * 4.0)
+        if age > max_impulse_age:
+            # Импульс затух или спред стал структурным (устаревший сигнал)
+            self._quiescent_baselines[key] = (ts_mono, oracle_price, target_price)
+            return False, f"STALE_IMPULSE (spread persisted {age:.2f}s > {max_impulse_age:.2f}s)", {"case": "STALE"}
+
+        # Расчет относительных смещений от предсигнального базиса
+        delta_oracle = abs(oracle_price - base_oracle) / base_oracle if base_oracle > 0.0 else 0.0
+        delta_target = abs(target_price - base_target) / base_target if base_target > 0.0 else 0.0
+
+        is_target_static = (delta_target <= self.max_static_leg_ratio)
+        is_oracle_static = (delta_oracle <= self.max_static_leg_ratio)
+        target_shot = (delta_target > self.max_static_leg_ratio)
+        oracle_shot = (delta_oracle > self.max_static_leg_ratio)
+
+        allowed_legs = {"TARGET", "ORACLE"} if self.static_leg in ("ANY", "BOTH", "EITHER", "ALL") else {self.static_leg}
+
+        # Кейс А: Обе ноги разлетелись (хаос)
+        if target_shot and oracle_shot:
+            return False, f"CASE_A_REJECTED (Both legs moved: Target {delta_target*100:.3f}%, Oracle {delta_oracle*100:.3f}% > max {self.max_static_leg_ratio*100:.3f}%)", {
+                "case": "CASE_A", "target_delta": delta_target, "oracle_delta": delta_oracle
+            }
+
+        # Кейс Б: Oracle выстрелил, Target стоит
+        if is_target_static and oracle_shot:
+            if "TARGET" in allowed_legs:
+                return True, f"CASE_B_OK (Target static {delta_target*100:.3f}% <= {self.max_static_leg_ratio*100:.3f}%, Oracle impulse {delta_oracle*100:.3f}%)", {
+                    "case": "CASE_B", "static_leg": "TARGET", "target_delta": delta_target, "oracle_delta": delta_oracle
+                }
+            else:
+                return False, f"CASE_B_NOT_ALLOWED (config static_leg is {self.static_leg}, requires ORACLE static)", {
+                    "case": "CASE_B", "target_delta": delta_target, "oracle_delta": delta_oracle
+                }
+
+        # Кейс В: Target выстрелил, Oracle стоит (Опасность токсичного потока!)
+        if is_oracle_static and target_shot:
+            if "ORACLE" in allowed_legs:
+                return True, f"CASE_C_OK (Oracle static {delta_oracle*100:.3f}% <= {self.max_static_leg_ratio*100:.3f}%, Target impulse {delta_target*100:.3f}%)", {
+                    "case": "CASE_C", "static_leg": "ORACLE", "target_delta": delta_target, "oracle_delta": delta_oracle
+                }
+            else:
+                return False, f"CASE_C_REJECTED (Target moved {delta_target*100:.3f}%, Oracle static {delta_oracle*100:.3f}% - toxic orderflow danger)", {
+                    "case": "CASE_C", "target_delta": delta_target, "oracle_delta": delta_oracle
+                }
+
+        # Обе ноги сместились меньше max_static_leg_ratio (умеренный импульс):
+        # Та нога, смещение которой больше, признается импульсом, а меньшая - стоячей.
+        # Если ни одна нога не сместилась от базиса (delta == 0), направленного импульса не было.
+        min_move_threshold = 1e-6
+        if delta_target < delta_oracle and delta_oracle > min_move_threshold:
+            if "TARGET" in allowed_legs:
+                return True, f"CASE_B_OK (Target static {delta_target*100:.3f}%, Oracle impulse {delta_oracle*100:.3f}%)", {
+                    "case": "CASE_B", "static_leg": "TARGET", "target_delta": delta_target, "oracle_delta": delta_oracle
+                }
+        elif delta_oracle < delta_target and delta_target > min_move_threshold:
+            if "ORACLE" in allowed_legs:
+                return True, f"CASE_C_OK (Oracle static {delta_oracle*100:.3f}%, Target impulse {delta_target*100:.3f}%)", {
+                    "case": "CASE_C", "static_leg": "ORACLE", "target_delta": delta_target, "oracle_delta": delta_oracle
+                }
+            else:
+                return False, f"CASE_C_REJECTED (Target moved {delta_target*100:.3f}% > Oracle {delta_oracle*100:.3f}% - toxic orderflow danger)", {
+                    "case": "CASE_C", "target_delta": delta_target, "oracle_delta": delta_oracle
+                }
+
+        return False, "NO_VALID_STATIC_LEG", {"case": "REJECTED"}
+
     def check_impulse(self, sym: str, oracle_ex: str, target_ex: str, oracle_price: float, target_price: float, side: Optional[str] = None, ts_mono: Optional[float] = None) -> Tuple[bool, str, float, float]:
+        if self.static_leg in ("ANY", "BOTH", "EITHER", "ALL"):
+            pre_spread = self.max_static_leg_ratio
+            ok, reason, case_info = self.evaluate_pair_stability(sym, oracle_ex, target_ex, oracle_price, target_price, pre_spread, ts_mono)
+            dev = case_info.get("target_delta" if case_info.get("static_leg") == "TARGET" else "oracle_delta", 0.0)
+            return ok, reason, 0.0, dev
         static_ex = target_ex if self.static_leg == "TARGET" else oracle_ex
         chk_price = target_price if self.static_leg == "TARGET" else oracle_price
         is_st, reason, dev = self.is_leg_static(sym, static_ex, chk_price, ts_mono)
         return is_st, reason, 0.0, dev
 
 ImpulseDetector = StaticDetector
+
+
+class OrderbookHunter:
+    """
+    Ядро управления выходом через динамический хантинг стакана (Orderbook Hunting v11).
+    Перенесено и адаптировано из Rucheiok Bot 2.0.
+    Принцип: Все выходы СТРОГО ЛИМИТНЫЕ (LIMIT_IOC), никаких слепых маркетов.
+    """
+    @staticmethod
+    def calc_virtual_tp(entry_price: float, base_target_price: float, current_rate: float, side: str) -> float:
+        """
+        Вычисляет виртуальный Take-Profit порог сканирования стакана.
+        """
+        if entry_price <= 0.0 or base_target_price <= 0.0:
+            return entry_price
+        if side.upper() == "LONG":
+            return entry_price + (base_target_price - entry_price) * current_rate
+        else:
+            return entry_price - (entry_price - base_target_price) * current_rate
+
+    @staticmethod
+    def find_liquidity_target(depth_levels: list, virtual_tp: float, side: str, min_vol: float = 0.0) -> Optional[float]:
+        """
+        Сканирует стакан Мишени в поисках уровня с максимальным объемом у или выгоднее virtual_tp.
+        Для LONG: ищет в bids уровень >= virtual_tp с максимальным объемом.
+        Для SHORT: ищет в asks уровень <= virtual_tp с максимальным объемом.
+        """
+        if not depth_levels or virtual_tp <= 0.0:
+            return None
+        
+        ideal_target_price = None
+        max_vol = -1.0
+        is_long = side.upper() == "LONG"
+        
+        for item in depth_levels:
+            price = float(item[0])
+            vol = float(item[1])
+            if is_long:
+                if price >= virtual_tp:
+                    if vol > max_vol and vol >= min_vol:
+                        max_vol = vol
+                        ideal_target_price = price
+                else:
+                    break
+            else:
+                if price <= virtual_tp:
+                    if vol > max_vol and vol >= min_vol:
+                        max_vol = vol
+                        ideal_target_price = price
+                else:
+                    break
+                    
+        return ideal_target_price
+
+    @staticmethod
+    def calc_breakeven_price(entry_price: float, taker_fee: float, min_net_profit_ratio: float = 0.0004, side: str = "LONG") -> float:
+        """
+        Рассчитывает цену безубыточного выхода (включая двойную комиссию входа/выхода + микро-профит).
+        """
+        if entry_price <= 0.0:
+            return entry_price
+        required_markup = (taker_fee * 2.0) + min_net_profit_ratio
+        if side.upper() == "LONG":
+            return entry_price * (1.0 + required_markup)
+        else:
+            return entry_price * (1.0 - required_markup)
+
+    @staticmethod
+    def calc_extrime_price(
+        best_bid: float,
+        best_ask: float,
+        side: str,
+        retry_count: int = 0,
+        orientation: float = 0.0,
+        increase_fraction: float = 0.05
+    ) -> float:
+        """
+        Рассчитывает лимитную цену для ступенчатого Extrime Close.
+        mid = (ask1 + bid1) / 2
+        base_price = mid + (spread * orientation)
+        shift = spread * increase_fraction * retry_count
+        target_price = base_price - shift (LONG) / base_price + shift (SHORT)
+        """
+        if best_bid <= 0.0 or best_ask <= 0.0:
+            return 0.0
+        mid = (best_ask + best_bid) / 2.0
+        spread = best_ask - best_bid
+        base_price = mid + (spread * orientation)
+        shift = spread * increase_fraction * max(0, retry_count)
+        
+        if side.upper() == "LONG":
+            return max(0.0, base_price - shift)
+        else:
+            return base_price + shift

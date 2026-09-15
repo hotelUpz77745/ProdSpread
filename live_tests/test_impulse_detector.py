@@ -16,11 +16,13 @@ class TestStaticDetector(unittest.TestCase):
         self.cfg = {
             "trading_rules": {
                 "entry": {
-                    "static_detector": {
-                        "enabled": True,
-                        "static_leg": "TARGET",
-                        "max_static_leg_ratio": 0.0020,
-                        "buffer_window_sec": 0.25
+                    "signal_filters": {
+                        "static_detector": {
+                            "enabled": True,
+                            "static_leg": "TARGET",
+                            "max_static_leg_ratio": 0.0020,
+                            "buffer_window_sec": 0.25
+                        }
                     }
                 }
             }
@@ -130,6 +132,192 @@ class TestStaticDetector(unittest.TestCase):
         self.assertFalse(is_static2)
         self.assertIn("LEG_COOLING_OFF", reason2)
 
+    def test_correlated_walk_then_oracle_impulse_case_b(self):
+        """
+        Проверка сценария 'гуськом' + выстрел Оракула (Кейс Б):
+        1. Обе ноги активно растут вместе (+0.50%), спред равен 0.0.
+        2. Затем Оракул делает резкий рывок еще на +0.80%, а Мишень замирает.
+        3. Система обязана подтвердить Кейс Б без ложного отсечения по кулдауну.
+        """
+        cfg = {
+            "trading_rules": {
+                "entry": {
+                    "signal_filters": {
+                        "static_detector": {
+                            "enabled": True,
+                            "static_leg": "ANY",
+                            "max_static_leg_ratio": 0.0020,
+                            "buffer_window_sec": 0.35
+                        }
+                    }
+                }
+            }
+        }
+        # В JSON true -> в python True
+        cfg["trading_rules"]["entry"]["signal_filters"]["static_detector"]["enabled"] = True
+        det = StaticDetector(cfg)
+
+        pre_spread = 0.006  # 0.6% порог для фиксации базиса
+
+        # Шаг 1: Ноги идут 'гуськом' (рыночный тренд +0.5%)
+        # 100.0 -> 100.2 -> 100.5
+        det.evaluate_pair_stability("BTC", "BINANCE", "BITGET", 100.0, 100.0, pre_spread, ts_mono=100.0)
+        det.evaluate_pair_stability("BTC", "BINANCE", "BITGET", 100.2, 100.2, pre_spread, ts_mono=100.1)
+        ok_calm, r_calm, info_calm = det.evaluate_pair_stability(
+            "BTC", "BINANCE", "BITGET", 100.5, 100.5, pre_spread, ts_mono=100.2
+        )
+        self.assertTrue(ok_calm)
+        self.assertEqual(info_calm["case"], "QUIESCENT")
+
+        # Шаг 2: Всплеск Оракула до 101.30 (+0.80% к базису 100.50), Мишень стоит на 100.50
+        ok_shot, r_shot, info_shot = det.evaluate_pair_stability(
+            "BTC", "BINANCE", "BITGET", 101.30, 100.50, pre_spread, ts_mono=100.25
+        )
+        self.assertTrue(ok_shot)
+        self.assertEqual(info_shot["case"], "CASE_B")
+        self.assertEqual(info_shot["static_leg"], "TARGET")
+        self.assertIn("CASE_B_OK", r_shot)
+        self.assertAlmostEqual(info_shot["target_delta"], 0.0, places=5)
+        self.assertGreater(info_shot["oracle_delta"], 0.007)
+
+    def test_correlated_walk_then_target_dump_case_c(self):
+        """
+        Проверка сценария 'гуськом' + локальный сброс на Мишени (Кейс В):
+        1. Обе ноги падают вместе (-0.50%), спред 0.0.
+        2. Затем Мишень локально продавливают на -0.80%, а Оракул стоит как якорь.
+        3. Система обязана подтвердить Кейс В (Mean-Reversion).
+        """
+        cfg = {
+            "trading_rules": {
+                "entry": {
+                    "signal_filters": {
+                        "static_detector": {
+                            "enabled": True,
+                            "static_leg": "ANY",
+                            "max_static_leg_ratio": 0.0020,
+                            "buffer_window_sec": 0.35
+                        }
+                    }
+                }
+            }
+        }
+        det = StaticDetector(cfg)
+        pre_spread = 0.006
+
+        # Шаг 1: Когерентное падение 200.0 -> 199.5 -> 199.0
+        det.evaluate_pair_stability("ETH", "BINANCE", "BITGET", 200.0, 200.0, pre_spread, ts_mono=200.0)
+        det.evaluate_pair_stability("ETH", "BINANCE", "BITGET", 199.5, 199.5, pre_spread, ts_mono=200.1)
+        det.evaluate_pair_stability("ETH", "BINANCE", "BITGET", 199.0, 199.0, pre_spread, ts_mono=200.2)
+
+        # Шаг 2: Мишень продавили до 197.40 (-0.80% к 199.0), Оракул стоит на 199.0
+        ok_shot, r_shot, info_shot = det.evaluate_pair_stability(
+            "ETH", "BINANCE", "BITGET", 199.0, 197.40, pre_spread, ts_mono=200.25
+        )
+        self.assertTrue(ok_shot)
+        self.assertEqual(info_shot["case"], "CASE_C")
+        self.assertEqual(info_shot["static_leg"], "ORACLE")
+        self.assertIn("CASE_C_OK", r_shot)
+        self.assertAlmostEqual(info_shot["oracle_delta"], 0.0, places=5)
+        self.assertGreater(info_shot["target_delta"], 0.007)
+
+    def test_case_a_both_legs_diverge_rejected(self):
+        """
+        Проверка Кейса А (Обе ноги хаотично разлетелись):
+        Оракул улетел вверх на +0.40%, Мишень обвалилась на -0.40%.
+        Оба превысили max_static_leg_ratio (0.20%) -> REJECT!
+        """
+        cfg = {
+            "trading_rules": {
+                "entry": {
+                    "signal_filters": {
+                        "static_detector": {
+                            "enabled": True,
+                            "static_leg": "ANY",
+                            "max_static_leg_ratio": 0.0020,
+                            "buffer_window_sec": 0.35
+                        }
+                    }
+                }
+            }
+        }
+        det = StaticDetector(cfg)
+        pre_spread = 0.006
+
+        det.evaluate_pair_stability("SOL", "BINANCE", "BITGET", 100.0, 100.0, pre_spread, ts_mono=300.0)
+        
+        # Обе ноги разошлись: Оракул 100.40 (+0.4%), Мишень 99.60 (-0.4%)
+        ok, reason, info = det.evaluate_pair_stability(
+            "SOL", "BINANCE", "BITGET", 100.40, 99.60, pre_spread, ts_mono=300.1
+        )
+        self.assertFalse(ok)
+        self.assertEqual(info["case"], "CASE_A")
+        self.assertIn("CASE_A_REJECTED", reason)
+
+    def test_strict_static_leg_modes(self):
+        """
+        Проверка жестких режимов static_leg: TARGET и static_leg: ORACLE.
+        """
+        # 1. Режим строго TARGET: разрешен только Кейс Б, Кейс В блокируется
+        cfg_target = {
+            "trading_rules": {
+                "entry": {
+                    "signal_filters": {
+                        "static_detector": {
+                            "enabled": True,
+                            "static_leg": "TARGET",
+                            "max_static_leg_ratio": 0.0020,
+                            "buffer_window_sec": 0.35
+                        }
+                    }
+                }
+            }
+        }
+        det_tgt = StaticDetector(cfg_target)
+        det_tgt.evaluate_pair_stability("BTC", "BINANCE", "BITGET", 100.0, 100.0, 0.006, ts_mono=10.0)
+
+        # Кейс Б -> PASS
+        ok_b, _, info_b = det_tgt.evaluate_pair_stability("BTC", "BINANCE", "BITGET", 100.80, 100.0, 0.006, ts_mono=10.1)
+        self.assertTrue(ok_b)
+        self.assertEqual(info_b["case"], "CASE_B")
+
+        # Сброс и проверка Кейса В -> REJECT
+        det_tgt_c = StaticDetector(cfg_target)
+        det_tgt_c.evaluate_pair_stability("BTC", "BINANCE", "BITGET", 100.0, 100.0, 0.006, ts_mono=20.0)
+        ok_c, r_c, info_c = det_tgt_c.evaluate_pair_stability("BTC", "BINANCE", "BITGET", 100.0, 99.20, 0.006, ts_mono=20.1)
+        self.assertFalse(ok_c)
+        self.assertIn("CASE_C_REJECTED", r_c)
+
+        # 2. Режим строго ORACLE: разрешен только Кейс В, Кейс Б блокируется
+        cfg_oracle = {
+            "trading_rules": {
+                "entry": {
+                    "signal_filters": {
+                        "static_detector": {
+                            "enabled": True,
+                            "static_leg": "ORACLE",
+                            "max_static_leg_ratio": 0.0020,
+                            "buffer_window_sec": 0.35
+                        }
+                    }
+                }
+            }
+        }
+        det_orc = StaticDetector(cfg_oracle)
+        det_orc.evaluate_pair_stability("BTC", "BINANCE", "BITGET", 100.0, 100.0, 0.006, ts_mono=30.0)
+
+        # Кейс Б -> REJECT
+        ok_b2, r_b2, _ = det_orc.evaluate_pair_stability("BTC", "BINANCE", "BITGET", 100.80, 100.0, 0.006, ts_mono=30.1)
+        self.assertFalse(ok_b2)
+        self.assertIn("CASE_B_NOT_ALLOWED", r_b2)
+
+        # Кейс В -> PASS
+        det_orc_c = StaticDetector(cfg_oracle)
+        det_orc_c.evaluate_pair_stability("BTC", "BINANCE", "BITGET", 100.0, 100.0, 0.006, ts_mono=40.0)
+        ok_c2, _, info_c2 = det_orc_c.evaluate_pair_stability("BTC", "BINANCE", "BITGET", 100.0, 99.20, 0.006, ts_mono=40.1)
+        self.assertTrue(ok_c2)
+        self.assertEqual(info_c2["case"], "CASE_C")
+
 if __name__ == '__main__':
     unittest.main()
+
 

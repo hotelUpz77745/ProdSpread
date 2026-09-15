@@ -4,7 +4,7 @@
 # ============================================================
 
 from typing import Tuple, Dict, Any, Optional
-from CORE.math_core import OrderbookUtils, StaticDetector, ImpulseDetector
+from CORE.math_core import OrderbookUtils, StaticDetector, ImpulseDetector, OrderbookHunter
 
 class TradingEngine:
     def __init__(self, cfg: dict, exchanges: dict):
@@ -32,11 +32,14 @@ class TradingEngine:
                 except (ValueError, TypeError):
                     pass
                     
-            params["decay_map"] = target_exit_cfg["decay_map"]
+            params["decay_map"] = target_exit_cfg.get("decay_map", [])
+            params["orderbook_hunting"] = target_exit_cfg.get("orderbook_hunting", {})
+            params["exit_order_type"] = target_exit_cfg.get("exit_order_type", "LIMIT_IOC")
+            
             derived_ttl = None
             for rule in params["decay_map"]:
-                ratio = rule["min_profit_ratio"] if "min_profit_ratio" in rule else None
-                spread = rule["target_spread"] if "target_spread" in rule else None
+                ratio = rule.get("min_profit_ratio")
+                spread = rule.get("target_spread")
                 if (ratio is None and spread is None) or (isinstance(ratio, (int, float)) and ratio <= -900.0):
                     derived_ttl = float(rule["after_sec"])
                     break
@@ -47,17 +50,18 @@ class TradingEngine:
             elif params["decay_map"]:
                 params["ttl_sec"] = float(params["decay_map"][-1]["after_sec"])
             else:
-                params["ttl_sec"] = 60.0
+                extrime_after = params["orderbook_hunting"].get("extrime_close", {}).get("after_sec", 60.0)
+                params["ttl_sec"] = float(extrime_after)
                 
-            params["min_spread_entry"] = float(target_exit_cfg["min_spread_entry"]) if "min_spread_entry" in target_exit_cfg else 0.0030
-            params["emergency_decay_map"] = target_exit_cfg["emergency_decay_map"] if "emergency_decay_map" in target_exit_cfg else [
+            params["min_spread_entry"] = float(target_exit_cfg.get("min_spread_entry", 0.0030))
+            params["emergency_decay_map"] = target_exit_cfg.get("emergency_decay_map", [
                 {"step": 0, "after_sec": 0, "min_profit_ratio": 0.0},
                 {"step": 1, "after_sec": 3, "min_profit_ratio": -999.0}
-            ]
+            ])
             derived_emergency_ttl = None
             for rule in params["emergency_decay_map"]:
-                ratio = rule["min_profit_ratio"] if "min_profit_ratio" in rule else None
-                spread = rule["target_spread"] if "target_spread" in rule else None
+                ratio = rule.get("min_profit_ratio")
+                spread = rule.get("target_spread")
                 if (ratio is None and spread is None) or (isinstance(ratio, (int, float)) and ratio <= -900.0):
                     derived_emergency_ttl = float(rule["after_sec"])
                     break
@@ -66,17 +70,22 @@ class TradingEngine:
 
         # Fallback root-level static detector & signal filters
         default_entry_rules = self.cfg.get("trading_rules", {}).get("entry", {})
-        if "static_detector" in default_entry_rules:
+        signal_cfg = default_entry_rules.get("signal_filters", {})
+        if "static_detector" in signal_cfg:
+            self.static_detector = StaticDetector(self.cfg)
+        elif "static_detector" in default_entry_rules:
             self.static_detector = StaticDetector(self.cfg)
         else:
             self.static_detector = StaticDetector({
                 "trading_rules": {
                     "entry": {
-                        "static_detector": {
-                            "enabled": False,
-                            "static_leg": "TARGET",
-                            "max_static_leg_ratio": 0.0020,
-                            "buffer_window_sec": 0.25
+                        "signal_filters": {
+                            "static_detector": {
+                                "enabled": False,
+                                "static_leg": "ANY",
+                                "max_static_leg_ratio": 0.0020,
+                                "buffer_window_sec": 0.25
+                            }
                         }
                     }
                 }
@@ -125,10 +134,16 @@ class TradingEngine:
         
         exchanges_map = self.cfg.get("exchanges", {})
         for ex, ex_cfg in exchanges_map.items():
-            if "entry" in ex_cfg and "static_detector" in ex_cfg["entry"]:
-                self.static_detectors[ex.upper()] = StaticDetector({
-                    "trading_rules": {"entry": {"static_detector": ex_cfg["entry"]["static_detector"]}}
-                })
+            if "entry" in ex_cfg:
+                e_cfg = ex_cfg["entry"]
+                if "signal_filters" in e_cfg and "static_detector" in e_cfg["signal_filters"]:
+                    self.static_detectors[ex.upper()] = StaticDetector({
+                        "trading_rules": {"entry": {"signal_filters": {"static_detector": e_cfg["signal_filters"]["static_detector"]}}}
+                    })
+                elif "static_detector" in e_cfg:
+                    self.static_detectors[ex.upper()] = StaticDetector({
+                        "trading_rules": {"entry": {"signal_filters": {"static_detector": e_cfg["static_detector"]}}}
+                    })
             if "exit" in ex_cfg and "target_exit" in ex_cfg["exit"]:
                 self.exchange_exit_params[ex.upper()] = _parse_exit_cfg(ex_cfg["exit"]["target_exit"])
             elif "target_exit" in ex_cfg:
@@ -145,6 +160,12 @@ class TradingEngine:
 
         self.min_spread_entry = self.default_exit_params.get("min_spread_entry", 0.0030)
         self.emergency_ttl_sec = self.default_exit_params.get("emergency_ttl_sec", 3.0)
+        self.decay_map = self.default_exit_params.get("decay_map", [])
+        self.ttl_sec = self.default_exit_params.get("ttl_sec", 60.0)
+        self.emergency_decay_map = self.default_exit_params.get("emergency_decay_map", [
+            {"step": 0, "after_sec": 0, "min_profit_ratio": 0.0},
+            {"step": 1, "after_sec": 3, "min_profit_ratio": -999.0}
+        ])
         
         # v9: exchange roles
         if "routes" in self.cfg:
@@ -234,43 +255,58 @@ class TradingEngine:
             return (
                 bool(synth_cfg.get("enabled", False)),
                 bool(synth_cfg.get("check_slippage", False)),
-                float(synth_cfg.get("max_slippage_ratio", 0.50)),
-                float(synth_cfg.get("hard_max_slippage", 0.012))
+                float(synth_cfg.get("max_slippage_ratio", 0.30)),
+                float(synth_cfg.get("hard_max_slippage", 0.008))
             )
         return self.check_synthetic_exit, self.check_synthetic_slippage, self.max_slippage_ratio, self.hard_max_slippage
 
-    def _get_exit_params(self, target_ex: str) -> dict:
-        return self.exchange_exit_params.get(target_ex.upper(), self.default_exit_params)
-
-    def _get_vol_discount_entry(self, exchange_name: str) -> float:
+    def _get_exit_params(self, exchange_name: str) -> dict:
         ex_upper = exchange_name.upper()
-        if "exchanges" in self.cfg and ex_upper in self.cfg["exchanges"] and "trading_risks" in self.cfg["exchanges"][ex_upper]:
-            return float(self.cfg["exchanges"][ex_upper]["trading_risks"]["volatility_discount_entry"])
-        if "trading_risks" in self.cfg:
-            ex_key = exchange_name.lower() if exchange_name.lower() in self.cfg["trading_risks"] else ex_upper
-            if ex_key in self.cfg["trading_risks"]:
-                return float(self.cfg["trading_risks"][ex_key]["volatility_discount_entry"])
-        return 0.50
-
-    def _get_vol_discount_exit(self, exchange_name: str) -> float:
-        ex_upper = exchange_name.upper()
-        if "exchanges" in self.cfg and ex_upper in self.cfg["exchanges"] and "trading_risks" in self.cfg["exchanges"][ex_upper]:
-            return float(self.cfg["exchanges"][ex_upper]["trading_risks"]["volatility_discount_exit"])
-        if "trading_risks" in self.cfg:
-            ex_key = exchange_name.lower() if exchange_name.lower() in self.cfg["trading_risks"] else ex_upper
-            if ex_key in self.cfg["trading_risks"]:
-                return float(self.cfg["trading_risks"][ex_key]["volatility_discount_exit"])
-        return 0.85
+        if ex_upper in self.exchange_exit_params:
+            return self.exchange_exit_params[ex_upper]
+        return self.default_exit_params
 
     def _get_fee(self, exchange_name: str) -> float:
         ex_upper = exchange_name.upper()
-        if "exchanges" in self.cfg and ex_upper in self.cfg["exchanges"] and "trading_risks" in self.cfg["exchanges"][ex_upper]:
-            return float(self.cfg["exchanges"][ex_upper]["trading_risks"]["taker_fee"])
+        if "exchanges" in self.cfg and ex_upper in self.cfg["exchanges"]:
+            ex_cfg = self.cfg["exchanges"][ex_upper]
+            if "trading_risks" in ex_cfg and "taker_fee" in ex_cfg["trading_risks"]:
+                return float(ex_cfg["trading_risks"]["taker_fee"])
         if "trading_risks" in self.cfg:
             ex_key = exchange_name.lower() if exchange_name.lower() in self.cfg["trading_risks"] else ex_upper
-            if ex_key in self.cfg["trading_risks"]:
+            if ex_key in self.cfg["trading_risks"] and "taker_fee" in self.cfg["trading_risks"][ex_key]:
                 return float(self.cfg["trading_risks"][ex_key]["taker_fee"])
+            elif "taker_fee" in self.cfg["trading_risks"]:
+                return float(self.cfg["trading_risks"]["taker_fee"])
         return 0.0006
+
+    def _get_vol_discount_exit(self, exchange_name: str) -> float:
+        ex_upper = exchange_name.upper()
+        if "exchanges" in self.cfg and ex_upper in self.cfg["exchanges"]:
+            ex_cfg = self.cfg["exchanges"][ex_upper]
+            if "trading_risks" in ex_cfg and "volatility_discount_exit" in ex_cfg["trading_risks"]:
+                return float(ex_cfg["trading_risks"]["volatility_discount_exit"])
+        if "trading_risks" in self.cfg:
+            ex_key = exchange_name.lower() if exchange_name.lower() in self.cfg["trading_risks"] else ex_upper
+            if ex_key in self.cfg["trading_risks"] and "volatility_discount_exit" in self.cfg["trading_risks"][ex_key]:
+                return float(self.cfg["trading_risks"][ex_key]["volatility_discount_exit"])
+            elif "volatility_discount_exit" in self.cfg["trading_risks"]:
+                return float(self.cfg["trading_risks"]["volatility_discount_exit"])
+        return 0.85
+
+    def _get_vol_discount_entry(self, exchange_name: str) -> float:
+        ex_upper = exchange_name.upper()
+        if "exchanges" in self.cfg and ex_upper in self.cfg["exchanges"]:
+            ex_cfg = self.cfg["exchanges"][ex_upper]
+            if "trading_risks" in ex_cfg and "volatility_discount_entry" in ex_cfg["trading_risks"]:
+                return float(ex_cfg["trading_risks"]["volatility_discount_entry"])
+        if "trading_risks" in self.cfg:
+            ex_key = exchange_name.lower() if exchange_name.lower() in self.cfg["trading_risks"] else ex_upper
+            if ex_key in self.cfg["trading_risks"] and "volatility_discount_entry" in self.cfg["trading_risks"][ex_key]:
+                return float(self.cfg["trading_risks"][ex_key]["volatility_discount_entry"])
+            elif "volatility_discount_entry" in self.cfg["trading_risks"]:
+                return float(self.cfg["trading_risks"]["volatility_discount_entry"])
+        return 0.50
 
     def update_market_data(self, sym: str, ex: str, book: dict, ts_mono: float):
         """Called on every incoming websocket tick to maintain static detector state."""
@@ -285,57 +321,81 @@ class TradingEngine:
                     det.update(sym, ex, mid_p, ts_mono)
 
     def evaluate_entry(
-        self, 
-        long_book: Dict[str, Any], 
-        short_book: Dict[str, Any], 
-        cand: list,
+        self,
+        long_book: dict,
+        short_book: dict,
+        candidate: list,
         size_usd: float,
-        long_ask_offset: int = 0,
-        short_bid_offset: int = 0,
+        long_ex: Optional[str] = None,
+        short_ex: Optional[str] = None,
         target_ex: Optional[str] = None
     ) -> Tuple[bool, Dict[str, Any]]:
-        long_idx = int(cand[0])
-        short_idx = int(cand[1])
-        long_ex = self.exchanges[long_idx]
-        short_ex = self.exchanges[short_idx]
-        
-        eval_ex = target_ex or short_ex
-        min_depth = self.get_min_top_depth_usd(eval_ex)
+        """
+        Deep evaluation of entry conditions based on raw order books.
+        """
+        # Resolving exchange names
+        long_idx = candidate[0]
+        short_idx = candidate[1]
+        long_ex = long_ex or self.exchanges.get(long_idx, "UNKNOWN")
+        short_ex = short_ex or self.exchanges.get(short_idx, "UNKNOWN")
+        eval_ex = target_ex or short_ex # primary exchange for filters
+
+        sig_cfg = self.get_signal_filters_cfg(eval_ex)
         target_spread = self.get_spread_entry_base(eval_ex)
-        check_obi, max_obi, obi_levels = self.get_obi_params(eval_ex)
-        check_synth, check_synth_slip, max_slip_ratio, hard_max_slip = self.get_synthetic_exit_params(eval_ex)
+        min_depth = self.get_min_top_depth_usd(eval_ex)
         
-        # If offsets not provided, find first qualified levels (filtering front junk)
-        if long_ask_offset <= 0 and min_depth > 0.0:
-            idx, _, _ = OrderbookUtils.find_first_qualified_level(
-                long_book.get("asks", []), min_depth, is_ask=True
-            )
-            if idx < 0:
-                return False, {"reason": "NO_QUALIFIED_ASK_DEPTH"}
-            long_ask_offset = idx
+        # Pull filters configuration
+        check_obi = self.check_obi_filter
+        max_obi = self.max_adverse_imbalance
+        obi_levels = self.obi_levels
+        if "orderbook_imbalance" in sig_cfg:
+            obi_c = sig_cfg["orderbook_imbalance"]
+            check_obi = bool(obi_c.get("enabled", check_obi))
+            max_obi = float(obi_c.get("max_adverse_imbalance", max_obi))
+            obi_levels = int(obi_c.get("depth_levels", obi_levels))
+            
+        check_synth = self.check_synthetic_exit
+        check_synth_slip = self.check_synthetic_slippage
+        max_slip_ratio = self.max_slippage_ratio
+        hard_max_slip = self.hard_max_slippage
+        if "synthetic_exit" in sig_cfg:
+            synth_c = sig_cfg["synthetic_exit"]
+            check_synth = bool(synth_c.get("enabled", check_synth))
+            check_synth_slip = bool(synth_c.get("check_slippage", check_synth_slip))
+            max_slip_ratio = float(synth_c.get("max_slippage_ratio", max_slip_ratio))
+            hard_max_slip = float(synth_c.get("hard_max_slippage", hard_max_slip))
 
-        if short_bid_offset <= 0 and min_depth > 0.0:
-            idx, _, _ = OrderbookUtils.find_first_qualified_level(
-                short_book.get("bids", []), min_depth, is_ask=False
-            )
-            if idx < 0:
-                return False, {"reason": "NO_QUALIFIED_BID_DEPTH"}
-            short_bid_offset = idx
+        # Check empty books
+        long_bids = long_book.get("bids", [])
+        long_asks = long_book.get("asks", [])
+        short_bids = short_book.get("bids", [])
+        short_asks = short_book.get("asks", [])
+        if not long_asks or not short_bids:
+            return False, {"reason": "EMPTY_BOOK"}
+            
+        long_best_ask = float(long_asks[0][0])
+        long_best_ask_vol = float(long_asks[0][1])
+        short_best_bid = float(short_bids[0][0])
+        short_best_bid_vol = float(short_bids[0][1])
+        
+        if (long_best_ask_vol * long_best_ask) < min_depth:
+            return False, {"reason": f"INSUFFICIENT_TOP_DEPTH_LONG ({long_best_ask_vol * long_best_ask:.1f}$ < {min_depth}$)"}
+        if (short_best_bid_vol * short_best_bid) < min_depth:
+            return False, {"reason": f"INSUFFICIENT_TOP_DEPTH_SHORT ({short_best_bid_vol * short_best_bid:.1f}$ < {min_depth}$)"}
 
-        long_vol = self._get_vol_discount_entry(long_ex)
-        short_vol = self._get_vol_discount_entry(short_ex)
+        # Calculate execution prices using volatility discounts
+        long_vol_entry = self._get_vol_discount_entry(long_ex)
+        short_vol_entry = self._get_vol_discount_entry(short_ex)
         
-        # Order book slice strictly from first qualified level with volume >= min_top_depth_usd
-        asks_slice = long_book["asks"][long_ask_offset:] if long_ask_offset > 0 else long_book.get("asks", [])
-        bids_slice = short_book["bids"][short_bid_offset:] if short_bid_offset > 0 else short_book.get("bids", [])
-        
-        # For Long - buy from asks. For Short - sell into bids.
-        long_vwap_ask = OrderbookUtils.calculate_vwap_by_usd(asks_slice, size_usd, long_vol)
-        short_vwap_bid = OrderbookUtils.calculate_vwap_by_usd(bids_slice, size_usd, short_vol)
+        long_vwap_ask = OrderbookUtils.calculate_vwap_by_usd(long_asks, size_usd, long_vol_entry)
+        short_vwap_bid = OrderbookUtils.calculate_vwap_by_usd(short_bids, size_usd, short_vol_entry)
         
         if long_vwap_ask <= 0 or short_vwap_bid <= 0:
             return False, {"reason": "INSUFFICIENT_VOLUME"}
             
+        long_ask_offset = (long_vwap_ask - long_best_ask) / long_best_ask
+        short_bid_offset = (short_best_bid - short_vwap_bid) / short_best_bid
+        
         long_qty = size_usd / long_vwap_ask
         short_qty = size_usd / short_vwap_bid
         
@@ -425,22 +485,46 @@ class TradingEngine:
         size_usd: float
     ) -> Tuple[bool, Dict[str, Any]]:
         """
-        v9: Одноногий арбитраж на Мишени с фильтром стоячей ноги (StaticDetector).
+        v11: Одноногий арбитраж на Мишени со строгим Lead-Lag фильтром (Case B ONLY) и защитой synthetic_exit (30% slip cap).
         """
-        # 1. Проверка покоя стоячей ноги
-        detector = self.get_static_detector(target_ex)
-        static_ex = target_ex if detector.static_leg == "TARGET" else oracle_ex
-        static_book = target_book if static_ex == target_ex else oracle_book
-        bids = static_book.get("bids", [])
-        asks = static_book.get("asks", [])
-        if not bids or not asks:
+        bids_tgt = target_book.get("bids", [])
+        asks_tgt = target_book.get("asks", [])
+        bids_orc = oracle_book.get("bids", [])
+        asks_orc = oracle_book.get("asks", [])
+        if not bids_tgt or not asks_tgt or not bids_orc or not asks_orc:
             return False, {"reason": "EMPTY_BOOK"}
-            
-        curr_mid = StaticDetector.calc_top3_mid_price(bids, asks)
-        is_st, reason, dev = detector.is_leg_static(sym, static_ex, curr_mid)
+
+        # 1. Проверка покоя стоячей ноги через предсигнальный базис (Quiescent Baseline Tracking)
+        detector = self.get_static_detector(target_ex)
+        target_mid = StaticDetector.calc_top3_mid_price(bids_tgt, asks_tgt)
+        oracle_mid = StaticDetector.calc_top3_mid_price(bids_orc, asks_orc)
+        if target_mid <= 0.0 or oracle_mid <= 0.0:
+            return False, {"reason": "INVALID_MID_PRICE"}
+
+        pre_spread = self.get_spread_entry_pre_min(target_ex)
+        if pre_spread is None:
+            pre_spread = self.get_spread_entry_base(target_ex)
+        if pre_spread is None:
+            pre_spread = 0.005
+
+        is_st, reason, case_info = detector.evaluate_pair_stability(
+            sym=sym,
+            oracle_ex=oracle_ex,
+            target_ex=target_ex,
+            oracle_price=oracle_mid,
+            target_price=target_mid,
+            pre_filter_spread=pre_spread
+        )
         if not is_st:
             return False, {"reason": reason}
-            
+
+        detected_case = case_info.get("case", "UNKNOWN")
+        # В режиме Lead-Lag Кейс В и Кейс А категорически запрещены
+        if detected_case in ("CASE_C", "CASE_A"):
+            return False, {"reason": f"CASE_REJECTED (Toxic/Chaos pattern rejected: {detected_case})"}
+        if detected_case not in ("CASE_B", "DISABLED", "FIRST_TICK", "QUIESCENT_BASELINE_INITIALIZED", "QUIESCENT"):
+            return False, {"reason": f"CASE_REJECTED (Only Case B allowed, got {detected_case})"}
+
         # 2. Оценка спреда и исполнения через глубокий evaluate_entry
         ex_to_idx = {v: k for k, v in self.exchanges.items()}
         oracle_idx = ex_to_idx.get(oracle_ex, 0)
@@ -467,7 +551,8 @@ class TradingEngine:
                 "raw_spread": res_long["vwap_spread"],
                 "net_spread": net_spread,
                 "target_fee": self._get_fee(target_ex),
-                "details": f"v9 LONG Target:{target_ex} | Net:{net_spread*100:+.3f}% | {res_long['details']}"
+                "detected_case": detected_case,
+                "details": f"v11 LONG Target:{target_ex} | Case:{detected_case} | Net:{net_spread*100:+.3f}% | {res_long['details']}"
             }
         elif ok_short:
             entry_price = res_short["short_avg_price"]
@@ -482,7 +567,8 @@ class TradingEngine:
                 "raw_spread": res_short["vwap_spread"],
                 "net_spread": net_spread,
                 "target_fee": self._get_fee(target_ex),
-                "details": f"v9 SHORT Target:{target_ex} | Net:{net_spread*100:+.3f}% | {res_short['details']}"
+                "detected_case": detected_case,
+                "details": f"v11 SHORT Target:{target_ex} | Case:{detected_case} | Net:{net_spread*100:+.3f}% | {res_short['details']}"
             }
         else:
             reason = res_long.get("reason") if res_long else (res_short.get("reason") if res_short else "NO_SPREAD")
@@ -500,19 +586,24 @@ class TradingEngine:
         oracle_book: Optional[dict] = None,
         oracle_ex: Optional[str] = None,
         is_emergency: bool = False,
-        emergency_duration_sec: Optional[float] = None
+        emergency_duration_sec: Optional[float] = None,
+        retry_count: int = 0
     ) -> Tuple[bool, Dict[str, Any]]:
         """
-        v9: Выход по локальному профиту/стопу/TTL на Мишени с контролем остаточного спреда к Оракулу.
-        Если спред относительно Оракула сдулся ниже min_spread_entry -> переход на emergency_decay_map.
+        v11: Выход по технологии Orderbook Hunting и Extrime Close (из Rucheiok Bot 2.0).
+        1. Base Scenario: активный хантинг стакана по Virtual TP (строго лимитный LIMIT_IOC).
+        2. Breakeven Stage: по истечении TTL перевод в безубыточную лимитку с учетом комиссий.
+        3. Extrime Close: ступенчатый хантинг стакана с микро-смещением (никаких слепых маркетов!).
+        4. Hard Stop / Oracle Reversal: аварийный сброс только при развороте поводыря Binance.
         """
         target_fee = self._get_fee(target_ex)
+        exit_params = self._get_exit_params(target_ex)
+        hunting_cfg = exit_params.get("orderbook_hunting", {})
         
         # 1. Расчет реального текущего спреда относительно живого стакана Oracle
         current_oracle_net_spread = None
         spread_evaporated = False
         
-        exit_params = self._get_exit_params(target_ex)
         if oracle_book:
             o_bids = oracle_book.get("bids", [])
             o_asks = oracle_book.get("asks", [])
@@ -542,16 +633,17 @@ class TradingEngine:
         
         target_vol = self._get_vol_discount_exit(target_ex)
         
+        bids = target_book.get("bids", []) if target_book else []
+        asks = target_book.get("asks", []) if target_book else []
+        best_bid = float(bids[0][0]) if bids else 0.0
+        best_ask = float(asks[0][0]) if asks else 0.0
+        
         exit_price = 0.0
         if target_book:
             if side == "LONG":
-                exit_price = OrderbookUtils.calculate_vwap_by_qty(
-                    target_book.get("bids", []), qty, target_vol
-                )
+                exit_price = OrderbookUtils.calculate_vwap_by_qty(bids, qty, target_vol)
             else:
-                exit_price = OrderbookUtils.calculate_vwap_by_qty(
-                    target_book.get("asks", []), qty, target_vol
-                )
+                exit_price = OrderbookUtils.calculate_vwap_by_qty(asks, qty, target_vol)
         
         if exit_price > 0 and entry_price > 0:
             if side == "LONG":
@@ -564,41 +656,7 @@ class TradingEngine:
             net_pnl_ratio = None
             exit_price = None
 
-        # TTL check (unconditional market exit)
-        if active_duration >= active_ttl or is_ttl:
-            reason = "EMERGENCY_TTL" if use_emergency else "TTL_EXPIRED"
-            return True, {
-                "reason": reason,
-                "net_pnl_ratio": net_pnl_ratio,
-                "gross_pnl_ratio": gross_pnl_ratio,
-                "net_pnl_pct": net_pnl_ratio,  # backward compatibility alias
-                "gross_pnl_pct": gross_pnl_ratio,  # backward compatibility alias
-                "exit_price": exit_price,
-                "entry_price": entry_price,
-                "duration_sec": duration_sec,
-                "target_val": reported_target,
-                "exit_level_index": exit_level_index,
-                "use_emergency_decay": use_emergency,
-                "oracle_net_spread": current_oracle_net_spread
-            }
-        
-        if exit_price is None or exit_price <= 0:
-            return False, {
-                "reason": "NO_EXIT_LIQUIDITY", 
-                "net_pnl_ratio": None,
-                "gross_pnl_ratio": None,
-                "net_pnl_pct": None, 
-                "gross_pnl_pct": None,
-                "exit_price": None, 
-                "entry_price": entry_price,
-                "duration_sec": duration_sec,
-                "target_val": reported_target,
-                "exit_level_index": exit_level_index,
-                "use_emergency_decay": use_emergency,
-                "oracle_net_spread": current_oracle_net_spread
-            }
-        
-        result = {
+        result_base = {
             "net_pnl_ratio": net_pnl_ratio,
             "gross_pnl_ratio": gross_pnl_ratio,
             "net_pnl_pct": net_pnl_ratio,  # backward compatibility alias
@@ -609,23 +667,120 @@ class TradingEngine:
             "target_val": reported_target,
             "exit_level_index": exit_level_index,
             "use_emergency_decay": use_emergency,
-            "oracle_net_spread": current_oracle_net_spread
+            "oracle_net_spread": current_oracle_net_spread,
+            "order_type": exit_params.get("exit_order_type", "LIMIT_IOC")
         }
-        
-        # Stop-Loss
-        stop_loss_ratio = exit_params["stop_loss_ratio"]
+
+        # --- ШАГ 1: Аварийный Stop-Loss / Разворот Оракула ---
+        stop_loss_ratio = exit_params.get("stop_loss_ratio")
         if stop_loss_ratio is not None and net_pnl_ratio is not None and net_pnl_ratio <= -stop_loss_ratio:
-            result["reason"] = "STOP_LOSS"
-            return True, result
-        
-        # Take-Profit / Emergency Breakeven
-        if net_pnl_ratio is not None and net_pnl_ratio >= target_val:
-            reason = "EMERGENCY_BREAKEVEN" if (use_emergency and target_val <= 0.0) else "TAKE_PROFIT"
-            result["reason"] = reason
-            return True, result
-        
-        result["reason"] = "HOLD"
-        return False, result
+            res = dict(result_base)
+            res["reason"] = "STOP_LOSS"
+            res["order_type"] = "MARKET"
+            return True, res
+
+        orcl_rev = hunting_cfg.get("oracle_reversal_stop", {})
+        if orcl_rev.get("enabled", False) and current_oracle_net_spread is not None:
+            max_adverse = float(orcl_rev.get("max_oracle_adverse_ratio", 0.0040))
+            if current_oracle_net_spread < -max_adverse:
+                res = dict(result_base)
+                res["reason"] = "ORACLE_REVERSAL_STOP"
+                res["order_type"] = "MARKET"
+                return True, res
+
+        # Если стакан пуст
+        if exit_price is None or exit_price <= 0:
+            if active_duration >= active_ttl or is_ttl:
+                res = dict(result_base)
+                res["reason"] = "TTL_EXPIRED_NO_LIQUIDITY"
+                return True, res
+            res = dict(result_base)
+            res["reason"] = "NO_EXIT_LIQUIDITY"
+            return False, res
+
+        # --- ШАГ 2: Orderbook Hunting (Base Scenario) ---
+        base_hunt_cfg = hunting_cfg.get("base_scenario", {})
+        if base_hunt_cfg.get("enabled", False) and not use_emergency:
+            target_rate = float(base_hunt_cfg.get("target_rate", 0.80))
+            shift_demotion = float(base_hunt_cfg.get("shift_demotion", 0.20))
+            min_target_rate = float(base_hunt_cfg.get("min_target_rate", 0.40))
+            shift_ttl = float(base_hunt_cfg.get("shift_ttl_sec", 3.0))
+            
+            shifts_cnt = int(duration_sec // shift_ttl) if shift_ttl > 0 else 0
+            curr_rate = max(min_target_rate, target_rate - (shifts_cnt * shift_demotion))
+            
+            base_target_100 = entry_price * (1.0 + actual_net_spread_entry) if side == "LONG" else entry_price * (1.0 - actual_net_spread_entry)
+            virtual_tp = OrderbookHunter.calc_virtual_tp(entry_price, base_target_100, curr_rate, side)
+            
+            depth = bids if side == "LONG" else asks
+            ideal_tp = OrderbookHunter.find_liquidity_target(depth, virtual_tp, side, min_vol=0.0)
+            
+            if ideal_tp is not None:
+                res = dict(result_base)
+                res["reason"] = "TAKE_PROFIT"
+                res["exit_price"] = ideal_tp
+                res["target_val"] = virtual_tp
+                res["order_type"] = "LIMIT_IOC"
+                return True, res
+
+        # --- ШАГ 3: Breakeven Stage & Extrime Close ---
+        be_cfg = hunting_cfg.get("breakeven_stage", {})
+        ext_cfg = hunting_cfg.get("extrime_close", {})
+        if be_cfg.get("enabled", False):
+            be_ttl = float(be_cfg.get("ttl_sec", 7.0))
+            be_wait = float(be_cfg.get("wait_sec", 2.0))
+            min_net_prof = float(be_cfg.get("min_net_profit_ratio", 0.0004))
+            
+            if duration_sec >= be_ttl:
+                be_price = OrderbookHunter.calc_breakeven_price(entry_price, target_fee, min_net_prof, side)
+                depth = bids if side == "LONG" else asks
+                
+                # В течение окна ожидания breakeven_wait пробуем выйти строго по цене БУ
+                if duration_sec < be_ttl + be_wait:
+                    ideal_be = OrderbookHunter.find_liquidity_target(depth, be_price, side, min_vol=0.0)
+                    if ideal_be is not None:
+                        res = dict(result_base)
+                        res["reason"] = "BREAKEVEN"
+                        res["exit_price"] = ideal_be
+                        res["target_val"] = be_price
+                        res["order_type"] = "LIMIT_IOC"
+                        return True, res
+                else:
+                    # Окно ожидания БУ истекло -> Extrime Close (ступенчатый хантинг стакана без маркета)
+                    if ext_cfg.get("enabled", True):
+                        orient = float(ext_cfg.get("bid_to_ask_orientation", 0.0))
+                        incr = float(ext_cfg.get("increase_fraction", 0.05))
+                        ext_price = OrderbookHunter.calc_extrime_price(
+                            best_bid, best_ask, side, retry_count, orient, incr
+                        )
+                        res = dict(result_base)
+                        res["reason"] = "EXTRIME_CLOSE"
+                        res["exit_price"] = ext_price
+                        res["order_type"] = "LIMIT_IOC"
+                        return True, res
+
+        # --- ШАГ 4: Fallback Legacy Take-Profit & Decay Map ---
+        if active_duration >= active_ttl or is_ttl:
+            res = dict(result_base)
+            res["reason"] = "EMERGENCY_TTL" if use_emergency else "TTL_EXPIRED"
+            # Если настроен extrime close, берем лимитку экстрима, иначе текущую цену стакана
+            if ext_cfg.get("enabled", True) and best_bid > 0 and best_ask > 0:
+                orient = float(ext_cfg.get("bid_to_ask_orientation", 0.0))
+                incr = float(ext_cfg.get("increase_fraction", 0.05))
+                res["exit_price"] = OrderbookHunter.calc_extrime_price(
+                    best_bid, best_ask, side, retry_count, orient, incr
+                )
+                res["order_type"] = "LIMIT_IOC"
+            return True, res
+
+        if net_pnl_ratio is not None and target_val is not None and net_pnl_ratio >= target_val:
+            res = dict(result_base)
+            res["reason"] = "EMERGENCY_BREAKEVEN" if (use_emergency and target_val <= 0.0) else "TAKE_PROFIT"
+            return True, res
+
+        res = dict(result_base)
+        res["reason"] = "HOLD"
+        return False, res
 
     def get_exit_target_val(self, duration_sec: float, actual_net_spread_entry: float = 0.0, decay_map: list = None) -> Tuple[float, int]:
         m = decay_map if decay_map is not None else self.decay_map
@@ -666,7 +821,54 @@ class TradingEngine:
                 target = actual_net_spread_entry * ratio
         return target, idx
 
+    def evaluate_exit_hunting(
+        self,
+        target_book: dict,
+        target_ex: str,
+        entry_price: float,
+        qty: float,
+        side: str,
+        duration_sec: float,
+        actual_net_spread_entry: float,
+        oracle_book: Optional[dict] = None,
+        oracle_ex: Optional[str] = None,
+        is_emergency: bool = False,
+        emergency_duration_sec: Optional[float] = None,
+        retry_count: int = 0
+    ) -> Tuple[bool, Dict[str, Any]]:
+        """Alias for evaluate_exit_v9 Orderbook Hunting evaluation."""
+        return self.evaluate_exit_v9(
+            target_book=target_book,
+            target_ex=target_ex,
+            entry_price=entry_price,
+            qty=qty,
+            side=side,
+            duration_sec=duration_sec,
+            actual_net_spread_entry=actual_net_spread_entry,
+            oracle_book=oracle_book,
+            oracle_ex=oracle_ex,
+            is_emergency=is_emergency,
+            emergency_duration_sec=emergency_duration_sec,
+            retry_count=retry_count
+        )
 
+    def evaluate_exit(
+        self,
+        long_book: dict,
+        short_book: dict,
+        long_ex: str,
+        short_ex: str,
+        entry_long_price: float,
+        entry_short_price: float,
+        long_qty: float,
+        short_qty: float,
+        duration_sec: float,
+        actual_net_spread_entry: float,
+        decay_map: list = None,
+        is_stakan_valid: bool = True,
+        long_executed_volume_rate: float = 1.0,
+        short_executed_volume_rate: float = 1.0,
+    ) -> Tuple[bool, Dict[str, Any]]:
         """DEPRECATED (v8 hedged mode). Use evaluate_exit_v9() for single-leg."""
         target_val, exit_level_index = self.get_exit_target_val(duration_sec, actual_net_spread_entry, decay_map=decay_map)
         is_ttl = target_val <= -999.0

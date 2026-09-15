@@ -501,10 +501,14 @@ class PositionFSM:
         entry_price = self.exec_res.get("entry_price") or self.engine_res.get("entry_price", 0.0)
         exit_price = exit_res.get("exit_price") or entry_price
         
-        if reason in ("TTL_EXPIRED", "STOP_LOSS", "TTL_EXPIRED_NO_LIQUIDITY", "TTL_EXPIRED_STALE_DATA", "EMERGENCY_TTL"):
+        # В v11: Аварийный MARKET допустим ТОЛЬКО при жестком STOP_LOSS или развороте поводыря Binance (ORACLE_REVERSAL_STOP).
+        # Все штатные выходы (TAKE_PROFIT, BREAKEVEN, EXTRIME_CLOSE, TTL) выполняются СТРОГО через LIMIT_IOC.
+        if reason in ("STOP_LOSS", "ORACLE_REVERSAL_STOP", "TTL_EXPIRED_STALE_DATA"):
             o_type = "MARKET"
         else:
-            o_type = self.exit_order_type
+            o_type = exit_res.get("order_type", self.exit_order_type)
+            if o_type not in ("LIMIT_IOC", "MARKET"):
+                o_type = "LIMIT_IOC"
         
         if o_type == "LIMIT_IOC" and exit_price > 0:
             if close_side == "SELL":
@@ -516,7 +520,7 @@ class PositionFSM:
         
         usd = qty * limit_price
         
-        log(f"[{self.sym}] v9 Closing {self.side} on {self.target_ex} | "
+        log(f"[{self.sym}] v11 Closing {self.side} on {self.target_ex} | "
             f"{o_type} {close_side} {qty:.4f} @ {limit_price:.6f} | Reason: {reason}", level="INFO")
         
         ev_target = None
@@ -551,7 +555,7 @@ class PositionFSM:
                 pass
                 
         if not is_closed:
-            # REST fallback
+            # Extrime / Step unwind with LIMIT_IOC
             for attempt in range(self.unwind_max_attempts):
                 rest_pos = await self.orders[self.target_ex].get_exact_position_guarded(self.native_target, pos_side)
                 rem = rest_pos.get("size", 0.0)
@@ -560,11 +564,15 @@ class PositionFSM:
                 p = rest_pos.get("price", exit_price)
                 if not isinstance(p, (int, float)) or p <= 0:
                     p = entry_price
-                log(f"[{self.sym}] Remainder {rem} on {self.target_ex}. Emergency MARKET close (attempt {attempt+1}).", level="WARNING")
+                
+                # Progressive step limit IOC for remainder
+                shift_mult = 1.0 - (0.0010 * (attempt + 1)) if close_side == "SELL" else 1.0 + (0.0010 * (attempt + 1))
+                step_limit_p = p * shift_mult
+                log(f"[{self.sym}] Remainder {rem} on {self.target_ex}. Extrime LIMIT_IOC close (attempt {attempt+1}) @ {step_limit_p:.6f}.", level="WARNING")
                 try:
                     await self.orders[self.target_ex].place_order(
-                        self.native_target, close_side, rem * p, p,
-                        order_type="MARKET", position_side=pos_side, reduce_only=True
+                        self.native_target, close_side, rem * step_limit_p, step_limit_p,
+                        order_type="LIMIT_IOC", position_side=pos_side, reduce_only=True
                     )
                 except Exception as e:
                     pass
@@ -572,9 +580,22 @@ class PositionFSM:
                 
             rest_pos = await self.orders[self.target_ex].get_exact_position_guarded(self.native_target, pos_side)
             if rest_pos.get("size", 0.0) > 0:
-                log(f"[{self.sym}] CRITICAL ERROR: Failed to close position on {self.target_ex}! Remainder: {rest_pos.get('size')}", level="ERROR")
-                self._notify_pos_exit_failed()
-                return False
+                # Final emergency market close if extreme IOC failed to clear
+                rem = rest_pos.get("size", 0.0)
+                p = rest_pos.get("price", entry_price)
+                log(f"[{self.sym}] Final Emergency MARKET sweep for remainder {rem} on {self.target_ex}.", level="WARNING")
+                try:
+                    await self.orders[self.target_ex].place_order(
+                        self.native_target, close_side, rem * p, p,
+                        order_type="MARKET", position_side=pos_side, reduce_only=True
+                    )
+                except Exception:
+                    pass
+                rest_pos = await self.orders[self.target_ex].get_exact_position_guarded(self.native_target, pos_side)
+                if rest_pos.get("size", 0.0) > 0:
+                    log(f"[{self.sym}] CRITICAL ERROR: Failed to close position on {self.target_ex}! Remainder: {rest_pos.get('size')}", level="ERROR")
+                    self._notify_pos_exit_failed()
+                    return False
 
         log(f"[{self.sym}] Position fully liquidated on {self.target_ex}.", level="INFO")
         
