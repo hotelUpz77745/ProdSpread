@@ -294,18 +294,24 @@ class StaticDetector:
        полностью вымывая аномальные цены и устраняя эффект 'резинового буфера'.
     """
     def __init__(self, cfg: dict):
-        entry_cfg = cfg["trading_rules"]["entry"]
+        entry_cfg = cfg.get("trading_rules", {}).get("entry", {}) if "trading_rules" in cfg else {}
         if "signal_filters" in entry_cfg and "static_detector" in entry_cfg["signal_filters"]:
             static_cfg = entry_cfg["signal_filters"]["static_detector"]
         elif "static_detector" in entry_cfg:
             static_cfg = entry_cfg["static_detector"]
         elif "static_detector" in cfg:
             static_cfg = cfg["static_detector"]
+        elif "exchanges" in cfg:
+            static_cfg = {}
+            for ex in cfg["exchanges"].values():
+                if isinstance(ex, dict) and "entry" in ex and "signal_filters" in ex["entry"] and "static_detector" in ex["entry"]["signal_filters"]:
+                    static_cfg = ex["entry"]["signal_filters"]["static_detector"]
+                    break
         else:
             static_cfg = entry_cfg
 
-        self.is_enabled = bool(static_cfg["enabled"])
-        leg_val = static_cfg["static_leg"]
+        self.is_enabled = bool(static_cfg.get("enabled", False))
+        leg_val = static_cfg.get("static_leg", "TARGET")
         if isinstance(leg_val, list):
             self.static_leg = "ANY" if set(str(x).upper() for x in leg_val) >= {"TARGET", "ORACLE"} else str(leg_val[0]).upper()
         else:
@@ -316,9 +322,9 @@ class StaticDetector:
         elif "max_static_leg_pct" in static_cfg:
             self.max_static_leg_ratio = float(static_cfg["max_static_leg_pct"]) / 100.0
         else:
-            self.max_static_leg_ratio = float(static_cfg["max_static_leg_ratio"])
+            self.max_static_leg_ratio = float(static_cfg.get("max_static_leg_ratio", 0.0020))
         self.max_static_leg_pct = self.max_static_leg_ratio  # backward compatibility alias
-        self.buffer_window_sec = float(static_cfg["buffer_window_sec"])
+        self.buffer_window_sec = float(static_cfg.get("buffer_window_sec", 0.35))
             
         # Хранилище тиков на низкоуровневых Си-деках CPython:
         # (symbol, exchange) -> deque of float timestamps
