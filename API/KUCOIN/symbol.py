@@ -103,6 +103,14 @@ class KucoinSymbols:
             sym = str(it.get("symbol", "")).upper()
             if not sym.endswith(suffix):
                 continue
+
+            # Filter out contracts with oversized lot/multiplier minimums (> $50 USD, e.g. AKEUSDTM $270)
+            p = float(it.get("lastTradePrice") or it.get("indexPrice") or it.get("markPrice") or 0.0)
+            mult = float(it.get("multiplier", 1.0))
+            lot = float(it.get("lotSize", 1.0))
+            if p > 0 and (p * mult * lot) > 50.0 and not sym.startswith("XBT"):
+                continue
+
             coin_raw = sym[: -len(suffix)]
             coin = _normalize_base(coin_raw)
             out[coin] = float(it.get("turnoverOf24h", 0))

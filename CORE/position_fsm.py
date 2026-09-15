@@ -311,6 +311,19 @@ class PositionFSM:
             self._set_state(PositionState.ABORTED)
             self._notify_pos_failed("ENTRY_TIMEOUT")
             return False
+        except ValueError as e:
+            err_msg = str(e)
+            if "Calculated order size is 0" in err_msg:
+                log(f"[{self.sym}] Trade size ${size_usd:.1f} is below minimum exchange lot size on {self.target_ex}. Permanently banning symbol.", level="WARNING")
+                self.ban_coin_cb(self.sym, reason="Min lot size exceeds trade size", duration_sec=None)
+                self._set_state(PositionState.ABORTED)
+                self._notify_pos_failed("MIN_LOT_SIZE_ERROR")
+                return False
+            log(f"[{self.sym}] Entry error on {self.target_ex}: {e}", level="ERROR")
+            self.ban_coin_cb(self.sym, reason=str(e), duration_sec=self.q_entry_error)
+            self._set_state(PositionState.ABORTED)
+            self._notify_pos_failed("ENTRY_ERROR")
+            return False
         except Exception as e:
             log(f"[{self.sym}] Entry error on {self.target_ex}: {e}", level="ERROR")
             self.ban_coin_cb(self.sym, reason=str(e), duration_sec=self.q_entry_error)
