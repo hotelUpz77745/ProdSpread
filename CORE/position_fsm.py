@@ -205,13 +205,13 @@ class PositionFSM:
             if filled_qty > 0.0:
                 return pos, (filled_qty / req_qty if req_qty > 0 else 0.0)
 
-        # Check immediate WS order terminal event (canceled / expired / rejected with 0 fill)
+        # Check immediate WS order terminal event (canceled / expired / rejected / done with 0 fill)
         if hasattr(self.orders[self.target_ex], "get_last_order_event"):
             order_ev = self.orders[self.target_ex].get_last_order_event(self.native_target, self.side)
             if order_ev:
                 status = str(order_ev.get("status", "")).lower()
                 cum_qty = float(order_ev.get("cum_qty", 0.0))
-                if status in ("canceled", "cancelled", "rejected", "expired") and cum_qty == 0.0:
+                if status in ("canceled", "cancelled", "rejected", "expired", "done") and cum_qty == 0.0:
                     elapsed_ms = (time.perf_counter() - t0) * 1000
                     log(f"[{self.sym}] v9 Immediate Zero Fill on {self.target_ex} (order {status} in {elapsed_ms:.1f}ms).", level="INFO")
                     return {"size": 0.0, "price": 0.0}, 0.0
@@ -228,7 +228,7 @@ class PositionFSM:
                 if order_ev:
                     status = str(order_ev.get("status", "")).lower()
                     cum_qty = float(order_ev.get("cum_qty", 0.0))
-                    if status in ("canceled", "cancelled", "rejected", "expired") and cum_qty == 0.0:
+                    if status in ("canceled", "cancelled", "rejected", "expired", "done") and cum_qty == 0.0:
                         elapsed_ms = (time.perf_counter() - t0) * 1000
                         log(f"[{self.sym}] v9 Immediate Zero Fill on {self.target_ex} (order {status} in {elapsed_ms:.1f}ms).", level="INFO")
                         return {"size": 0.0, "price": 0.0}, 0.0
@@ -458,7 +458,8 @@ class PositionFSM:
             order_ev = self.orders[self.target_ex].get_last_order_event(self.native_target, self.side)
             if order_ev:
                 status = str(order_ev.get("status", "")).lower()
-                if status in ("canceled", "cancelled", "rejected", "expired"):
+                cum_qty = float(order_ev.get("cum_qty", 0.0))
+                if status in ("canceled", "cancelled", "rejected", "expired") or (status == "done" and cum_qty == 0.0):
                     return False
                 
         while (time.perf_counter() - t0) < wait_timeout:
@@ -469,7 +470,8 @@ class PositionFSM:
                 order_ev = self.orders[self.target_ex].get_last_order_event(self.native_target, self.side)
                 if order_ev:
                     status = str(order_ev.get("status", "")).lower()
-                    if status in ("canceled", "cancelled", "rejected", "expired"):
+                    cum_qty = float(order_ev.get("cum_qty", 0.0))
+                    if status in ("canceled", "cancelled", "rejected", "expired") or (status == "done" and cum_qty == 0.0):
                         return False
             await asyncio.sleep(0)
             
